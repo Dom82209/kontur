@@ -1,14 +1,14 @@
 import { applyNamePattern } from "../../naming";
 import { kindFromName, pad2 } from "../../format";
+import { CATEGORY_FOLDER, INBOX_FOLDER, homeworkFolderForWeek, weekFolderForSubject } from "../../paths";
 
-export { kindFromName, pad2 };
+export { CATEGORY_FOLDER, kindFromName, pad2 };
 import type {
   AutomationRules,
   FileRef,
   Homework,
   HomeworkVersion,
   InboxFile,
-  MaterialCategory,
   ProviderStatus,
   Subject,
   VersionSection,
@@ -79,18 +79,8 @@ const TOPICS: Record<string, string[]> = {
   stress: ["Природа стресса", "Сон", "Дыхание", "Планирование", "Границы"],
 };
 
-export const CATEGORY_FOLDER: Record<MaterialCategory, string> = {
-  lecture: "01 Лекции",
-  seminar: "02 Семинары",
-  homework_task: "03 ДЗ/01 Условие и данные",
-  homework_data: "03 ДЗ/01 Условие и данные",
-  homework_draft: "03 ДЗ/02 Работа",
-  material: "04 Материалы",
-  unknown: "00 Разобрать",
-};
-
 export function weekFolder(subjectId: string, n: number): string {
-  return `${subjectName(subjectId)}/Неделя ${pad2(n)}`;
+  return weekFolderForSubject(subjectName(subjectId), n);
 }
 
 let fileSeq = 1000;
@@ -113,7 +103,7 @@ function buildWeeks(subject: Subject): Week[] {
     const topic = topics[n - 1] ?? null;
     const lectures = subject.id === "eng" || subject.id === "meow" ? [] : [makeFile(`Лекция ${n}. ${topic ?? "Материалы"}.pdf`, `${folder}/01 Лекции`, at(-daysAgo - 1, 10), 1_200_000 + n * 90_000)];
     const seminars = subject.id === "stress" ? [] : [makeFile(`Семинар ${n}.${subject.id === "oba" || subject.id === "stat" ? "xlsx" : "pdf"}`, `${folder}/02 Семинары`, at(-daysAgo, 15), 240_000 + n * 11_000)];
-    const materials = n % 3 === 0 ? [makeFile(`Доп. материалы — ${topic ?? "неделя"}.pdf`, `${folder}/04 Материалы`, at(-daysAgo + 1, 19), 880_000)] : [];
+    const materials = n % 3 === 0 ? [makeFile(`Доп. материалы — ${topic ?? "неделя"}.pdf`, `${folder}/04 Дополнительно`, at(-daysAgo + 1, 19), 880_000)] : [];
     weeks.push({ id: `${subject.id}-w${n}`, subjectId: subject.id, number: n, startsAt, endsAt, topic, lectures, seminars, materials, homeworkId: null });
   }
   return weeks;
@@ -196,7 +186,7 @@ function hw(
   ext: string,
   versionCount: number,
 ): Homework {
-  const folder = `${weekFolder(subjectId, week)}/03 ДЗ`;
+  const folder = homeworkFolderForWeek(weekFolder(subjectId, week));
   const vs = versions(id, subjectId, week, `Работа_Неделя${week}`, ext, versionCount, 4);
   const final = stage === "ready" || stage === "submitted" ? vs[vs.length - 1] ?? null : null;
   return {
@@ -279,7 +269,7 @@ export function buildProviders(): ProviderStatus[] {
 
 export function buildRules(): AutomationRules {
   return {
-    inboxPath: "~/Учёба/00 Входящие",
+    inboxPath: INBOX_FOLDER,
     downloadsWatchPath: "~/Downloads",
     obsidianVaultPath: "~/Documents/Obsidian/Учёба",
     studentName: { ...STUDENT },

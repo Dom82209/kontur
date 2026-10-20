@@ -16,3 +16,4 @@ function createBridge(): DesktopBridge {
 export const bridge: DesktopBridge = createBridge();
 
 export * from "./types";
+export * from "./intake";

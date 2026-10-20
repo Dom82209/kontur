@@ -75,6 +75,7 @@ export class MockDesktopBridge implements DesktopBridge {
   private rules: AutomationRules = buildRules();
   private log: Operation[] = [];
   private undoers = new Map<string, () => void>();
+  private homeworkCandidates = new Map<string, FileRef[]>();
   private codexAttempts = 0;
   private candidateSeq = 0;
   private readonly latency: number;
@@ -158,10 +159,19 @@ export class MockDesktopBridge implements DesktopBridge {
     const list = this.weeks.get(subjectId);
     if (!list) throw new BridgeError("not_found", "Предмет не найден");
     if (list.some((w) => w.number === weekNumber)) throw new BridgeError("conflict", `Неделя ${weekNumber} уже существует`);
-    const week = this.ensureWeek(subjectId, weekNumber);
-    const op = await this.runOp("create_week", `Создана неделя ${pad2(weekNumber)}`, subjectName(subjectId), [weekFolder(subjectId, weekNumber)], 3, () => {
-      this.weeks.set(subjectId, (this.weeks.get(subjectId) ?? []).filter((w) => w.id !== week.id));
-    });
+    const week = this.makeWeek(subjectId, weekNumber);
+    const op = await this.runOp(
+      "create_week",
+      `Создана неделя ${pad2(weekNumber)}`,
+      subjectName(subjectId),
+      [weekFolder(subjectId, weekNumber)],
+      3,
+      () => {
+        const next = [...(this.weeks.get(subjectId) ?? []), week].sort((a, b) => a.number - b.number);
+        this.weeks.set(subjectId, next);
+      },
+      () => this.weeks.set(subjectId, (this.weeks.get(subjectId) ?? []).filter((w) => w.id !== week.id)),
+    );
     return { operation: op, value: clone(week) };
   }
 
@@ -170,6 +180,15 @@ export class MockDesktopBridge implements DesktopBridge {
   async getInboxFiles(): Promise<InboxFile[]> {
     await this.wait((200));
     return clone(this.inbox.filter((f) => f.status !== "routed"));
+  }
+
+  async pickFiles(): Promise<DroppedItem[]> {
+    // В браузере/mock выбор делает скрытый HTML input; пустой массив означает отмену.
+    return [];
+  }
+
+  onNativeFileDrop(_listener: (items: DroppedItem[]) => void): Unsubscribe {
+    return () => undefined;
   }
 
   async importDroppedFiles(items: DroppedItem[]): Promise<InboxFile[]> {
@@ -235,9 +254,16 @@ export class MockDesktopBridge implements DesktopBridge {
     if (unresolved.length > 0)
       throw new BridgeError("confirmation_required", `Нужно уточнить ${unresolved.length} ${plural(unresolved.length, "файл", "файла", "файлов")}: предмет, неделю или тип`);
 
-    const previews = files.map((f) => this.buildPreview(f, destination ?? this.destOf(f)));
-    const before = new Map(files.map((f) => [f.id, clone(f)]));
-    const added: { subjectId: string; weekId: string; fileId: string; bucket: "lectures" | "seminars" | "materials"; createdWeek: boolean }[] = [];
+    const reserved: FileRef[] = [];
+    const previews = files.map((f) => {
+      const preview = this.buildPreview(f, destination ?? this.destOf(f), reserved);
+      reserved.push({ id: f.id, name: preview.targetName, kind: f.kind, sizeBytes: f.sizeBytes, modifiedAt: f.addedAt, relativePath: preview.targetPath });
+      return preview;
+    });
+    const weeksBefore = clone(this.weeks);
+    const homeworkBefore = clone(this.homework);
+    const candidatesBefore = clone(this.homeworkCandidates);
+    const inboxBefore = clone(this.inbox);
 
     const op = await this.runOp(
       "route",
@@ -246,29 +272,32 @@ export class MockDesktopBridge implements DesktopBridge {
       previews.map((p) => p.targetPath),
       Math.max(2, files.length),
       () => {
-        for (const a of added) {
-          const list = this.weeks.get(a.subjectId) ?? [];
-          if (a.createdWeek) this.weeks.set(a.subjectId, list.filter((w) => w.id !== a.weekId));
+        for (const f of files) {
+          const dest = destination ?? this.destOf(f);
+          const preview = previews.find((p) => p.fileId === f.id)!;
+          const week = this.ensureWeek(dest.subjectId, dest.weekNumber);
+          const ref: FileRef = { id: f.id, name: preview.targetName, kind: f.kind, sizeBytes: f.sizeBytes, modifiedAt: new Date().toISOString(), relativePath: preview.targetPath };
+          if (dest.category === "lecture") week.lectures = [ref, ...week.lectures];
+          else if (dest.category === "seminar") week.seminars = [ref, ...week.seminars];
+          else if (dest.category === "material") week.materials = [ref, ...week.materials];
           else {
-            const w = list.find((x) => x.id === a.weekId);
-            if (w) w[a.bucket] = w[a.bucket].filter((x) => x.id !== a.fileId);
+            const homework = this.ensureHomework(week);
+            if (dest.category === "homework_draft") {
+              this.homeworkCandidates.set(homework.id, [ref, ...(this.homeworkCandidates.get(homework.id) ?? [])]);
+            } else {
+              homework.taskFiles = [ref, ...homework.taskFiles];
+            }
           }
+          f.status = "routed";
         }
-        this.inbox = this.inbox.map((f) => before.get(f.id) ?? f);
+      },
+      () => {
+        this.weeks = clone(weeksBefore);
+        this.homework = clone(homeworkBefore);
+        this.homeworkCandidates = clone(candidatesBefore);
+        this.inbox = clone(inboxBefore);
       },
     );
-
-    for (const f of files) {
-      const dest = destination ?? this.destOf(f);
-      const preview = previews.find((p) => p.fileId === f.id)!;
-      const existed = (this.weeks.get(dest.subjectId) ?? []).some((w) => w.number === dest.weekNumber);
-      const week = this.ensureWeek(dest.subjectId, dest.weekNumber);
-      const bucket = dest.category === "lecture" ? "lectures" : dest.category === "seminar" ? "seminars" : "materials";
-      const ref: FileRef = { id: f.id, name: preview.targetName, kind: f.kind, sizeBytes: f.sizeBytes, modifiedAt: new Date().toISOString(), relativePath: preview.targetPath };
-      week[bucket] = [ref, ...week[bucket]];
-      added.push({ subjectId: dest.subjectId, weekId: week.id, fileId: f.id, bucket, createdWeek: !existed });
-      f.status = "routed";
-    }
     return { operation: clone(op), value: previews };
   }
 
@@ -287,14 +316,18 @@ export class MockDesktopBridge implements DesktopBridge {
   async getHomeworkCandidates(homeworkId: string): Promise<FileRef[]> {
     await this.wait((160));
     const h = this.mustHw(homeworkId);
+    const stored = this.homeworkCandidates.get(homeworkId);
+    if (stored) return clone(stored);
     const ext = h.versions[0]?.fileName.split(".").pop() ?? (h.taskFiles.some((f) => f.kind === "sheet") ? "xlsx" : "pdf");
     this.candidateSeq += 1;
     const now = new Date();
     const stamp = `${pad2(now.getHours())}-${pad2(now.getMinutes())}`;
-    return [
+    const generated = [
       makeFile(`Работа_черновик_${stamp}.${ext}`, `${h.folderPath}/02 Работа`, now.toISOString(), 120_000 + this.candidateSeq * 7_000),
       makeFile(`Работа (копия).${ext}`, `${h.folderPath}/02 Работа`, at(-0.2), 104_000),
     ];
+    this.homeworkCandidates.set(homeworkId, generated);
+    return clone(generated);
   }
 
   async createHomeworkVersion(homeworkId: string, fileId: string, meta: { author?: HomeworkVersion["author"]; promptId?: string | null } = {}): Promise<OperationResult<HomeworkVersion>> {
@@ -328,11 +361,22 @@ export class MockDesktopBridge implements DesktopBridge {
       frozen: true,
     };
     // Версии неизменяемы и не удаляются — операция не отменяется.
-    const op = await this.runOp("create_version", `Создана версия ${label}`, `${subjectName(h.subjectId)} · ДЗ недели ${h.weekNumber}`, [`${workDir}/${version.fileName}`], 3, null, undefined, h.id);
-    h.versions.push(version);
-    if (h.stage === "task") h.stage = "in_progress";
-    this.workflow.onVersionCreated(h, version);
-    this.emitter.emit("homework:version-created", { homeworkId, version: clone(version) });
+    const op = await this.runOp(
+      "create_version",
+      `Создана версия ${label}`,
+      `${subjectName(h.subjectId)} · ДЗ недели ${h.weekNumber}`,
+      [`${workDir}/${version.fileName}`],
+      3,
+      () => {
+        h.versions.push(version);
+        if (h.stage === "task") h.stage = "in_progress";
+        this.workflow.onVersionCreated(h, version);
+        this.emitter.emit("homework:version-created", { homeworkId, version: clone(version) });
+      },
+      null,
+      undefined,
+      h.id,
+    );
     return { operation: clone(op), value: clone(version) };
   }
 
@@ -345,12 +389,21 @@ export class MockDesktopBridge implements DesktopBridge {
     const ext = v.fileName.split(".").pop() ?? "pdf";
     const name = finalName(this.rules.finalNamePattern, h.weekNumber, h.subjectId, ext, v.label);
     const snapshot = { finalVersionId: h.finalVersionId, finalFileName: h.finalFileName, stage: h.stage };
-    const op = await this.runOp("mark_final", `${v.label} назначена итоговой`, `→ 03 На сдачу/${name}`, [`${h.folderPath}/03 На сдачу/${name}`], 3, () => {
-      Object.assign(h, snapshot);
-    }, this.rules.backupBeforeChange ? `.kontur/backup/${Date.now()}/03 На сдачу` : null, h.id);
-    h.finalVersionId = versionId;
-    h.finalFileName = name;
-    h.stage = "ready";
+    const op = await this.runOp(
+      "mark_final",
+      `${v.label} назначена итоговой`,
+      `→ 03 На сдачу/${name}`,
+      [`${h.folderPath}/03 На сдачу/${name}`],
+      3,
+      () => {
+        h.finalVersionId = versionId;
+        h.finalFileName = name;
+        h.stage = "ready";
+      },
+      () => Object.assign(h, snapshot),
+      this.rules.backupBeforeChange ? `.kontur/backup/${Date.now()}/03 На сдачу` : null,
+      h.id,
+    );
     return { operation: clone(op), value: clone(h) };
   }
 
@@ -392,14 +445,23 @@ export class MockDesktopBridge implements DesktopBridge {
   async updateAutomationRules(rules: AutomationRules): Promise<OperationResult<AutomationRules>> {
     if (!rules.finalNamePattern.includes("{Неделя}")) throw new BridgeError("conflict", "Формат имени должен содержать {Неделя}, иначе имена недель совпадут");
     const prev = clone(this.rules);
-    const op = await this.runOp("update_rules", "Правила обновлены", null, [".kontur/rules.json"], 2, () => {
-      this.rules = prev;
-    });
-    this.rules = { ...clone(rules), confirm: { ...rules.confirm, markSubmitted: true, allowOverwrite: false } };
-    for (const p of this.providers) {
-      const roles = (Object.entries(this.rules.workflow.roles) as [keyof AutomationRules["workflow"]["roles"], ProviderId][]).filter(([, prov]) => prov === p.provider).map(([role]) => role);
-      if (roles.join() !== p.roles.join()) this.setProvider(p, { roles });
-    }
+    const op = await this.runOp(
+      "update_rules",
+      "Правила обновлены",
+      null,
+      [".kontur/rules.json"],
+      2,
+      () => {
+        this.rules = { ...clone(rules), confirm: { ...rules.confirm, markSubmitted: true, allowOverwrite: false } };
+        for (const p of this.providers) {
+          const roles = (Object.entries(this.rules.workflow.roles) as [keyof AutomationRules["workflow"]["roles"], ProviderId][]).filter(([, prov]) => prov === p.provider).map(([role]) => role);
+          if (roles.join() !== p.roles.join()) this.setProvider(p, { roles });
+        }
+      },
+      () => {
+        this.rules = prev;
+      },
+    );
     return { operation: clone(op), value: clone(this.rules) };
   }
 
@@ -488,7 +550,7 @@ export class MockDesktopBridge implements DesktopBridge {
       providers: () => this.providers,
       emitter: this.emitter,
       wait: (ms) => this.wait(ms),
-      runOp: (kind, title, detail, paths, steps, undo, homeworkId) => this.runOp(kind, title, detail, paths, steps, undo, undefined, homeworkId),
+      runOp: (kind, title, detail, paths, steps, commit, undo, homeworkId) => this.runOp(kind, title, detail, paths, steps, commit, undo, undefined, homeworkId),
       startOp: (kind, title, detail, paths, homeworkId) => this.startOp(kind, title, detail, paths, null, homeworkId),
       finishOp: (op) => this.finishOp(op, false),
       failOp: (op, error) => {
@@ -522,14 +584,23 @@ export class MockDesktopBridge implements DesktopBridge {
     this.emitter.emit("operation:completed", { operation: clone(op) });
   }
 
-  /** Запускает операцию с шагами прогресса и регистрирует откат. */
-  private async runOp(kind: OperationKind, title: string, detail: string | null, paths: string[], steps: number, undo: (() => void) | null, backupPath?: string | null, homeworkId: string | null = null): Promise<Operation> {
+  /** start → progress → commit → регистрация undo → completed → resolve. */
+  private async runOp(kind: OperationKind, title: string, detail: string | null, paths: string[], steps: number, commit: () => void, undo: (() => void) | null, backupPath?: string | null, homeworkId: string | null = null): Promise<Operation> {
     const backup = backupPath === undefined ? (this.rules.backupBeforeChange ? `.kontur/backup/${Date.now()}` : null) : backupPath;
     const op = this.startOp(kind, title, detail, paths, backup, homeworkId);
     const messages = ["Резервная копия", "Проверка конфликтов", "Перемещение", "Обновление Obsidian", "Готово"];
     for (let i = 1; i <= steps; i += 1) {
       await this.wait((200));
       this.emitter.emit("operation:progress", { operationId: op.id, kind, progress: i / steps, message: messages[Math.min(i - 1, messages.length - 1)]! });
+    }
+    try {
+      commit();
+    } catch (error) {
+      op.status = "failed";
+      op.finishedAt = new Date().toISOString();
+      const payload = { code: "unknown" as const, message: error instanceof Error ? error.message : "Ошибка фиксации операции" };
+      this.emitter.emit("operation:failed", { operation: clone(op), error: payload });
+      throw error;
     }
     if (undo) this.undoers.set(op.id, undo);
     this.finishOp(op, !!undo);
@@ -551,7 +622,7 @@ export class MockDesktopBridge implements DesktopBridge {
     const list = this.weeks.get(subjectId) ?? [];
     let w = list.find((x) => x.number === n);
     if (!w) {
-      w = { id: `${subjectId}-w${n}`, subjectId, number: n, ...weekRange(n), topic: null, lectures: [], seminars: [], materials: [], homeworkId: null };
+      w = this.makeWeek(subjectId, n);
       list.push(w);
       list.sort((a, b) => a.number - b.number);
       this.weeks.set(subjectId, list);
@@ -559,31 +630,73 @@ export class MockDesktopBridge implements DesktopBridge {
     return w;
   }
 
+  private makeWeek(subjectId: string, n: number): Week {
+    return { id: `${subjectId}-w${n}`, subjectId, number: n, ...weekRange(n), topic: null, lectures: [], seminars: [], materials: [], homeworkId: null };
+  }
+
+  private ensureHomework(week: Week): Homework {
+    const linked = week.homeworkId ? this.homework.find((h) => h.id === week.homeworkId) : null;
+    const existing = linked ?? this.homework.find((h) => h.subjectId === week.subjectId && h.weekNumber === week.number);
+    if (existing) {
+      week.homeworkId = existing.id;
+      return existing;
+    }
+    const id = `hw-${week.subjectId}-${week.number}`;
+    const homework: Homework = {
+      id,
+      subjectId: week.subjectId,
+      weekNumber: week.number,
+      title: `Домашняя работа — неделя ${week.number}`,
+      deadline: week.endsAt,
+      stage: "task",
+      taskFiles: [],
+      versions: [],
+      finalVersionId: null,
+      finalFileName: null,
+      submittedAt: null,
+      folderPath: `${weekFolder(week.subjectId, week.number)}/03 ДЗ`,
+      workflowStage: "materials_collected",
+      assignmentUrl: null,
+    };
+    this.homework.push(homework);
+    week.homeworkId = id;
+    return homework;
+  }
+
   private destOf(f: InboxFile): RouteDestination {
     const c = f.classification;
     return { subjectId: c?.subjectId ?? "", weekNumber: c?.weekNumber ?? CURRENT_WEEK, category: c?.category ?? "unknown" };
   }
 
-  private buildPreview(f: InboxFile, dest: RouteDestination): RoutePreview {
+  private buildPreview(f: InboxFile, dest: RouteDestination, reserved: FileRef[] = []): RoutePreview {
     const exists = (this.weeks.get(dest.subjectId) ?? []).some((w) => w.number === dest.weekNumber);
     const ext = f.name.includes(".") ? `.${f.name.split(".").pop()}` : "";
     const stem = f.name.slice(0, f.name.length - ext.length);
     const folder = `${weekFolder(dest.subjectId, dest.weekNumber)}/${CATEGORY_FOLDER[dest.category]}`;
-    const dup = this.findDuplicate(f, dest);
+    const dup = this.findDuplicate(f, dest, reserved);
     const targetName = dup ? dup.suggestedName : `${stem}${ext}`;
     return { fileId: f.id, targetPath: `${folder}/${targetName}`, targetName, createsWeek: !exists, duplicate: dup };
   }
 
-  private findDuplicate(f: InboxFile, dest: RouteDestination): InboxFile["duplicate"] {
+  private findDuplicate(f: InboxFile, dest: RouteDestination, reserved: FileRef[] = []): InboxFile["duplicate"] {
     const week = this.weeks.get(dest.subjectId)?.find((w) => w.number === dest.weekNumber);
-    if (!week) return null;
-    const norm = (s: string) => s.toLowerCase().replace(/[_\s.\-—]+/g, " ").replace(/\s(pdf|xlsx|docx|pptx|csv)$/, "").trim();
-    const all = [...week.lectures, ...week.seminars, ...week.materials];
+    const homework = week?.homeworkId ? this.homework.find((h) => h.id === week.homeworkId) : this.homework.find((h) => h.subjectId === dest.subjectId && h.weekNumber === dest.weekNumber);
+    const candidates = homework ? (this.homeworkCandidates.get(homework.id) ?? []) : [];
+    const versionFiles = homework?.versions.flatMap((version) => version.files) ?? [];
+    const all = [...(week?.lectures ?? []), ...(week?.seminars ?? []), ...(week?.materials ?? []), ...(homework?.taskFiles ?? []), ...candidates, ...versionFiles, ...reserved];
+    const norm = (s: string) => s.toLowerCase().replace(/\.[^.]+$/, "").replace(/[_\s.\-—]+/g, " ").trim();
     const hit = all.find((x) => norm(x.name) === norm(f.name));
     if (!hit) return null;
     const ext = f.name.includes(".") ? `.${f.name.split(".").pop()}` : "";
     const stem = f.name.slice(0, f.name.length - ext.length);
-    return { existingPath: hit.relativePath, sameContent: Math.abs(hit.sizeBytes - f.sizeBytes) < 200_000, suggestedName: `${stem} (2)${ext}` };
+    const names = new Set(all.map((x) => x.name.toLocaleLowerCase("ru")));
+    let copy = 2;
+    let suggestedName = `${stem} (${copy})${ext}`;
+    while (names.has(suggestedName.toLocaleLowerCase("ru"))) {
+      copy += 1;
+      suggestedName = `${stem} (${copy})${ext}`;
+    }
+    return { existingPath: hit.relativePath, sameContent: Math.abs(hit.sizeBytes - f.sizeBytes) < 200_000, suggestedName };
   }
 
   private applyClassification(f: InboxFile, c: Classification): InboxFile {

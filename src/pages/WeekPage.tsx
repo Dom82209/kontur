@@ -59,7 +59,7 @@ export function WeekPage() {
   const create = async (num: number) => {
     try {
       const res = await bridge.createWeek(subjectId, num);
-      toast.push({ tone: "ok", title: res.operation.title, text: "Созданы папки 01 Лекции · 02 Семинары · 03 ДЗ · 04 Материалы", action: { label: "Отменить", run: () => void undo(res.operation.id) } });
+      toast.push({ tone: "ok", title: res.operation.title, text: "Созданы папки 01 Лекции · 02 Семинары · 03 ДЗ · 04 Дополнительно", action: { label: "Отменить", run: () => void undo(res.operation.id) } });
       navigate(weekPath(subjectId, num));
     } catch (e) {
       reportError(e, "Неделя не создана");
@@ -234,7 +234,7 @@ export function WeekPage() {
                   04 Отправлено <span className="tree__n">{homework?.stage === "submitted" ? 1 : 0}</span>
                 </li>
                 <li data-depth="1" data-last>
-                  04 Материалы <span className="tree__n">{week.materials.length}</span>
+                  04 Дополнительно <span className="tree__n">{week.materials.length}</span>
                 </li>
               </ul>
             </div>

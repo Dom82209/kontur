@@ -122,7 +122,7 @@ export function InboxPage() {
         </div>
       </header>
 
-      <DropZone onFiles={(items) => void onDrop(items)} onDemo={() => void onDrop([])} />
+      <DropZone onFiles={(items) => void onDrop(items)} onDemo={() => void onDrop([])} onError={(error) => reportError(error, "Не удалось выбрать файлы")} />
 
       <div className="inbox__layout">
         <section className="panel inbox__list" aria-label="Новые файлы">

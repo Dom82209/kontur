@@ -141,8 +141,8 @@ export interface RoutePreview {
 export interface DroppedItem {
   name: string;
   sizeBytes: number;
-  /** Абсолютный путь — только в Tauri (из события drag-drop окна). В браузере отсутствует. */
-  path?: string;
+  /** Абсолютный исходный путь. Обязателен для native Tauri intake, отсутствует у HTML5 File. */
+  sourcePath?: string;
 }
 
 // ───────────────────────── Домашние задания ─────────────────────────
@@ -378,6 +378,10 @@ export interface DesktopBridge {
   createWeek(subjectId: string, weekNumber: number): Promise<OperationResult<Week>>;
 
   getInboxFiles(): Promise<InboxFile[]>;
+  /** Системный диалог выбора файлов. Реальный Tauri-адаптер возвращает sourcePath для каждого файла. */
+  pickFiles(): Promise<DroppedItem[]>;
+  /** Native drag-and-drop окна. Mock/browser возвращает пустую отписку и использует HTML5 drop. */
+  onNativeFileDrop(listener: (items: DroppedItem[]) => void): Unsubscribe;
   importDroppedFiles(items: DroppedItem[]): Promise<InboxFile[]>;
   classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>>;
   updateClassification(fileId: string, patch: Partial<Pick<Classification, "subjectId" | "weekNumber" | "category">>): Promise<InboxFile>;

@@ -60,7 +60,7 @@ export interface MockContext {
   providers(): ProviderStatus[];
   emitter: TypedEmitter;
   wait(ms: number): Promise<void>;
-  runOp(kind: OperationKind, title: string, detail: string | null, paths: string[], steps: number, undo: (() => void) | null, homeworkId: string | null): Promise<Operation>;
+  runOp(kind: OperationKind, title: string, detail: string | null, paths: string[], steps: number, commit: () => void, undo: (() => void) | null, homeworkId: string | null): Promise<Operation>;
   startOp(kind: OperationKind, title: string, detail: string | null, paths: string[], homeworkId: string | null): Operation;
   finishOp(op: Operation): void;
   failOp(op: Operation, error: BridgeErrorPayload): void;
@@ -286,13 +286,34 @@ export class MockWorkflow {
     if (run.status !== "completed" || !draft) throw new BridgeError("conflict", "У этого запуска нет промта исправлений");
     const existing = this.prompts.find((p) => p.reviewRunId === run.id);
     if (existing) {
-      if (editedText !== undefined && !existing.sentAt) existing.text = editedText;
-      return { operation: await this.ctx.runOp("revision_prompt", "Промт исправлений обновлён", subjectName(h.subjectId), [], 1, null, h.id), value: clone(existing) };
+      const op = await this.ctx.runOp(
+        "revision_prompt",
+        "Промт исправлений обновлён",
+        subjectName(h.subjectId),
+        [],
+        1,
+        () => {
+          if (editedText !== undefined && !existing.sentAt) existing.text = editedText;
+        },
+        null,
+        h.id,
+      );
+      return { operation: op, value: clone(existing) };
     }
     const prompt: RevisionPrompt = { ...clone(draft), id: uid("prm"), text: editedText ?? draft.text, createdAt: new Date().toISOString() };
-    const op = await this.ctx.runOp("revision_prompt", `Промт исправлений для ${this.authorName()}`, `${subjectName(h.subjectId)} · по проверке ${this.versionLabel(h, run.versionId)}`, [`${h.folderPath}/.kontur/prompts/${prompt.id}.md`], 2, null, h.id);
-    this.prompts.push(prompt);
-    this.setStage(h, "prompt_ready", `Промт исправлений по проверке ${this.versionLabel(h, run.versionId)} готов`);
+    const op = await this.ctx.runOp(
+      "revision_prompt",
+      `Промт исправлений для ${this.authorName()}`,
+      `${subjectName(h.subjectId)} · по проверке ${this.versionLabel(h, run.versionId)}`,
+      [`${h.folderPath}/.kontur/prompts/${prompt.id}.md`],
+      2,
+      () => {
+        this.prompts.push(prompt);
+        this.setStage(h, "prompt_ready", `Промт исправлений по проверке ${this.versionLabel(h, run.versionId)} готов`);
+      },
+      null,
+      h.id,
+    );
     return { operation: op, value: clone(prompt) };
   }
 
@@ -434,10 +455,18 @@ export class MockWorkflow {
     if (valid.length === 0) throw new BridgeError("conflict", "Нет текста комментария");
     const now = new Date().toISOString();
     const added: TeacherComment[] = valid.map((c) => ({ ...c, question: c.question.trim(), answer: c.answer.trim(), id: uid("tc"), homeworkId, addedAt: now, attachment: null }));
-    const op = await this.ctx.runOp("save_teacher_comments", `Добавлено комментариев: ${added.length}`, subjectName(h.subjectId), [`${h.folderPath}/.kontur/teacher.md`], 2, () => {
-      this.comments = this.comments.filter((c) => !added.some((a) => a.id === c.id));
-    }, h.id);
-    this.comments.push(...added);
+    const op = await this.ctx.runOp(
+      "save_teacher_comments",
+      `Добавлено комментариев: ${added.length}`,
+      subjectName(h.subjectId),
+      [`${h.folderPath}/.kontur/teacher.md`],
+      2,
+      () => this.comments.push(...added),
+      () => {
+        this.comments = this.comments.filter((c) => !added.some((a) => a.id === c.id));
+      },
+      h.id,
+    );
     return { operation: op, value: clone(added) };
   }
 
@@ -459,13 +488,29 @@ export class MockWorkflow {
     }
     const pairs = parseTranscript(text);
     if (pairs.length === 0) throw new BridgeError("conflict", "Не удалось выделить вопросы и ответы");
-    const res = await this.saveTeacherComments(homeworkId, pairs.map((p) => ({ ...p, source: input.source, date: input.date })));
-    if (attachment) for (const c of res.value) {
-      const stored = this.comments.find((x) => x.id === c.id);
-      if (stored) stored.attachment = attachment;
-      c.attachment = attachment;
-    }
-    return res;
+    const now = new Date().toISOString();
+    const added: TeacherComment[] = pairs.map((pair) => ({
+      ...pair,
+      source: input.source,
+      date: input.date,
+      id: uid("tc"),
+      homeworkId,
+      addedAt: now,
+      attachment,
+    }));
+    const op = await this.ctx.runOp(
+      "save_teacher_comments",
+      `Добавлено комментариев: ${added.length}`,
+      subjectName(h.subjectId),
+      [`${h.folderPath}/.kontur/teacher.md`, ...(attachment ? [attachment.relativePath] : [])],
+      2,
+      () => this.comments.push(...added),
+      () => {
+        this.comments = this.comments.filter((comment) => !added.some((item) => item.id === comment.id));
+      },
+      h.id,
+    );
+    return { operation: op, value: clone(added) };
   }
 
   async removeTeacherComment(commentId: string): Promise<void> {
@@ -510,8 +555,16 @@ export class MockWorkflow {
     if (noComments && this.ctx.rules().workflow.requireTeacherReview && !options.noTeacherComments)
       throw new BridgeError("confirmation_required", "Подтвердите, что комментариев преподавателя по этой работе нет");
     const prev = h.workflowStage;
-    const op = await this.ctx.runOp("mark_ready", "Отмечено «Готово к сдаче»", subjectName(h.subjectId), [], 1, () => this.setStage(h, prev, "Отметка «Готово к сдаче» отменена"), h.id);
-    this.setStage(h, "ready_to_submit", "Все обязательные проверки пройдены, подтверждено пользователем");
+    const op = await this.ctx.runOp(
+      "mark_ready",
+      "Отмечено «Готово к сдаче»",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => this.setStage(h, "ready_to_submit", "Все обязательные проверки пройдены, подтверждено пользователем"),
+      () => this.setStage(h, prev, "Отметка «Готово к сдаче» отменена"),
+      h.id,
+    );
     return { operation: op, value: clone(h) };
   }
 
@@ -561,11 +614,19 @@ export class MockWorkflow {
       uploadList: [...items.filter((i) => i.role === "main" || i.role === "attachment").map((i) => i.finalName), ...links.map((l) => `Ссылка: ${l.url}`)],
       builtAt: new Date().toISOString(),
     };
-    const op = await this.ctx.runOp("build_package", "Комплект на сдачу собран", `${items.length} файлов · ${subjectName(h.subjectId)}`, items.map((i) => `${pkg.folderPath}/${i.finalName}`), 3, () => {
-      if (prev) this.packages.set(h.id, prev);
-      else this.packages.delete(h.id);
-    }, h.id);
-    this.packages.set(h.id, pkg);
+    const op = await this.ctx.runOp(
+      "build_package",
+      "Комплект на сдачу собран",
+      `${items.length} файлов · ${subjectName(h.subjectId)}`,
+      items.map((i) => `${pkg.folderPath}/${i.finalName}`),
+      3,
+      () => this.packages.set(h.id, pkg),
+      () => {
+        if (prev) this.packages.set(h.id, prev);
+        else this.packages.delete(h.id);
+      },
+      h.id,
+    );
     return { operation: op, value: clone(pkg) };
   }
 
@@ -617,14 +678,24 @@ export class MockWorkflow {
       snapshotHash: `sha256:${[...`${pkg.id}${now}`].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, "0")}…`,
     };
     // Снимок неизменяем: операция не отменяется.
-    const op = await this.ctx.runOp("confirm_submission", "Отправка подтверждена вручную", `${subjectName(h.subjectId)} · ${files[0]?.name ?? ""}`, files.map((f) => f.relativePath), 3, null, h.id);
-    this.receipts.set(h.id, receipt);
-    h.stage = "submitted";
-    h.submittedAt = c.submittedAt;
-    h.assignmentUrl = receipt.assignmentUrl || null;
-    h.finalFileName = pkg.items[0]?.finalName ?? h.finalFileName;
-    this.setStage(h, "submitted", "Пользователь подтвердил отправку в систему вуза");
-    this.ctx.emitter.emit("submission:confirmed", { receipt: clone(receipt) });
+    const op = await this.ctx.runOp(
+      "confirm_submission",
+      "Отправка подтверждена вручную",
+      `${subjectName(h.subjectId)} · ${files[0]?.name ?? ""}`,
+      files.map((f) => f.relativePath),
+      3,
+      () => {
+        this.receipts.set(h.id, receipt);
+        h.stage = "submitted";
+        h.submittedAt = c.submittedAt;
+        h.assignmentUrl = receipt.assignmentUrl || null;
+        h.finalFileName = pkg.items[0]?.finalName ?? h.finalFileName;
+        this.setStage(h, "submitted", "Пользователь подтвердил отправку в систему вуза");
+        this.ctx.emitter.emit("submission:confirmed", { receipt: clone(receipt) });
+      },
+      null,
+      h.id,
+    );
     return { operation: op, value: clone(receipt) };
   }
 
@@ -1171,5 +1242,3 @@ const RUN_TITLE: Record<RunKind, string> = {
   revision_prompt: "промт исправлений",
   review_teacher: "проверка по комментариям",
 };
-
-

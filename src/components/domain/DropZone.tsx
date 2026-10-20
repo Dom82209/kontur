@@ -1,11 +1,12 @@
 import { motion } from "motion/react";
 import { FolderInput, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { DroppedItem } from "../../lib/bridge";
+import { bridge, type DroppedItem } from "../../lib/bridge";
 
 interface Props {
   onFiles: (items: DroppedItem[]) => void;
   onDemo: () => void;
+  onError?: (error: unknown) => void;
   busy?: boolean;
 }
 
@@ -16,13 +17,18 @@ const REACH = 420; // px — с какого расстояния зона на�
  * свечение усиливается по мере приближения и смещается к курсору.
  * В Tauri backend может заменить HTML5 drop на событие окна с абсолютными путями.
  */
-export function DropZone({ onFiles, onDemo, busy }: Props) {
+export function DropZone({ onFiles, onDemo, onError, busy }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [over, setOver] = useState(false);
   const raf = useRef(0);
   const depth = useRef(0);
+
+  useEffect(() => {
+    if (bridge.kind !== "tauri") return;
+    return bridge.onNativeFileDrop(onFiles);
+  }, [onFiles]);
 
   useEffect(() => {
     const el = ref.current;
@@ -115,7 +121,14 @@ export function DropZone({ onFiles, onDemo, busy }: Props) {
           <div className="dropzone__hint">Предмет, неделя и тип определятся автоматически. Ничего не перезаписывается.</div>
         </div>
         <div className="dropzone__actions">
-          <button className="btn" onClick={() => input.current?.click()} disabled={busy}>
+          <button
+            className="btn"
+            onClick={() => {
+              if (bridge.kind === "mock") input.current?.click();
+              else void bridge.pickFiles().then((items) => items.length > 0 && onFiles(items), onError);
+            }}
+            disabled={busy}
+          >
             <FolderInput /> Выбрать файлы
           </button>
           <button className="btn btn--ghost" onClick={onDemo} disabled={busy}>
@@ -128,6 +141,7 @@ export function DropZone({ onFiles, onDemo, busy }: Props) {
         type="file"
         multiple
         hidden
+        disabled={bridge.kind !== "mock"}
         onChange={(e) => {
           take(e.target.files);
           e.target.value = "";
