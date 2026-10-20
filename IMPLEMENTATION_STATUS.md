@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 3 завершён: frontend, настройки AI workflow, девятиэтапная Главная и актуальный handoff готовы. Следующий этап не начинался.
+Этап 4A завершён: официальный stable Rust toolchain установлен, существующая Tauri-оболочка проверена командами Cargo, в dev-режиме и debug-сборкой. Этап 4B и реализация backend не начинались.
 
 ## Что уже реализовано
 
@@ -83,6 +83,19 @@
 - Реальные адаптеры официальных клиентов Codex/Claude, прогресс и отмена запусков без хранения секретов.
 - Хэши версий, сборка submission package и неизменяемый submitted snapshot на диске; фактическая отправка в LMS остаётся ручной.
 
+## Окружение Rust/Tauri — этап 4A
+
+- Mac: Apple Silicon `arm64` (`aarch64-apple-darwin`), shell `/bin/zsh`.
+- Xcode Command Line Tools: `/Library/Developer/CommandLineTools`; Apple clang 17.0.0, macOS SDK найден.
+- Через официальный `rustup` для текущего пользователя без `sudo` установлен профиль `minimal`, stable toolchain `1.99.1-aarch64-apple-darwin`, target `aarch64-apple-darwin`.
+- Версии: `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, `cargo 1.99.1 (5f94df478 2026-08-27)`, `rustup 1.29.1 (d95a37b6a 2026-08-13)`, `rustfmt 1.10.0-stable`, `clippy 0.1.99`.
+- `cargo fmt --check`, `cargo check` и Clippy с `-D warnings` завершены без замечаний. `cargo test` успешен; существующая оболочка пока содержит 0 Rust-тестов.
+- `npm run tauri:dev` запустил Vite, собрал `target/debug/kontur` и открыл нативное macOS-окно «Контур» на `tauri://localhost` без ошибок в терминале. Dev-процесс завершён через `Ctrl+C`, порт и процесс после остановки отсутствуют.
+- `npm run tauri:build -- --debug --bundles app` успешно собрал debug executable и `Контур.app` размером 28.94 MiB. Окно собранного приложения открыто и проверено, затем закрыто.
+- Полная конфигурация bundle (`app` + `dmg`) компилирует приложение и создаёт `.app`, но DMG-этап в текущем окружении завершается сообщением: `failed to bundle project: error running bundle_dmg.sh: hdiutil: create failed - Устройство не сконфигурировано`. Для проверки кода и `.app` это не блокирует этап 4A; signing и notarization не запускались.
+- `src-tauri/target/`, `dist/`, `node_modules/`, локальные базы, `.env`, ключи и credentials уже исключены через `.gitignore`; менять его не потребовалось. Сборочные `.app`/`.dmg` остаются внутри ignored `target/` и в Git не добавляются.
+- Cargo создал и зафиксировал `src-tauri/Cargo.lock` для воспроизводимого набора зависимостей существующего приложения. Rust-исходники, Tauri-конфигурация и frontend на этапе 4A не изменялись.
+
 ## Результаты команд
 
 | Команда | Результат |
@@ -91,6 +104,12 @@
 | `npm run typecheck` | Успешно; `tsc -b`, ошибок нет |
 | `npm run test` | Успешно; 3 test files, 19 тестов пройдено |
 | `npm run build` | Успешно; 2426 модулей, production-сборка Vite завершена |
+| `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
+| `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
+| `cargo test` | Успешно; 0 тестов, ошибок нет |
+| `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
+| `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
 
 ## Git
 
