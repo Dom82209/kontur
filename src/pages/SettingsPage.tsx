@@ -1,4 +1,4 @@
-import { Gauge, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
+import { BrainCircuit, Gauge, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun } from "lucide-react";
 import { usePrefs } from "../app/preferences";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { SaveBar } from "../components/ui/SaveBar";
@@ -8,6 +8,11 @@ import { bridge } from "../lib/bridge";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useRulesDraft } from "../lib/hooks/useRulesDraft";
 import { NAME_TOKENS, applyNamePattern } from "../lib/naming";
+
+const PROVIDERS = [
+  { value: "codex", label: "Codex" },
+  { value: "claude", label: "Claude" },
+] as const;
 
 export function SettingsPage() {
   const prefs = usePrefs();
@@ -134,6 +139,58 @@ export function SettingsPage() {
         <section className="settings__group">
           <h2 className="settings__h">Нейросети</h2>
           <div className="settings__fields">{providers.data ? providers.data.map((p) => <ProviderCard key={p.provider} status={p} />) : <SkeletonRows count={2} />}</div>
+        </section>
+
+        <section className="settings__group settings__group--wide">
+          <h2 className="settings__h">
+            <BrainCircuit size={16} /> Рабочий процесс AI
+          </h2>
+          {!rules ? (
+            <SkeletonRows count={4} />
+          ) : (
+            <div className="workflow-settings">
+              <div className="workflow-settings__roles">
+                {([
+                  ["analyst", "Анализ материалов", "Аналитик изучает материалы и создаёт первоначальный промт.", BrainCircuit],
+                  ["author", "Создание решения", "Автор создаёт решение по подготовленному промту.", PenLine],
+                  ["reviewer", "Проверка решения", "Проверяющий проверяет решение и формирует исправления.", ScanSearch],
+                ] as const).map(([role, label, hint, Icon]) => (
+                  <label className="workflow-role" key={role}>
+                    <span className="workflow-role__icon" aria-hidden><Icon /></span>
+                    <span className="workflow-role__copy">
+                      <span className="field__label">{label}</span>
+                      <span className="field__hint">{hint}</span>
+                    </span>
+                    <select
+                      className="select workflow-role__select"
+                      aria-label={`${label}: провайдер`}
+                      value={rules.workflow.roles[role]}
+                      onChange={(e) => update((r) => ({ ...r, workflow: { ...r.workflow, roles: { ...r.workflow.roles, [role]: e.target.value as "codex" | "claude" } } }))}
+                    >
+                      {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <label className="style-threshold">
+                <span className="style-threshold__copy">
+                  <span className="field__label">Допустимое расхождение с личным стилем</span>
+                  <span className="field__hint">Оценка 0–10 сравнивает работу с профилем вашего стиля. Это не определение AI-авторства.</span>
+                </span>
+                <input
+                  className="style-threshold__range"
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="1"
+                  value={rules.workflow.styleThreshold}
+                  aria-valuetext={`${rules.workflow.styleThreshold} из 10`}
+                  onChange={(e) => update((r) => ({ ...r, workflow: { ...r.workflow, styleThreshold: Number(e.target.value) } }))}
+                />
+                <output className="style-threshold__value num" aria-live="polite">{rules.workflow.styleThreshold}/10</output>
+              </label>
+            </div>
+          )}
         </section>
 
         <section className="settings__group settings__group--wide">

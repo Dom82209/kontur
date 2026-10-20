@@ -444,7 +444,17 @@ export class MockDesktopBridge implements DesktopBridge {
 
   async updateAutomationRules(rules: AutomationRules): Promise<OperationResult<AutomationRules>> {
     if (!rules.finalNamePattern.includes("{Неделя}")) throw new BridgeError("conflict", "Формат имени должен содержать {Неделя}, иначе имена недель совпадут");
+    if (!Number.isInteger(rules.workflow.styleThreshold) || rules.workflow.styleThreshold < 0 || rules.workflow.styleThreshold > 10) {
+      throw new BridgeError("conflict", "Порог расхождения со стилем должен быть целым числом от 0 до 10");
+    }
     const prev = clone(this.rules);
+    const applyRules = (next: AutomationRules) => {
+      this.rules = clone(next);
+      for (const p of this.providers) {
+        const roles = (Object.entries(this.rules.workflow.roles) as [keyof AutomationRules["workflow"]["roles"], ProviderId][]).filter(([, prov]) => prov === p.provider).map(([role]) => role);
+        if (roles.join() !== p.roles.join()) this.setProvider(p, { roles });
+      }
+    };
     const op = await this.runOp(
       "update_rules",
       "Правила обновлены",
@@ -452,14 +462,10 @@ export class MockDesktopBridge implements DesktopBridge {
       [".kontur/rules.json"],
       2,
       () => {
-        this.rules = { ...clone(rules), confirm: { ...rules.confirm, markSubmitted: true, allowOverwrite: false } };
-        for (const p of this.providers) {
-          const roles = (Object.entries(this.rules.workflow.roles) as [keyof AutomationRules["workflow"]["roles"], ProviderId][]).filter(([, prov]) => prov === p.provider).map(([role]) => role);
-          if (roles.join() !== p.roles.join()) this.setProvider(p, { roles });
-        }
+        applyRules({ ...clone(rules), confirm: { ...rules.confirm, markSubmitted: true, allowOverwrite: false } });
       },
       () => {
-        this.rules = prev;
+        applyRules(prev);
       },
     );
     return { operation: clone(op), value: clone(this.rules) };

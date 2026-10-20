@@ -450,7 +450,7 @@
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(9, minmax(0, 1fr));
 }
 .rail__stage {
   display: grid;
@@ -461,7 +461,9 @@
   display: grid;
   justify-items: center;
   border-radius: var(--r-sm);
-  padding: 0 6px 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 3px 4px;
 }
 .rail__btn:hover .rail__label {
   color: var(--text);
@@ -482,8 +484,14 @@
   margin-top: 10px;
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-size: var(--t-sm);
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 5px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
   font-weight: 500;
   color: var(--text-2);
   transition: color var(--dur-fast);

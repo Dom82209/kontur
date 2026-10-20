@@ -47,6 +47,40 @@ beforeEach(async () => {
 });
 
 describe("рабочий цикл ДЗ (mock)", () => {
+  it("сохраняет роли и порог, обновляет ProviderStatus и применяет настройки к новым запускам", async () => {
+    const rules = await b.getAutomationRules();
+    rules.workflow.roles = { analyst: "claude", author: "codex", reviewer: "claude" };
+    rules.workflow.styleThreshold = 7;
+    const saved = await b.updateAutomationRules(rules);
+
+    expect((await b.getAutomationRules()).workflow).toMatchObject({
+      roles: { analyst: "claude", author: "codex", reviewer: "claude" },
+      styleThreshold: 7,
+    });
+    expect((await b.getProviderStatus("codex")).roles).toEqual(["author"]);
+    expect((await b.getProviderStatus("claude")).roles).toEqual(["analyst", "reviewer"]);
+
+    const analysis = await run("analyze_materials", null);
+    expect(analysis).toMatchObject({ role: "analyst", provider: "claude" });
+    const [prompt] = await b.getPrompts(HW);
+    await b.sendPromptToAuthor(prompt!.id);
+    const version = await latestVersion();
+    expect(version.author).toBe("codex");
+    const review = await run("review_version", version.id);
+    expect(review).toMatchObject({ role: "reviewer", provider: "claude" });
+    expect(review.result?.style?.threshold).toBe(7);
+
+    await b.undoOperation(saved.operation.id);
+    expect((await b.getAutomationRules()).workflow.roles).toEqual({ analyst: "codex", author: "claude", reviewer: "codex" });
+    expect((await b.getProviderStatus("codex")).roles).toEqual(["analyst", "reviewer"]);
+  });
+
+  it("отклоняет недопустимый порог стиля", async () => {
+    const rules = await b.getAutomationRules();
+    rules.workflow.styleThreshold = 11;
+    await expect(b.updateAutomationRules(rules)).rejects.toMatchObject({ code: "conflict" });
+  });
+
   it("проходит весь процесс от анализа материалов до неизменяемого снимка", async () => {
     // 1. Создание первого промта
     const analysis = await run("analyze_materials", null);

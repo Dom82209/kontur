@@ -146,6 +146,11 @@ export function AiWorkspacePage() {
                 </label>
               )}
               {status && <ProviderCard status={status} compact />}
+              {rules.data && (
+                <div className="ai2__threshold faint">
+                  Допустимое расхождение со стилем: <strong className="num">{rules.data.workflow.styleThreshold}/10</strong>. Порог применяется к новым проверкам.
+                </div>
+              )}
             </div>
           </section>
 

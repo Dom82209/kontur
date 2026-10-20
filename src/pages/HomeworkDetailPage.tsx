@@ -25,8 +25,9 @@ import { useHomeworkWorkflow } from "../lib/hooks/useHomeworkWorkflow";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
 import { useWorkflowActions } from "../lib/hooks/useWorkflowActions";
 import { applyNamePattern } from "../lib/naming";
+import { getWorkflowPresentation, type HomeworkTab } from "../lib/workflow-ui";
 
-type Tab = "materials" | "cycle" | "review" | "teacher" | "package";
+type Tab = HomeworkTab;
 
 const DEFAULT_REASON: Record<HomeworkWorkflowStage, string> = {
   materials_collected: "Проверьте материалы и запустите анализ — получится первичный промт.",
@@ -40,18 +41,6 @@ const DEFAULT_REASON: Record<HomeworkWorkflowStage, string> = {
   submitted: "Работа отправлена. Снимок в «04 Отправлено» неизменяем.",
 };
 
-const TAB_FOR: Record<HomeworkWorkflowStage, Tab> = {
-  materials_collected: "materials",
-  codex_analysis: "materials",
-  prompt_ready: "cycle",
-  claude_solving: "cycle",
-  codex_review: "review",
-  needs_fixes: "review",
-  teacher_review: "teacher",
-  ready_to_submit: "package",
-  submitted: "package",
-};
-
 export function HomeworkDetailPage() {
   const { homeworkId = "" } = useParams();
   const [params, setParams] = useSearchParams();
@@ -61,6 +50,7 @@ export function HomeworkDetailPage() {
   const wf = useHomeworkWorkflow(homeworkId);
   const actions = useWorkflowActions(homeworkId);
   const rules = useBridgeQuery(() => bridge.getAutomationRules(), [], ["operation:completed"]);
+  const providers = useBridgeQuery(() => Promise.all([bridge.getProviderStatus("codex"), bridge.getProviderStatus("claude")]), [], ["provider:status-changed", "operation:completed"]);
   const h = wf.homework.data;
 
   const [tab, setTabState] = useState<Tab | null>((params.get("tab") as Tab | null) ?? null);
@@ -100,7 +90,7 @@ export function HomeworkDetailPage() {
   if (wf.homework.loading && !h) return <SkeletonRows count={6} />;
   if (!h) return <EmptyState icon={<Flag />} title="ДЗ не найдено" action={<Link className="btn" to="/homework">К списку</Link>} />;
 
-  const tabNow: Tab = tab ?? TAB_FOR[h.workflowStage];
+  const tabNow: Tab = tab ?? getWorkflowPresentation(h.workflowStage, wf.readiness.data?.ready).tab;
   const setTab = (t: Tab) => {
     setTabState(t);
     setParams((p) => {
@@ -112,6 +102,11 @@ export function HomeworkDetailPage() {
   const deadline = formatDeadline(h.deadline);
   const author = rules.data ? providerName(rules.data.workflow.roles.author) : "автор";
   const reviewer = rules.data ? providerName(rules.data.workflow.roles.reviewer) : "проверяющий";
+  const analyst = rules.data ? providerName(rules.data.workflow.roles.analyst) : "аналитик";
+  const roleConnected = (role: "analyst" | "author" | "reviewer") => {
+    const provider = rules.data?.workflow.roles[role];
+    return !!provider && providers.data?.find((p) => p.provider === provider)?.state === "connected";
+  };
   const finalExt = (finalTarget?.files[0]?.name ?? latest?.fileName ?? ".pdf").split(".").pop();
   const cycle = Math.max(1, h.versions.length);
   const blockedStages: HomeworkWorkflowStage[] = locked || h.workflowStage === "ready_to_submit" || wf.readiness.data?.ready ? [] : ["ready_to_submit", "submitted"];
@@ -160,14 +155,14 @@ export function HomeworkDetailPage() {
     switch (h.workflowStage) {
       case "materials_collected":
         return (
-          <button className="btn btn--primary" disabled={!bundle?.complete || !!actions.busy} onClick={() => void actions.startRun("analyze_materials", null, bundle)}>
-            <BrainCircuit /> Проанализировать материалы
+          <button className="btn btn--primary" title={!roleConnected("analyst") ? `${analyst} не подключён` : undefined} disabled={!bundle?.complete || !roleConnected("analyst") || !!actions.busy} onClick={() => void actions.startRun("analyze_materials", null, bundle)}>
+            <BrainCircuit /> Анализ · {analyst}
           </button>
         );
       case "prompt_ready":
         return pendingPrompt ? (
           <>
-            <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void actions.sendPrompt(pendingPrompt.id)}>
+            <button className="btn btn--primary" title={!roleConnected("author") ? `${author} не подключён` : undefined} disabled={!roleConnected("author") || !!actions.busy} onClick={() => void actions.sendPrompt(pendingPrompt.id)}>
               <Send /> Передать промт {author}
             </button>
             <button className="btn" onClick={() => setTab("cycle")}>
@@ -177,8 +172,8 @@ export function HomeworkDetailPage() {
         ) : null;
       case "codex_review":
         return latest ? (
-          <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void actions.startRun("review_version", latest.id).then(() => setTab("review"))}>
-            <ScanSearch /> Проверить {latest.label}
+          <button className="btn btn--primary" title={!roleConnected("reviewer") ? `${reviewer} не подключён` : undefined} disabled={!roleConnected("reviewer") || !!actions.busy} onClick={() => void actions.startRun("review_version", latest.id).then(() => setTab("review"))}>
+            <ScanSearch /> Проверить {latest.label} · {reviewer}
           </button>
         ) : null;
       case "needs_fixes": {
@@ -257,9 +252,9 @@ export function HomeworkDetailPage() {
         onChange={setTab}
         items={[
           { value: "materials", label: "Исходные материалы", badge: bundle && !bundle.complete ? <span className="badge badge--danger">!</span> : undefined },
-          { value: "cycle", label: "Рабочий цикл", badge: <span className="tabs__n num">{h.versions.length}</span> },
+          { value: "cycle", label: "Рабочий цикл", badge: <span className="tabs__n num" aria-label={`${h.versions.length} версий`}>{h.versions.length}</span> },
           { value: "review", label: "Результат проверки" },
-          { value: "teacher", label: "Комментарии преподавателя", badge: <span className="tabs__n num">{comments.length}</span> },
+          { value: "teacher", label: "Комментарии преподавателя", badge: <span className="tabs__n num" aria-label={`${comments.length} комментариев`}>{comments.length}</span> },
           { value: "package", label: "Комплект на сдачу" },
         ]}
       />

@@ -3,24 +3,22 @@ import { ArrowRight, Clock, FolderSync, Inbox } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useIntro } from "../app/intro";
 import { ProcessRail } from "../components/domain/ProcessRail";
-import { HomeworkRail } from "../components/domain/HomeworkRail";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { Confidence } from "../components/ui/Confidence";
 import { FileIcon } from "../components/ui/FileIcon";
 import { ErrorState, Skeleton, SkeletonRows, EmptyState } from "../components/ui/States";
-import { StageBadge } from "../components/ui/StatusBadges";
-import { bridge, type Dashboard } from "../lib/bridge";
-import { CATEGORY_LABEL, formatDate, formatDeadline, formatRelative, pad2, plural } from "../lib/format";
+import { bridge, WORKFLOW_STAGE_ORDER, type Homework } from "../lib/bridge";
+import { CATEGORY_LABEL, formatDate, formatDeadline, formatRelative, pad2, plural, WORKFLOW_STAGE_LABEL } from "../lib/format";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
+import { getWorkflowPresentation } from "../lib/workflow-ui";
 
 const stagger = { animate: { transition: { staggerChildren: 0.045, delayChildren: 0.05 } } };
 const rise = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.2, 0.8, 0.2, 1] as const } } };
 
-function railCounts(d: Dashboard): { counts: number[]; reached: number } {
-  const hw = d.activeHomework;
-  const counts = [d.inbox.total, hw.filter((h) => h.stage === "task").length, hw.filter((h) => h.stage === "in_progress").length, hw.filter((h) => h.stage === "ready").length, d.weekProgress.items.filter((i) => i.done).length];
-  const reached = hw.some((h) => h.stage === "ready") ? 3 : hw.some((h) => h.stage === "in_progress") ? 2 : 1;
+function railCounts(homework: Homework[]): { counts: number[]; reached: number } {
+  const counts = WORKFLOW_STAGE_ORDER.map((stage) => homework.filter((h) => h.workflowStage === stage).length);
+  const reached = Math.max(0, ...homework.map((h) => WORKFLOW_STAGE_ORDER.indexOf(h.workflowStage)));
   return { counts, reached };
 }
 
@@ -29,13 +27,20 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const names = useSubjectNames();
   const q = useBridgeQuery(() => bridge.getDashboard(), [], ["operation:completed", "inbox:file-added", "provider:status-changed"]);
+  const homework = useBridgeQuery(() => bridge.getHomeworkList(), [], ["operation:completed", "workflow:stage-changed", "homework:version-created"]);
   const d = q.data;
 
   if (q.error && !d) return <ErrorState message={q.error} onRetry={() => void q.reload()} />;
 
   const next = d?.deadlines[0];
   const nextDl = next ? formatDeadline(next.deadline) : null;
-  const rail = d ? railCounts(d) : null;
+  const allHomework = homework.data ?? [];
+  const summary = {
+    active: allHomework.filter((h) => h.workflowStage !== "ready_to_submit" && h.workflowStage !== "submitted").length,
+    ready: allHomework.filter((h) => h.workflowStage === "ready_to_submit").length,
+    submitted: allHomework.filter((h) => h.workflowStage === "submitted").length,
+  };
+  const rail = homework.data ? railCounts(homework.data) : null;
 
   return (
     <motion.div className="dash" variants={stagger} initial="initial" animate="animate">
@@ -53,7 +58,7 @@ export function DashboardPage() {
           {d ? (
             <>
               <h1 className="dash__headline">
-                {d.activeHomework.length} {plural(d.activeHomework.length, "работа", "работы", "работ")} в процессе
+                {summary.active} {plural(summary.active, "работа", "работы", "работ")} в процессе
                 {next && nextDl && (
                   <>
                     <span className="faint">, ближайшая — </span>
@@ -86,8 +91,14 @@ export function DashboardPage() {
       </motion.header>
 
       <motion.section className="dash__rail" variants={rise} aria-label="Учебный процесс недели">
-        {introDone && rail ? <ProcessRail layoutId="process-rail" counts={rail.counts} reached={rail.reached} onStageClick={(i) => navigate(i === 0 ? "/inbox" : i === 1 ? "/ai" : "/homework")} /> : <div style={{ height: 64 }} />}
+        {introDone && rail ? <ProcessRail layoutId="process-rail" counts={rail.counts} reached={rail.reached} onStageClick={(i) => navigate(i === 1 || i === 4 ? "/ai" : "/homework")} /> : <div style={{ height: 64 }} />}
       </motion.section>
+
+      <motion.div className="dash__workflow-summary" variants={rise} aria-label="Сводка домашних работ">
+        <Link to="/homework" className="dash-stat"><span className="dash-stat__value num">{summary.active}</span><span>активных</span></Link>
+        <Link to="/homework" className="dash-stat"><span className="dash-stat__value num">{summary.ready}</span><span>готово к сдаче</span></Link>
+        <Link to="/homework" className="dash-stat"><span className="dash-stat__value num">{summary.submitted}</span><span>отправлено</span></Link>
+      </motion.div>
 
       <div className="dash__grid">
         <div className="dash__col">
@@ -108,9 +119,10 @@ export function DashboardPage() {
                   {d.deadlines.map((dl) => {
                     const f = formatDeadline(dl.deadline);
                     const hw = d.activeHomework.find((h) => h.id === dl.homeworkId);
+                    const presentation = hw ? getWorkflowPresentation(hw.workflowStage) : null;
                     return (
                       <li key={dl.homeworkId}>
-                        <Link to={`/homework/${dl.homeworkId}`} className="deadline" data-tone={f.tone}>
+                        <Link to={`/homework/${dl.homeworkId}${presentation ? `?tab=${presentation.tab}` : ""}`} className="deadline" data-tone={f.tone}>
                           <span className="deadline__when">{f.text}</span>
                           <span className="deadline__what">
                             <span className="deadline__subject">{names(dl.subjectId)}</span>
@@ -118,8 +130,13 @@ export function DashboardPage() {
                               Неделя {hw?.weekNumber} · {dl.title}
                             </span>
                           </span>
-                          <span className="deadline__rail">{hw && <HomeworkRail homeworkId={hw.id} stage={hw.stage} compact />}</span>
-                          <StageBadge stage={dl.stage} />
+                          {hw && (
+                            <span className="deadline__workflow">
+                              <span className="deadline__stage">{WORKFLOW_STAGE_LABEL[hw.workflowStage]}</span>
+                              <span className="deadline__action">{presentation?.action}</span>
+                            </span>
+                          )}
+                          <ArrowRight size={14} className="faint" />
                         </Link>
                       </li>
                     );
