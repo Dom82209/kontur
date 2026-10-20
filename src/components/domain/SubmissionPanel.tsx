@@ -80,13 +80,13 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
             <div>
               <div className="eyebrow">Подтверждение</div>
               <p>{receipt.proof ? <span className="mono">{receipt.proof.name}</span> : <span className="faint">не прикреплено</span>}</p>
-              <div className="eyebrow" style={{ marginTop: 8 }}>
+              <div className="eyebrow receipt__subhead">
                 Страница задания
               </div>
               <p className="mono selectable">{receipt.assignmentUrl || "—"}</p>
             </div>
           </div>
-          <p className="faint mono" style={{ fontSize: 11 }}>
+          <p className="faint mono receipt__hash">
             {receipt.snapshotPath} · {receipt.snapshotHash}
           </p>
         </div>
@@ -219,7 +219,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
                 <button className="btn" onClick={() => void navigator.clipboard?.writeText(pkg.uploadList.join("\n")).then(() => toast.push({ tone: "info", title: "Список файлов скопирован" }))}>
                   <Copy /> Скопировать список файлов
                 </button>
-                <button className="btn btn--primary" style={{ marginLeft: "auto" }} disabled={!isReadyStage || !allChecked || busy} onClick={() => setSubmitOpen(true)} title={!isReadyStage ? "Сначала отметьте «Готово к сдаче»" : !allChecked ? "Отметьте все пункты чек-листа" : undefined}>
+                <button className="btn submit__sent-action" disabled={!isReadyStage || !allChecked || busy} onClick={() => setSubmitOpen(true)} title={!isReadyStage ? "Сначала отметьте «Готово к сдаче»" : !allChecked ? "Отметьте все пункты чек-листа" : undefined}>
                   <Send /> Отметить как отправленное
                 </button>
               </div>
@@ -308,7 +308,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
         </label>
         <div className="field">
           <span className="field__label">Скриншот или файл подтверждения</span>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="submit__proof">
             <button className="btn btn--sm" onClick={() => proofRef.current?.click()}>
               Прикрепить
             </button>

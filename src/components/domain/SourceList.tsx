@@ -54,21 +54,23 @@ export function SourceList({ bundle, onToggle, busy }: Props) {
           </div>
           <ul>
             {g.items.map((i) => (
-              <motion.li key={i.id} layout="position" className="sources__item" data-included={i.included}>
+              <motion.li key={i.id} layout="position" className="sources__item" data-included={i.included} data-required={i.required}>
                 <label className="row sources__row">
                   {onToggle && (
                     <input type="checkbox" className="checkbox" checked={i.included} disabled={busy} onChange={(e) => onToggle(i.id, e.target.checked)} aria-label={`${i.included ? "Исключить" : "Включить"}: ${i.file.name}`} />
                   )}
                   <FileIcon kind={i.file.kind} />
                   <span className="row__main">
-                    <span className="row__title" style={{ display: "block" }}>
+                    <span className="row__title sources__name">
                       {i.file.name}
                     </span>
-                    <span className="row__sub" style={{ display: "block" }}>
-                      {formatBytes(i.file.sizeBytes)}
+                    <span className="row__sub sources__meta">
+                      <span>{i.file.kind.toUpperCase()} · {formatBytes(i.file.sizeBytes)}</span>
+                      <span className="sources__path" title={i.file.relativePath}>{i.file.relativePath}</span>
                       {!i.included && " · исключён"}
                     </span>
                   </span>
+                  {i.required && <span className="badge sources__required">обязательный</span>}
                 </label>
               </motion.li>
             ))}

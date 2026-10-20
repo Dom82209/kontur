@@ -95,7 +95,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                   <>
                     <label className="field">
                       <span className="field__label">Текст переписки</span>
-                      <textarea className="textarea" style={{ minHeight: 120, fontFamily: "var(--font-sans)", fontSize: 13 }} placeholder={"В: Можно ли…?\nО: Да, но…"} value={text} onChange={(e) => setText(e.target.value)} />
+                      <textarea className="textarea teacher__textarea teacher__textarea--transcript" placeholder={"В: Можно ли…?\nО: Да, но…"} value={text} onChange={(e) => setText(e.target.value)} />
                       <span className="field__hint">Строки «В:» / «О:» (или «Вопрос:» / «Ответ:») разбиваются на пары автоматически.</span>
                     </label>
                     <button className="btn btn--primary" disabled={busy || !text.trim()} onClick={() => void submit(() => bridge.importTeacherTranscript(homeworkId, { text, source, date: iso }))}>
@@ -130,7 +130,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                     </label>
                     <label className="field">
                       <span className="field__label">Ответ преподавателя</span>
-                      <textarea className="textarea" style={{ minHeight: 70, fontFamily: "var(--font-sans)", fontSize: 13 }} value={a} onChange={(e) => setA(e.target.value)} />
+                      <textarea className="textarea teacher__textarea" value={a} onChange={(e) => setA(e.target.value)} />
                     </label>
                     <button className="btn btn--primary" disabled={busy || !a.trim()} onClick={() => void submit(() => bridge.saveTeacherComments(homeworkId, [{ source, date: iso, question: q, answer: a }]))}>
                       <Plus /> Добавить

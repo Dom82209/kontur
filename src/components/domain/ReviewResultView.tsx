@@ -25,7 +25,7 @@ export function StyleScore({ style }: { style: StyleDivergence }) {
         </span>
         <span className="faint">порог {style.threshold}/10</span>
       </div>
-      <div className="stylescore__bar" aria-hidden>
+      <div className="stylescore__bar" role="meter" aria-label="Расхождение с личным стилем" aria-valuemin={0} aria-valuemax={10} aria-valuenow={style.score}>
         <motion.span className="stylescore__fill" initial={{ scaleX: 0 }} animate={{ scaleX: style.score / 10 }} transition={{ type: "spring", stiffness: 140, damping: 24 }} />
         <span className="stylescore__tick" style={{ left: `${style.threshold * 10}%` }} />
       </div>

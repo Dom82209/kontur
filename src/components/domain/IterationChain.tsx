@@ -32,7 +32,7 @@ function PromptLink({ prompt, label }: { prompt: RevisionPrompt; label: string }
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} style={{ overflow: "hidden" }}>
+          <motion.div className="itc__promptbody" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
             <PromptBox prompt={prompt} compact />
           </motion.div>
         )}

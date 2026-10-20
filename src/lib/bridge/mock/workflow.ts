@@ -731,6 +731,37 @@ export class MockWorkflow {
       });
     }
 
+    // Демонстрационный собранный комплект для визуальной проверки экрана сдачи.
+    const ready = hws.find((h) => h.id === "hw-stat-7");
+    if (ready?.finalVersionId) {
+      const v = ready.versions.find((x) => x.id === ready.finalVersionId)!;
+      const main = v.files[0] ?? null;
+      const final = ready.finalFileName ?? v.fileName;
+      this.packages.set(ready.id, {
+        id: "pkg-stat-demo",
+        homeworkId: ready.id,
+        versionId: v.id,
+        folderPath: `${ready.folderPath}/03 На сдачу`,
+        items: [
+          { id: "main", role: "main", file: main, finalName: final, required: true, present: !!main },
+          { id: "notes", role: "attachment", file: null, finalName: "Пояснения к расчётам.pdf", required: true, present: false },
+          { id: "extra", role: "extra", file: ready.taskFiles[0] ?? null, finalName: ready.taskFiles[0]?.name ?? "Условие.pdf", required: false, present: !!ready.taskFiles[0] },
+        ],
+        links: [{ id: "course-link", label: "Таблица с расчётами", url: "https://disk.example.ru/kontur/stat-w7", required: false, verified: true }],
+        warnings: ["Не приложены пояснения к расчётам"],
+        checklist: [
+          { id: "final_selected", label: "Итоговая версия выбрана", done: true, auto: true },
+          { id: "name_checked", label: "Название файла проверено", done: true, auto: false },
+          { id: "attachments", label: "Приложения приложены", done: false, auto: true },
+          { id: "links", label: "Ссылки доступны", done: true, auto: true },
+          { id: "teacher", label: "Комментарии преподавателя учтены", done: true, auto: true },
+          { id: "manual_review", label: "Ручная проверка выполнена", done: false, auto: false },
+        ],
+        uploadList: [final, "Пояснения к расчётам.pdf", "Ссылка: https://disk.example.ru/kontur/stat-w7"],
+        builtAt: at(-1, 19, 20),
+      });
+    }
+
     const h = hws.find((x) => x.id === "hw-oba-7");
     if (!h) return;
     const workDir = `${h.folderPath}/02 Работа`;

@@ -15,25 +15,32 @@ export function RunMonitor({ run }: { run: ReviewRun | null }) {
     if (run && p.runId === run.id) setLive({ id: p.runId, progress: p.progress, step: p.step });
   });
   const active = run && (run.status === "running" || run.status === "queued") ? run : null;
-  const progress = live?.id === active?.id ? live!.progress : (active?.progress ?? 0);
-  const step = live?.id === active?.id ? live!.step : (active?.step ?? "");
+  const progress = live && run && live.id === run.id ? live.progress : (run?.progress ?? 0);
+  const step = live && run && live.id === run.id ? live.step : (run?.step ?? "");
   return (
     <AnimatePresence>
-      {active && (
-        <motion.div className="runmon" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}>
+      {run && (
+        <motion.div className="runmon" data-status={run.status} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}>
           <div className="runmon__head">
             <span className="dot dot--accent" />
-            <span>
-              {providerName(active.provider)} · {ROLE_LABEL[active.role].toLowerCase()}
+            <span className="runmon__provider">
+              {providerName(run.provider)} · {ROLE_LABEL[run.role].toLowerCase()}
             </span>
-            <span className="faint" style={{ marginLeft: "auto" }}>
-              {step || "В очереди"} · <span className="num">{Math.round(progress * 100)}%</span>
+            <span className="faint runmon__meta">
+              {step || (run.status === "queued" ? "В очереди" : run.status === "completed" ? "Завершено" : run.status === "failed" ? "Ошибка" : "Отменено")} · <span className="num">{Math.round(progress * 100)}%</span>
             </span>
-            <button className="btn btn--sm btn--ghost" onClick={() => void bridge.cancelRun(active.id).catch((e: unknown) => reportError(e, "Отмена не выполнена"))}>
-              <X /> Отменить
-            </button>
+            {active && (
+              <button className="btn btn--sm btn--ghost" onClick={() => void bridge.cancelRun(active.id).catch((e: unknown) => reportError(e, "Отмена не выполнена"))}>
+                <X /> Отменить
+              </button>
+            )}
           </div>
-          <AiWaveform active progress={progress} label="Прогресс запуска" />
+          {active && <AiWaveform active progress={progress} label="Прогресс запуска" />}
+          {run.errorMessage && (
+            <div className="runmon__error" role="alert">
+              {run.errorMessage}
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

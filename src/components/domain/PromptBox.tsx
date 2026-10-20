@@ -34,7 +34,7 @@ export function PromptBox({ prompt, editable, onChange, actions, compact }: Prop
         )}
         <button
           className="btn btn--sm btn--ghost"
-          style={{ marginLeft: "auto" }}
+          aria-label="Скопировать промт"
           onClick={() => void navigator.clipboard?.writeText(text).then(() => toast.push({ tone: "info", title: "Промт скопирован" }))}
         >
           <Copy /> Скопировать промт

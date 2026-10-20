@@ -114,6 +114,7 @@ export function HomeworkDetailPage() {
   const reviewer = rules.data ? providerName(rules.data.workflow.roles.reviewer) : "проверяющий";
   const finalExt = (finalTarget?.files[0]?.name ?? latest?.fileName ?? ".pdf").split(".").pop();
   const cycle = Math.max(1, h.versions.length);
+  const blockedStages: HomeworkWorkflowStage[] = locked || h.workflowStage === "ready_to_submit" || wf.readiness.data?.ready ? [] : ["ready_to_submit", "submitted"];
 
   const openAdd = async () => {
     setAddOpen(true);
@@ -233,7 +234,7 @@ export function HomeworkDetailPage() {
       </header>
 
       <section className="panel wf">
-        <WorkflowRail homeworkId={h.id} stage={h.workflowStage} cycle={cycle} />
+        <WorkflowRail homeworkId={h.id} stage={h.workflowStage} cycle={cycle} blockedStages={blockedStages} />
         <motion.div className="wf__next" key={h.workflowStage} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
           <div className="wf__now">
             <span className="eyebrow">Сейчас · {WORKFLOW_STAGE_LABEL[h.workflowStage]}</span>
@@ -250,6 +251,7 @@ export function HomeworkDetailPage() {
       </section>
 
       <Tabs<Tab>
+        idBase="homework-sections"
         label="Разделы ДЗ"
         value={tabNow}
         onChange={setTab}
@@ -262,7 +264,7 @@ export function HomeworkDetailPage() {
         ]}
       />
 
-      <motion.div key={tabNow} className="hw__tab" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+      <motion.div key={tabNow} id={`homework-sections-panel-${tabNow}`} aria-labelledby={`homework-sections-tab-${tabNow}`} role="tabpanel" tabIndex={0} className="hw__tab" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
         {tabNow === "materials" && (
           <section className="panel">
             <div className="panel__head">
@@ -354,7 +356,7 @@ export function HomeworkDetailPage() {
             <div className="panel__head">
               <h2 className="panel__title">Результат проверки</h2>
               <div className="panel__meta">
-                <select className="select select--sm" style={{ width: "auto" }} value={selectedVersionId ?? ""} onChange={(e) => setReviewVersion(e.target.value)} aria-label="Версия">
+                <select className="select select--sm review__version" value={selectedVersionId ?? ""} onChange={(e) => setReviewVersion(e.target.value)} aria-label="Версия">
                   {h.versions.map((v) => (
                     <option key={v.id} value={v.id}>
                       {v.label}
@@ -423,7 +425,7 @@ export function HomeworkDetailPage() {
         {tabNow === "teacher" && (
           <>
             {teacherRun?.result && (
-              <div className={`notice ${teacherRun.result.verdict === "needs_fixes" ? "notice--danger" : "notice--ok"}`} style={{ marginBottom: 12 }}>
+              <div className={`notice teacher__review-notice ${teacherRun.result.verdict === "needs_fixes" ? "notice--danger" : "notice--ok"}`}>
                 <ScanSearch />
                 <div>
                   Сверка {h.versions.find((v) => v.id === teacherRun.versionId)?.label} с комментариями: {teacherRun.result.summary}

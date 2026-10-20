@@ -9,10 +9,11 @@ interface Props {
   /** Номер текущего цикла исправлений (1 — первая версия). */
   cycle?: number;
   compact?: boolean;
+  blockedStages?: HomeworkWorkflowStage[];
 }
 
 const N = WORKFLOW_STAGE_ORDER.length;
-const x = (i: number) => (i / (N - 1)) * 100;
+const x = (i: number) => ((i + 0.5) / N) * 100;
 const LOOP_FROM = WORKFLOW_STAGE_ORDER.indexOf("needs_fixes");
 const LOOP_TO = WORKFLOW_STAGE_ORDER.indexOf("prompt_ready");
 
@@ -20,7 +21,7 @@ const LOOP_TO = WORKFLOW_STAGE_ORDER.indexOf("prompt_ready");
  * Девять этапов рабочего цикла. Петля «Требуются исправления → Промт готов»
  * подсвечивается, когда работа идёт на повторный круг; маркер этапа перетекает (layoutId).
  */
-export function WorkflowRail({ homeworkId, stage, cycle = 1, compact }: Props) {
+export function WorkflowRail({ homeworkId, stage, cycle = 1, compact, blockedStages = [] }: Props) {
   const index = WORKFLOW_STAGE_ORDER.indexOf(stage);
   const looping = cycle > 1 && index >= LOOP_TO && index <= LOOP_FROM;
   return (
@@ -40,24 +41,28 @@ export function WorkflowRail({ homeworkId, stage, cycle = 1, compact }: Props) {
       <div className="wfrail__line">
         <motion.div className="wfrail__fill" initial={false} animate={{ scaleX: index / (N - 1) }} transition={{ type: "spring", stiffness: 160, damping: 26 }} />
       </div>
-      {WORKFLOW_STAGE_ORDER.map((s, i) => {
-        const done = i < index || stage === "submitted";
-        const current = i === index;
-        return (
-          <div key={s} className="wfrail__stage" data-done={done} data-current={current} data-loop={i === LOOP_FROM || i === LOOP_TO} style={{ left: `${x(i)}%` }}>
-            <span className="wfrail__node">
-              {current && <motion.span layoutId={`wf-marker-${homeworkId}`} className="wfrail__marker" transition={{ type: "spring", stiffness: 280, damping: 30 }} />}
-              {done && !compact && <Check className="wfrail__check" />}
-            </span>
-            {!compact && (
-              <span className="wfrail__label">
-                <span className="wfrail__n num">{i + 1}</span>
-                {WORKFLOW_STAGE_LABEL[s]}
+      <div className="wfrail__stages">
+        {WORKFLOW_STAGE_ORDER.map((s, i) => {
+          const done = i < index || stage === "submitted";
+          const current = i === index;
+          const blocked = blockedStages.includes(s);
+          const status = blocked ? "blocked" : current ? "current" : done ? "done" : "future";
+          return (
+            <div key={s} className="wfrail__stage" data-status={status} data-loop={i === LOOP_FROM || i === LOOP_TO} aria-current={current ? "step" : undefined}>
+              <span className="wfrail__node">
+                {current && <motion.span layoutId={`wf-marker-${homeworkId}`} className="wfrail__marker" transition={{ type: "spring", stiffness: 280, damping: 30 }} />}
+                {done && !compact && <Check className="wfrail__check" />}
               </span>
-            )}
-          </div>
-        );
-      })}
+              {!compact && (
+                <span className="wfrail__label">
+                  <span className="wfrail__n num">{i + 1}</span>
+                  {WORKFLOW_STAGE_LABEL[s]}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {!compact && cycle > 1 && <span className="wfrail__cycle badge badge--accent">цикл {cycle}</span>}
     </div>
   );

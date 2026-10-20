@@ -191,6 +191,44 @@
   padding: 0 16px 16px;
 }
 
+/* ───────────── Вкладки ───────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  margin: 14px 0 12px;
+  padding: 0 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.tabs__tab {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--text-3);
+  font-size: var(--t-sm);
+  font-weight: 550;
+  white-space: nowrap;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  transition: color var(--dur-fast), background-color var(--dur-fast);
+}
+.tabs__tab:hover { color: var(--text-2); background: var(--surface-hover); }
+.tabs__tab[aria-selected="true"] { color: var(--text); }
+.tabs__tab:focus-visible { box-shadow: var(--focus); z-index: 2; }
+.tabs__line {
+  position: absolute;
+  height: 2px;
+  left: 9px;
+  right: 9px;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.tabs__n { margin-left: 6px; color: var(--text-3); }
+
 .eyebrow {
   font-size: var(--t-xs);
   font-weight: 600;
