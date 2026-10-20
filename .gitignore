@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# Local databases and runtime state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+.kontur/
+
+# Local secrets (keep committed examples)
+.env
+.env.*
+!.env.example
+*.pem
+*.key

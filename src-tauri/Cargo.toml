@@ -1,0 +1,15 @@
+[package]
+name = "kontur"
+version = "0.1.0"
+description = "Контур — учебный процесс без хаоса (frontend shell)"
+edition = "2021"
+
+[lib]
+name = "kontur_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
