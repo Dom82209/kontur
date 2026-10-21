@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 4C.2A завершён: добавлены типизированный `TauriDesktopBridge` для готовых read-only команд и cancellation-safe Tauri event adapter. UI намеренно продолжает использовать `MockDesktopBridge`; write-команды остаются этапу 4C.2B. Schema version остаётся 2.
+Этап 4C.2B завершён: добавлены две безопасные DB-only мутации — сохранение `AutomationRules` и ручная классификация входящего файла — с транзакционным журналом операций и реальными Tauri events после commit. UI намеренно продолжает использовать `MockDesktopBridge`. Schema version остаётся 2.
 
 ## Что уже реализовано
 
@@ -38,7 +38,7 @@
 ## Что не закончено
 
 - `TauriDesktopBridge` создан, но пока не подключён к `createBridge()`; основной UI всегда получает mock-адаптер.
-- Read-only Rust-команды готовы. Write-команд, production emit вызовов, файлового наблюдателя, классификатора, реальных файловых операций, резервных копий и undo на диске пока нет.
+- Read-only Rust-команды и две DB-only write-команды готовы. Файлового наблюдателя, автоматического классификатора, реальных файловых операций, резервных копий и undo на диске пока нет.
 - Нет реального создания структуры Obsidian, заметок, ссылок и метаданных Finder.
 - Нет реальных адаптеров локальных клиентов Codex и Claude; анализ, проверка и создание версий сейчас симулируются mock-слоем.
 - Нет реального выбора папок через системный диалог и открытия Finder/официальных приложений провайдеров.
@@ -77,11 +77,24 @@
 
 ## Остаётся исключительно для backend
 
-- Подключение `TauriDesktopBridge` после реализации согласованного набора write-команд; read-only методы и event adapter уже готовы.
+- Расширение write-контракта до полного набора, необходимого UI, и только затем отдельное решение о подключении `TauriDesktopBridge`; сейчас основной UI остаётся на mock.
 - Native picker и window drag-and-drop с обязательным `sourcePath`.
 - Реальные watcher, классификация, файловые операции, backup/undo, persistent storage и дедупликация на диске.
 - Реальные адаптеры официальных клиентов Codex/Claude, прогресс и отмена запусков без хранения секретов.
 - Хэши версий, сборка submission package и неизменяемый submitted snapshot на диске; фактическая отправка в LMS остаётся ручной.
+
+## DB-only мутации — этап 4C.2B
+
+- Зарегистрированы `update_automation_rules` и `update_classification`. Обе команды изменяют только SQLite и не выполняют файловых операций.
+- `MutationService` отделяет транзакционные инварианты от тонких Tauri-команд. Репозиторий `writes` использует параметризованный SQL; успешный результат перечитывается через существующие read-модели.
+- Каждая попытка получает UUID operation id. Успех атомарно проходит `running → commit данных → completed`; ошибка откатывает целевую транзакцию и сохраняет одну отдельную `failed`-операцию. Эти операции имеют `undoable: false`.
+- `updateClassification` использует явный tri-state patch: `absent` сохраняет поле, `null` очищает subject/week либо устанавливает category `unknown`, `value` задаёт значение. Проверяются существование предмета, принадлежность недели предмету и запрет изменения уже разложенного файла.
+- Ручная классификация записывает source `manual`, confidence `1`, безопасное объяснение и вычисляет `classified` только при полном наборе subject + week + category; иначе статус `ambiguous`.
+- После успешного commit эмитятся реальные события: для классификации `inbox:classification-updated`, затем `operation:completed`; для правил — `operation:completed`. После записанной ошибки эмитится `operation:failed`.
+- Ошибка доставки события не откатывает уже сохранённые данные и возвращается как контролируемая ошибка с указанием перечитать состояние.
+- Низкоуровневый IPC и `TauriDesktopBridge` делегируют обе команды без HTTP, mock fallback и скрытой подмены backend. `createBridge()` не изменён.
+- Секретоподобные и неизвестные поля AutomationRules отклоняются; пороги и инварианты подтверждений проверяются до записи.
+- Всего проходит 66 Rust- и 43 frontend-теста. Frontend-дизайн, CSS, миграции и schema version не изменялись.
 
 ## TauriDesktopBridge и events — этап 4C.2A
 
@@ -91,7 +104,7 @@
 - Добавлена явная `createTauriBridge()`, но существующий `createBridge()` не изменён и продолжает создавать `MockDesktopBridge`.
 - Runtime detection централизован в `tauri/runtime.ts` и используется IPC и events. Вне Tauri нет HTTP-попыток или fallback.
 - `tauri/events.ts` лениво импортирует официальный event API. Отписка безопасна до и после асинхронной регистрации, повторный вызов идемпотентен, callback после unsubscribe блокируется, ошибки регистрации контролируемо передаются error handler.
-- Rust `events.rs` содержит точные константы 12 событий, camelCase payload DTO и общий emit-helper через `tauri::Emitter`; ошибка эмита преобразуется в `AppError`. Production события пока намеренно не эмитятся.
+- На этапе 4C.2A `events.rs` добавил точные константы 12 событий, camelCase payload DTO и общий emit-helper через `tauri::Emitter`; этап 4C.2B подключил его к двум DB-only мутациям.
 - Добавлены 6 Rust event-тестов и 15 frontend-тестов bridge/events/error boundary. Всего проходит 49 Rust- и 40 frontend-тестов.
 - Дизайн, страницы, CSS, persistence contract и schema не изменялись.
 
@@ -156,12 +169,12 @@
 |---|---|
 | `npm ci` | Успешно; добавлено 62 пакета |
 | `npm run typecheck` | Успешно; `tsc -b`, ошибок нет |
-| `npm run test` | Успешно; 6 test files, 40 тестов пройдено |
+| `npm run test` | Успешно; 6 test files, 43 теста пройдено |
 | `npm run build` | Успешно; 2426 модулей, production-сборка Vite завершена |
 | `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
 | `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
-| `cargo test` | Успешно; 49 Rust-тестов пройдено на этапе 4C.2A |
+| `cargo test` | Успешно; 66 Rust-тестов пройдено на этапе 4C.2B |
 | `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
 | `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
 

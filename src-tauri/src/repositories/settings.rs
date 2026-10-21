@@ -57,7 +57,7 @@ fn merge_json(base: &mut Value, overlay: Value) {
     }
 }
 
-fn validate_rules(rules: &AutomationRulesDto) -> Result<(), BackendError> {
+pub(crate) fn validate_rules(rules: &AutomationRulesDto) -> Result<(), BackendError> {
     if !(0.0..=1.0).contains(&rules.low_confidence_threshold) {
         return Err(BackendError::database(
             "automation lowConfidenceThreshold must be between 0 and 1",
@@ -76,7 +76,7 @@ fn validate_rules(rules: &AutomationRulesDto) -> Result<(), BackendError> {
     Ok(())
 }
 
-fn contains_secret_key(value: &Value) -> bool {
+pub(crate) fn contains_secret_key(value: &Value) -> bool {
     const FORBIDDEN: &[&str] = &[
         "apikey",
         "password",

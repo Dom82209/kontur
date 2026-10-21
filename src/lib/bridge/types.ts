@@ -103,6 +103,13 @@ export interface Classification {
   source: "auto" | "manual";
 }
 
+export interface ClassificationPatch {
+  subjectId?: string | null;
+  weekNumber?: number | null;
+  /** null очищает категорию до unknown. */
+  category?: MaterialCategory | null;
+}
+
 export interface InboxFile {
   id: string;
   name: string;
@@ -386,7 +393,7 @@ export interface DesktopBridge {
   onNativeFileDrop(listener: (items: DroppedItem[]) => void): Unsubscribe;
   importDroppedFiles(items: DroppedItem[]): Promise<InboxFile[]>;
   classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>>;
-  updateClassification(fileId: string, patch: Partial<Pick<Classification, "subjectId" | "weekNumber" | "category">>): Promise<InboxFile>;
+  updateClassification(fileId: string, patch: ClassificationPatch): Promise<InboxFile>;
   previewRoute(fileId: string, destination: RouteDestination): Promise<RoutePreview>;
   /** destination = null → использовать классификацию каждого файла. */
   routeFiles(fileIds: string[], destination: RouteDestination | null): Promise<OperationResult<RoutePreview[]>>;

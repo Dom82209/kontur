@@ -6,6 +6,7 @@ mod operations;
 mod settings;
 mod subjects;
 mod weeks;
+pub(crate) mod writes;
 
 use std::path::{Component, Path};
 

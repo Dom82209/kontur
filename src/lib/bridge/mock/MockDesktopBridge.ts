@@ -229,12 +229,20 @@ export class MockDesktopBridge implements DesktopBridge {
     return { operation: clone(op), value: clone(targets) };
   }
 
-  async updateClassification(fileId: string, patch: Partial<Pick<Classification, "subjectId" | "weekNumber" | "category">>): Promise<InboxFile> {
+  async updateClassification(fileId: string, patch: import("../types").ClassificationPatch): Promise<InboxFile> {
     await this.wait((120));
     const f = this.inbox.find((x) => x.id === fileId);
     if (!f) throw new BridgeError("not_found", "Файл не найден");
     const prev = f.classification ?? { subjectId: null, weekNumber: null, category: "unknown" as MaterialCategory, confidence: 0, reasons: [], source: "manual" as const };
-    const next: Classification = { ...prev, ...patch, source: "manual", confidence: 1, reasons: ["Указано вручную"] };
+    const next: Classification = {
+      ...prev,
+      ...(patch.subjectId !== undefined ? { subjectId: patch.subjectId } : {}),
+      ...(patch.weekNumber !== undefined ? { weekNumber: patch.weekNumber } : {}),
+      ...(patch.category !== undefined ? { category: patch.category ?? "unknown" } : {}),
+      source: "manual",
+      confidence: 1,
+      reasons: ["Указано вручную"],
+    };
     Object.assign(f, this.applyClassification(f, next));
     this.emitter.emit("inbox:classification-updated", { fileId, classification: clone(next), status: f.status });
     return clone(f);

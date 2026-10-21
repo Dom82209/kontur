@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { bridge } from "../index";
 import type { AutomationRules, Homework, Operation, Subject, Week } from "../types";
 import { BridgeError } from "../types";
-import { TauriDesktopBridge, type TauriReadIpc } from "./TauriDesktopBridge";
+import { TauriDesktopBridge, type TauriIpcClient } from "./TauriDesktopBridge";
 import { createTauriBridge } from "./index";
 
 const subject: Subject = {
@@ -85,7 +85,7 @@ const operation: Operation = {
   homeworkId: homework.id,
 };
 
-function readClient(overrides: Partial<TauriReadIpc> = {}): TauriReadIpc {
+function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
   return {
     getSubjects: async () => [subject],
     getWeeks: async () => [week],
@@ -95,6 +95,18 @@ function readClient(overrides: Partial<TauriReadIpc> = {}): TauriReadIpc {
     getHomework: async () => homework,
     getAutomationRules: async () => rules,
     getActivityLog: async () => [operation],
+    updateAutomationRules: async (updatedRules) => ({ operation, value: updatedRules }),
+    updateClassification: async () => ({
+      id: "inbox-1",
+      name: "file.pdf",
+      kind: "pdf",
+      sizeBytes: 1,
+      addedAt: "2026-10-21T10:00:00Z",
+      origin: "drop",
+      status: "ambiguous",
+      classification: null,
+      duplicate: null,
+    }),
     ...overrides,
   };
 }
@@ -115,6 +127,18 @@ describe("TauriDesktopBridge", () => {
       getHomework: vi.fn(async () => homework),
       getAutomationRules: vi.fn(async () => rules),
       getActivityLog: vi.fn(async () => [operation]),
+      updateAutomationRules: vi.fn(async (updatedRules) => ({ operation, value: updatedRules })),
+      updateClassification: vi.fn(async () => ({
+        id: "inbox-1",
+        name: "file.pdf",
+        kind: "pdf" as const,
+        sizeBytes: 1,
+        addedAt: "2026-10-21T10:00:00Z",
+        origin: "drop" as const,
+        status: "ambiguous" as const,
+        classification: null,
+        duplicate: null,
+      })),
     });
     const adapter = new TauriDesktopBridge(client);
 
@@ -126,6 +150,8 @@ describe("TauriDesktopBridge", () => {
     await adapter.getHomework("homework-7");
     await adapter.getAutomationRules();
     await adapter.getActivityLog();
+    await adapter.updateAutomationRules(rules);
+    await adapter.updateClassification("inbox-1", { subjectId: null });
 
     expect(client.getSubjects).toHaveBeenCalledOnce();
     expect(client.getWeeks).toHaveBeenCalledWith("subject-1");
@@ -135,6 +161,8 @@ describe("TauriDesktopBridge", () => {
     expect(client.getHomework).toHaveBeenCalledWith("homework-7");
     expect(client.getAutomationRules).toHaveBeenCalledOnce();
     expect(client.getActivityLog).toHaveBeenCalledOnce();
+    expect(client.updateAutomationRules).toHaveBeenCalledWith(rules);
+    expect(client.updateClassification).toHaveBeenCalledWith("inbox-1", { subjectId: null });
   });
 
   it("преобразует not_found в null только для Week и Homework", async () => {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BridgeError } from "../types";
+import { BridgeError, type AutomationRules } from "../types";
 import {
   __setInvokeForTests,
   backendHealth,
@@ -12,7 +12,31 @@ import {
   getSubjects,
   getWeek,
   getWeeks,
+  updateAutomationRules,
+  updateClassification,
 } from "./ipc";
+
+const rules: AutomationRules = {
+  inboxPath: "Предметы/00 Входящие",
+  downloadsWatchPath: "Загрузки",
+  obsidianVaultPath: ".",
+  studentName: { lastName: "Не задано", firstName: "Не задано" },
+  finalNamePattern: "{Фамилия}_{Имя}_Неделя{Неделя} ДЗ",
+  versionPattern: "Работа_Неделя{Неделя}_v{Версия}",
+  weekDetection: "filename_then_calendar",
+  semesterStart: "1970-01-05T00:00:00Z",
+  subjectRules: [],
+  lowConfidenceThreshold: 0.7,
+  backupBeforeChange: true,
+  autoRouteHighConfidence: false,
+  confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false },
+  workflow: {
+    roles: { analyst: "codex", author: "claude", reviewer: "codex" },
+    styleThreshold: 4,
+    styleProfilePath: "ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
+    requireTeacherReview: true,
+  },
+};
 
 afterEach(() => {
   __setInvokeForTests(undefined);
@@ -32,6 +56,8 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
     await getInboxFiles();
     await getAutomationRules();
     await getActivityLog();
+    await updateAutomationRules(rules);
+    await updateClassification("inbox-1", {});
 
     expect(invoke.mock.calls).toEqual([
       ["backend_health", undefined],
@@ -43,7 +69,69 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
       ["get_inbox_files", undefined],
       ["get_automation_rules", undefined],
       ["get_activity_log", undefined],
+      ["update_automation_rules", { rules }],
+      ["update_classification", {
+        fileId: "inbox-1",
+        patch: {
+          subjectId: { state: "absent" },
+          weekNumber: { state: "absent" },
+          category: { state: "absent" },
+        },
+      }],
     ]);
+  });
+
+  it("передаёт tri-state classification patch без потери absent/null/value", async () => {
+    const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => ({}));
+    __setInvokeForTests(invoke);
+
+    await updateClassification("inbox-1", {});
+    await updateClassification("inbox-1", { subjectId: null, weekNumber: null, category: null });
+    await updateClassification("inbox-1", { subjectId: "subject-1", weekNumber: 7, category: "lecture" });
+
+    expect(invoke.mock.calls.map((call) => call[1])).toEqual([
+      {
+        fileId: "inbox-1",
+        patch: {
+          subjectId: { state: "absent" },
+          weekNumber: { state: "absent" },
+          category: { state: "absent" },
+        },
+      },
+      {
+        fileId: "inbox-1",
+        patch: {
+          subjectId: { state: "null" },
+          weekNumber: { state: "null" },
+          category: { state: "null" },
+        },
+      },
+      {
+        fileId: "inbox-1",
+        patch: {
+          subjectId: { state: "value", value: "subject-1" },
+          weekNumber: { state: "value", value: 7 },
+          category: { state: "value", value: "lecture" },
+        },
+      },
+    ]);
+  });
+
+  it("передаёт AutomationRules без изменения", async () => {
+    const invoke = vi.fn(async () => ({ operation: {}, value: rules }));
+    __setInvokeForTests(invoke);
+
+    await updateAutomationRules(rules);
+    expect(invoke).toHaveBeenCalledWith("update_automation_rules", { rules });
+  });
+
+  it("преобразует ошибку write-команды в BridgeError", async () => {
+    __setInvokeForTests(vi.fn(async () => Promise.reject({ code: "conflict", message: "invalid rules" })));
+
+    await expect(updateAutomationRules(rules)).rejects.toMatchObject({
+      code: "conflict",
+      message: "invalid rules",
+    });
   });
 
   it("возвращает типизированные данные без преобразования DTO", async () => {

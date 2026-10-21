@@ -232,6 +232,27 @@ pub enum OperationKind {
 }
 
 impl OperationKind {
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Classify => "classify",
+            Self::Route => "route",
+            Self::CreateWeek => "create_week",
+            Self::CreateVersion => "create_version",
+            Self::MarkFinal => "mark_final",
+            Self::MarkSubmitted => "mark_submitted",
+            Self::PrepareSources => "prepare_sources",
+            Self::AiRun => "ai_run",
+            Self::RevisionPrompt => "revision_prompt",
+            Self::SendPrompt => "send_prompt",
+            Self::SaveTeacherComments => "save_teacher_comments",
+            Self::BuildPackage => "build_package",
+            Self::MarkReady => "mark_ready",
+            Self::ConfirmSubmission => "confirm_submission",
+            Self::UpdateRules => "update_rules",
+            Self::Undo => "undo",
+        }
+    }
+
     pub fn try_from_db(value: &str) -> Result<Self, String> {
         match value {
             "classify" => Ok(Self::Classify),
@@ -286,21 +307,21 @@ pub enum WeekDetection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StudentNameDto {
     pub last_name: String,
     pub first_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectRuleDto {
     pub subject_id: String,
     pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfirmationRulesDto {
     pub low_confidence_route: bool,
     pub mark_final: bool,
@@ -309,6 +330,7 @@ pub struct ConfirmationRulesDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowRolesDto {
     pub analyst: ProviderId,
     pub author: ProviderId,
@@ -316,7 +338,7 @@ pub struct WorkflowRolesDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowSettingsDto {
     pub roles: WorkflowRolesDto,
     pub style_threshold: i64,
@@ -325,7 +347,7 @@ pub struct WorkflowSettingsDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutomationRulesDto {
     pub inbox_path: String,
     pub downloads_watch_path: String,
@@ -341,6 +363,29 @@ pub struct AutomationRulesDto {
     pub auto_route_high_confidence: bool,
     pub confirm: ConfirmationRulesDto,
     pub workflow: WorkflowSettingsDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "value", rename_all = "snake_case")]
+pub enum PatchField<T> {
+    Absent,
+    Null,
+    Value(T),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassificationPatchDto {
+    pub subject_id: PatchField<String>,
+    pub week_number: PatchField<i64>,
+    pub category: PatchField<MaterialCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationResultDto<T> {
+    pub operation: OperationDto,
+    pub value: T,
 }
 
 impl Default for AutomationRulesDto {

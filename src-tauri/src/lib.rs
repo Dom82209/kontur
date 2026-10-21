@@ -5,6 +5,7 @@ pub mod domain;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;
 
@@ -33,7 +34,9 @@ pub fn run() {
             commands::get_homework,
             commands::get_inbox_files,
             commands::get_automation_rules,
-            commands::get_activity_log
+            commands::get_activity_log,
+            commands::update_automation_rules,
+            commands::update_classification
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");

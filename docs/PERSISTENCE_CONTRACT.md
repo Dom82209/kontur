@@ -1,6 +1,6 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 2. SQLite доступен только Rust backend; read-only DTO уже доступны через Tauri IPC, но React пока работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 2. SQLite доступен только Rust backend; read-only DTO и две DB-only мутации доступны через Tauri IPC, но React пока работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
@@ -71,6 +71,16 @@ JSON используется только для вложенных неизм�
 ## AutomationRules defaults
 
 Если `automation_rules`/legacy `automation` отсутствует либо содержит только часть безопасных полей, чтение дополняет значения: inbox `Предметы/00 Входящие`, downloads `Загрузки`, vault `.`, имя `Не задано`/`Не задано`, шаблоны `{Фамилия}_{Имя}_Неделя{Неделя} ДЗ` и `Работа_Неделя{Неделя}_v{Версия}`, определение недели `filename_then_calendar`, semester start `1970-01-05T00:00:00Z`, пустые subject rules, порог классификации `0.7`, backup включён, auto-route выключен. Confirm defaults: low-confidence route, final и submitted требуют подтверждения; overwrite запрещён. Workflow defaults: роли `codex/claude/codex`, style threshold `4`, профиль `ПРОФИЛЬ_СТИЛЯ_ДЗ.md`, teacher review включён. Ключи, похожие на password/cookie/API/access/refresh/session secret, отклоняются.
+
+`update_automation_rules` принимает только точный typed DTO (`deny_unknown_fields`), повторно проверяет secret-like ключи и доменные диапазоны, затем параметризованно заменяет JSON под ключом `automation_rules`. Запись и завершение operation выполняются одной транзакцией; сохранённое значение возвращается через обычную read hydration.
+
+## Ручная классификация и tri-state patch
+
+IPC-поле каждого из `subjectId`, `weekNumber`, `category` передаётся как tagged state: `{ state: "absent" }`, `{ state: "null" }` или `{ state: "value", value }`. `absent` сохраняет текущее значение. `null` очищает subject/week; для category это каноническое значение `unknown`. `value` записывает выбранное значение. Такое кодирование не смешивает «поле не передано» с явной очисткой.
+
+Если subject задан, он обязан существовать. Если одновременно заданы subject и week, неделя обязана принадлежать этому предмету. Routed-запись неизменяема этой командой. После ручного изменения `classification.source = manual`, `confidence = 1`, reason не содержит локальных путей. Статус `classified` устанавливается только при subject + week + category, отличной от `unknown`; иначе сохраняется `ambiguous`.
+
+Обе DB-only мутации создают журнал с UUID, ISO 8601 UTC timestamps, пустым безопасным списком paths и `undoable = false`. Успех фиксирует целевую запись и `completed` одной транзакцией. Ошибка откатывает её и сохраняет одну `failed`-операцию отдельной транзакцией; error payload не содержит секретов и абсолютных путей. Schema version остаётся 2.
 
 ## Legacy v1
 

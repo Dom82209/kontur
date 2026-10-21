@@ -1,19 +1,20 @@
 # Архитектура Rust backend
 
-Статус документа: этап 4C.2A. Read-only путь SQLite → Rust → Tauri IPC → `TauriDesktopBridge` реализован; UI по-прежнему использует `MockDesktopBridge`.
+Статус документа: этап 4C.2B. Read-only путь и две DB-only мутации SQLite → Rust → Tauri IPC → `TauriDesktopBridge` реализованы; UI по-прежнему использует `MockDesktopBridge`.
 
 ## Модули
 
 - `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, соединение SQLite и реестр будущих событий.
-- `commands` — тонкие read-only Tauri-команды; они получают managed `AppState` и делегируют запросы application-слою.
+- `commands` — тонкие Tauri-команды; они получают managed `AppState`, делегируют чтение query-слою и DB-only записи mutation-слою, а после commit доставляют события.
 - `db` — соединение SQLite, параметры соединения и транзакционная граница.
 - `db/migrations` — встроенные, версионированные SQL-миграции.
 - `domain` — доменные enum и входные структуры persistence.
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
-- `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; production write-события пока не вызываются.
+- `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
+- `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
-- `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
+- `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
 
 Списковые агрегаты собираются фиксированной серией запросов: Subject — одним агрегатным запросом, Week — базовые строки + файлы + связи Homework, Homework — базовые строки + task files + versions. N+1-запросов по элементам списков нет.
 
@@ -58,6 +59,16 @@ Foreign keys задают владение и политику удаления,
 
 `tauri/runtime.ts` является общей runtime boundary для invoke/listen. `tauri/events.ts` согласует асинхронный Tauri `listen()` с синхронным `DesktopBridge.on()`: ранняя отписка запоминается и вызывает настоящий unlisten сразу после регистрации; callbacks после отмены блокируются, ошибки регистрации контролируемо нормализуются.
 
+## DB-only IPC этапа 4C.2B
+
+Зарегистрированы `update_automation_rules` и `update_classification`. Они используют `MutationService`, меняют только SQLite и возвращают `OperationResult<T>` с перечитанным frontend DTO и завершённой операцией. TypeScript IPC и `TauriDesktopBridge` вызывают команды напрямую; fallback на mock отсутствует.
+
+Операция создаётся с UUID и статусом `running` внутри той же транзакции, что и целевая запись. Успех атомарно фиксирует данные и статус `completed`; ошибка откатывает целевую транзакцию и записывает ровно одну отдельную `failed`-операцию. DB-only операции необратимы через текущий undo API (`undoable = false`). Время хранится как ISO 8601 UTC.
+
+Классификационный patch имеет явные состояния `absent`, `null`, `value`: отсутствие сохраняет колонку, null очищает subject/week либо переводит category в `unknown`, value устанавливает значение. Сервис проверяет ссылки subject/week, принадлежность недели предмету и запрещает изменение routed-файла. Ручное изменение ставит source `manual`, confidence `1`; полный набор полей даёт `classified`, неполный — `ambiguous`.
+
+События эмитятся только после успешного commit: классификация — `inbox:classification-updated`, затем `operation:completed`; правила — `operation:completed`. После сохранённой failed-операции отправляется `operation:failed`. Если доставка события не удалась, БД не откатывается; команда возвращает контролируемую ошибку и предлагает перечитать состояние.
+
 ## Health check
 
 Tauri-команда `backend_health` проверяет доступность соединения и возвращает только:
@@ -70,6 +81,6 @@ Tauri-команда `backend_health` проверяет доступность 
 
 ## Граница следующего этапа
 
-React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; Tauri-адаптер не подключён к UI до появления write-команд. Hybrid bridge запрещён, чтобы реальные чтения не смешивались с несохраняемыми mock-мутациями.
+React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; наличие двух DB-only write-команд ещё не означает готовность полного production bridge. Hybrid bridge запрещён, чтобы реальные чтения не смешивались с несохраняемыми mock-мутациями.
 
-Для этапа 4C.2B остаются write-команды, фактические вызовы event helper и безопасные мутации. Native picker/drop, файловые сервисы с проверкой путей, backup/undo, watcher, provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot также не входят в 4C.2A.
+Следующей backend-границей остаётся фундамент файлового сервиса: native picker/drop, безопасные пути, атомарные копирования, backup/undo и дедупликация. Watcher, provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot также не входят в 4C.2B.

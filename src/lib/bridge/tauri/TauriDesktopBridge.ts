@@ -4,7 +4,7 @@ import { listenToBridgeEvent } from "./events";
 import { unsupportedBackend, unsupportedBackendSync } from "./errors";
 import * as ipc from "./ipc";
 
-export interface TauriReadIpc {
+export interface TauriIpcClient {
   getSubjects: typeof ipc.getSubjects;
   getWeeks: typeof ipc.getWeeks;
   getWeek: typeof ipc.getWeek;
@@ -13,6 +13,8 @@ export interface TauriReadIpc {
   getHomework: typeof ipc.getHomework;
   getAutomationRules: typeof ipc.getAutomationRules;
   getActivityLog: typeof ipc.getActivityLog;
+  updateAutomationRules: typeof ipc.updateAutomationRules;
+  updateClassification: typeof ipc.updateClassification;
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
@@ -30,20 +32,24 @@ export class TauriDesktopBridge implements DesktopBridge {
   readonly kind = "tauri" as const;
 
   constructor(
-    private readonly readIpc: TauriReadIpc = ipc,
+    private readonly ipcClient: TauriIpcClient = ipc,
     private readonly subscribe: EventSubscriber = listenToBridgeEvent,
   ) {}
 
-  getSubjects: DesktopBridge["getSubjects"] = () => this.readIpc.getSubjects();
-  getWeeks: DesktopBridge["getWeeks"] = (subjectId) => this.readIpc.getWeeks(subjectId);
+  getSubjects: DesktopBridge["getSubjects"] = () => this.ipcClient.getSubjects();
+  getWeeks: DesktopBridge["getWeeks"] = (subjectId) => this.ipcClient.getWeeks(subjectId);
   getWeek: DesktopBridge["getWeek"] = (subjectId, weekNumber) =>
-    nullWhenNotFound(() => this.readIpc.getWeek(subjectId, weekNumber));
-  getInboxFiles: DesktopBridge["getInboxFiles"] = () => this.readIpc.getInboxFiles();
-  getHomeworkList: DesktopBridge["getHomeworkList"] = () => this.readIpc.getHomeworkList();
+    nullWhenNotFound(() => this.ipcClient.getWeek(subjectId, weekNumber));
+  getInboxFiles: DesktopBridge["getInboxFiles"] = () => this.ipcClient.getInboxFiles();
+  getHomeworkList: DesktopBridge["getHomeworkList"] = () => this.ipcClient.getHomeworkList();
   getHomework: DesktopBridge["getHomework"] = (homeworkId) =>
-    nullWhenNotFound(() => this.readIpc.getHomework(homeworkId));
-  getAutomationRules: DesktopBridge["getAutomationRules"] = () => this.readIpc.getAutomationRules();
-  getActivityLog: DesktopBridge["getActivityLog"] = () => this.readIpc.getActivityLog();
+    nullWhenNotFound(() => this.ipcClient.getHomework(homeworkId));
+  getAutomationRules: DesktopBridge["getAutomationRules"] = () => this.ipcClient.getAutomationRules();
+  getActivityLog: DesktopBridge["getActivityLog"] = () => this.ipcClient.getActivityLog();
+  updateAutomationRules: DesktopBridge["updateAutomationRules"] = (rules) =>
+    this.ipcClient.updateAutomationRules(rules);
+  updateClassification: DesktopBridge["updateClassification"] = (fileId, patch) =>
+    this.ipcClient.updateClassification(fileId, patch);
 
   on<E extends BridgeEventName>(event: E, listener: BridgeListener<E>): Unsubscribe {
     return this.subscribe(event, listener);
@@ -55,7 +61,6 @@ export class TauriDesktopBridge implements DesktopBridge {
   onNativeFileDrop: DesktopBridge["onNativeFileDrop"] = () => unsupportedBackendSync("Native drag-and-drop");
   importDroppedFiles: DesktopBridge["importDroppedFiles"] = () => unsupportedBackend("Импорт файлов");
   classifyFiles: DesktopBridge["classifyFiles"] = () => unsupportedBackend("Классификация файлов");
-  updateClassification: DesktopBridge["updateClassification"] = () => unsupportedBackend("Изменение классификации");
   previewRoute: DesktopBridge["previewRoute"] = () => unsupportedBackend("Предпросмотр раскладки");
   routeFiles: DesktopBridge["routeFiles"] = () => unsupportedBackend("Раскладка файлов");
   getHomeworkCandidates: DesktopBridge["getHomeworkCandidates"] = () => unsupportedBackend("Кандидаты версий ДЗ");
@@ -95,6 +100,5 @@ export class TauriDesktopBridge implements DesktopBridge {
   connectProvider: DesktopBridge["connectProvider"] = () => unsupportedBackend("Подключение провайдера");
   disconnectProvider: DesktopBridge["disconnectProvider"] = () => unsupportedBackend("Отключение провайдера");
   getProviderStatus: DesktopBridge["getProviderStatus"] = () => unsupportedBackend("Статус провайдера");
-  updateAutomationRules: DesktopBridge["updateAutomationRules"] = () => unsupportedBackend("Сохранение правил автоматизации");
   undoOperation: DesktopBridge["undoOperation"] = () => unsupportedBackend("Отмена операции");
 }

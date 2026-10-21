@@ -1,8 +1,10 @@
 import type {
   AutomationRules,
+  ClassificationPatch,
   Homework,
   InboxFile,
   Operation,
+  OperationResult,
   Subject,
   Week,
 } from "../types";
@@ -83,6 +85,47 @@ export function getAutomationRules(): Promise<AutomationRules> {
 
 export function getActivityLog(): Promise<Operation[]> {
   return call("get_activity_log");
+}
+
+type PatchField<T> =
+  | { state: "absent" }
+  | { state: "null" }
+  | { state: "value"; value: T };
+
+interface ClassificationPatchIpc {
+  subjectId: PatchField<string>;
+  weekNumber: PatchField<number>;
+  category: PatchField<NonNullable<ClassificationPatch["category"]>>;
+}
+
+function patchField<K extends keyof ClassificationPatch>(
+  patch: ClassificationPatch,
+  key: K,
+): PatchField<NonNullable<ClassificationPatch[K]>> {
+  if (!Object.prototype.hasOwnProperty.call(patch, key) || patch[key] === undefined) {
+    return { state: "absent" };
+  }
+  const value = patch[key];
+  if (value === null) return { state: "null" };
+  return { state: "value", value };
+}
+
+export function updateAutomationRules(
+  rules: AutomationRules,
+): Promise<OperationResult<AutomationRules>> {
+  return call("update_automation_rules", { rules });
+}
+
+export function updateClassification(
+  fileId: string,
+  patch: ClassificationPatch,
+): Promise<InboxFile> {
+  const encoded: ClassificationPatchIpc = {
+    subjectId: patchField(patch, "subjectId"),
+    weekNumber: patchField(patch, "weekNumber"),
+    category: patchField(patch, "category"),
+  };
+  return call("update_classification", { fileId, patch: encoded });
 }
 
 /** Только для unit-тестов низкоуровневого IPC-клиента. */
