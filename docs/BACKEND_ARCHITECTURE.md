@@ -1,6 +1,6 @@
 # Архитектура Rust backend
 
-Статус документа: этап 4C.2B. Read-only путь и две DB-only мутации SQLite → Rust → Tauri IPC → `TauriDesktopBridge` реализованы; UI по-прежнему использует `MockDesktopBridge`.
+Статус документа: этап 4D.1. Read-only путь и две DB-only мутации реализованы; изолированный file-service foundation пока не имеет production entry point. UI по-прежнему использует `MockDesktopBridge`.
 
 ## Модули
 
@@ -12,6 +12,7 @@
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
 - `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
+- `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy, backup и undo validation; не зависит от GUI и не зарегистрирована в IPC.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
@@ -69,6 +70,14 @@ Foreign keys задают владение и политику удаления,
 
 События эмитятся только после успешного commit: классификация — `inbox:classification-updated`, затем `operation:completed`; правила — `operation:completed`. После сохранённой failed-операции отправляется `operation:failed`. Если доставка события не удалась, БД не откатывается; команда возвращает контролируемую ошибку и предлагает перечитать состояние.
 
+## File service foundation этапа 4D.1
+
+Публичная Rust-граница использует `VaultRoot`, `InboxRoot`, `BackupRoot`, `SourceFile`, `PersistentPath` и `VerifiedDestination`. Root canonicalized, существует и не является `/`, домашним или широким системным каталогом. Persistent path валидируется по компонентам и сериализуется только с `/`; absolute source остаётся runtime-only.
+
+Planner сравнивает streaming SHA-256 и возвращает `Copy`, `SameContent` либо `NameConflict`. Atomic copy создаёт same-directory temp через `create_new`, потоково копирует, синхронизирует, проверяет size/hash и публикует через `rustix` `RENAME_NOREPLACE`. Backup использует тот же primitive. Undo пока только валидируется по operation state, submitted guard, roots и hashes.
+
+Модуль не вызывается из `run()`, commands, AppState или bridge. Capabilities остаются минимальными и не открывают frontend доступ к filesystem. Все тестовые операции выполняются в `tempfile::TempDir`. Полная политика находится в `FILE_SERVICE_SECURITY.md`.
+
 ## Health check
 
 Tauri-команда `backend_health` проверяет доступность соединения и возвращает только:
@@ -83,4 +92,4 @@ Tauri-команда `backend_health` проверяет доступность 
 
 React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; наличие двух DB-only write-команд ещё не означает готовность полного production bridge. Hybrid bridge запрещён, чтобы реальные чтения не смешивались с несохраняемыми mock-мутациями.
 
-Следующей backend-границей остаётся фундамент файлового сервиса: native picker/drop, безопасные пути, атомарные копирования, backup/undo и дедупликация. Watcher, provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot также не входят в 4C.2B.
+Следующий этап 4D.2 — native picker/drop и реальный импорт во «Входящие» через принятый file service. Watcher, routing по vault, полное применение backup/undo, provider adapters, AI/LMS-интеграции и immutable submission snapshot остаются отдельными этапами.

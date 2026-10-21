@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 4C.2B. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust read-only backend и две DB-only мутации подключены к `TauriDesktopBridge`, но адаптер ещё не используется основным UI.
+Документ фиксирует frontend-контракт и границу этапа 4D.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust file service существует только как backend foundation и не меняет bridge-контракт.
 
 ## 1. Граница архитектуры
 
@@ -192,6 +192,7 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - Для native intake `sourcePath` обязателен. `assertNativeSourcePaths` выявляет отсутствие пути и останавливает импорт с `io_error`, а не создаёт имитацию.
 - Размер, тип и существование native файла уточняет Rust backend; frontend не читает файл.
 - Реальный диалог выбора и native event listener требуют Tauri adapter/plugin/backend и на текущем этапе отсутствуют.
+- Этап 4D.1 добавил внутренние Rust primitives для безопасных roots, persistent paths, hashing, planning, atomic copy, backup и undo validation. Они не являются Tauri-командами и не вызываются frontend. Политика описана в `docs/FILE_SERVICE_SECURITY.md`.
 
 ## 9. Инварианты workflow и сдачи
 
@@ -239,4 +240,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Следующим backend-шагом остаётся фундамент файлового сервиса: системный picker/native drop, безопасная проверка путей, атомарные копирования, backup/undo и дедупликация. Затем — watcher, автоматическая классификация, открытие Finder и официальных приложений, provider adapters, хэши, пакеты и immutable snapshot. UI всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Следующий этап 4D.2 — системный picker/native drop и реальный импорт во «Входящие» через готовый безопасный file service. Затем — watcher, routing, применение backup/undo, автоматическая классификация, открытие Finder и официальных приложений, provider adapters, пакеты и immutable snapshot. UI всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

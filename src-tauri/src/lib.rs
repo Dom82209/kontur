@@ -5,6 +5,7 @@ pub mod domain;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod file_service;
 pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;

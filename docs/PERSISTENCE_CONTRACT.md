@@ -64,6 +64,8 @@ JSON используется только для вложенных неизм�
 
 Постоянные пути учебных файлов относительны корню хранилища. Inbox хранит только путь внутри `Предметы/00 Входящие/`. `DroppedItem.sourcePath` может быть абсолютным лишь как краткоживущий аргумент native intake до безопасного копирования и в SQLite не сохраняется. Repository проверяет `..`, абсолютные Unix/Windows-пути и drive prefix, включая path-поля вложенного JSON; SQL дополнительно ограничивает inbox/operation paths и базовые абсолютные варианты в path-колонках v1.
 
+File service 4D.1 уточняет будущий typed undo payload: `UndoManifest { operationId, createdFiles, backups }`. `createdFiles` содержит только относительный `path` и `expectedSha256`; `backups` — относительные `originalPath`, `backupPath` и `expectedBackupSha256`. `BackupManifest` содержит operation ID, относительные source/backup paths, SHA-256, размер и UTC timestamp. Абсолютные source/root paths никогда не сериализуются. Формат пока не записывается production-кодом и не требует schema v3.
+
 ## Не сохраняемые представления
 
 `Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation` — входные/предварительные DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.

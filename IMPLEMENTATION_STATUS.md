@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 4C.2B завершён: добавлены две безопасные DB-only мутации — сохранение `AutomationRules` и ручная классификация входящего файла — с транзакционным журналом операций и реальными Tauri events после commit. UI намеренно продолжает использовать `MockDesktopBridge`. Schema version остаётся 2.
+Этап 4D.1 завершён: создан изолированный безопасный Rust file service с типизированными roots/paths, потоковым SHA-256, планированием дедупликации, no-clobber atomic copy, backup manifest и валидацией undo. Он не подключён к Tauri commands или UI; все filesystem-тесты используют `TempDir`. Schema version остаётся 2.
 
 ## Что уже реализовано
 
@@ -38,7 +38,7 @@
 ## Что не закончено
 
 - `TauriDesktopBridge` создан, но пока не подключён к `createBridge()`; основной UI всегда получает mock-адаптер.
-- Read-only Rust-команды и две DB-only write-команды готовы. Файлового наблюдателя, автоматического классификатора, реальных файловых операций, резервных копий и undo на диске пока нет.
+- Read-only Rust-команды и две DB-only write-команды готовы. Фундамент файловых операций/backup/undo реализован изолированно, но не подключён к production-командам; watcher и автоматический классификатор отсутствуют.
 - Нет реального создания структуры Obsidian, заметок, ссылок и метаданных Finder.
 - Нет реальных адаптеров локальных клиентов Codex и Claude; анализ, проверка и создание версий сейчас симулируются mock-слоем.
 - Нет реального выбора папок через системный диалог и открытия Finder/официальных приложений провайдеров.
@@ -95,6 +95,19 @@
 - Низкоуровневый IPC и `TauriDesktopBridge` делегируют обе команды без HTTP, mock fallback и скрытой подмены backend. `createBridge()` не изменён.
 - Секретоподобные и неизвестные поля AutomationRules отклоняются; пороги и инварианты подтверждений проверяются до записи.
 - Всего проходит 66 Rust- и 43 frontend-теста. Frontend-дизайн, CSS, миграции и schema version не изменялись.
+
+## Безопасный файловый сервис — этап 4D.1
+
+- Добавлен модуль `file_service` из `paths`, `hashing`, `planning`, `atomic_copy`, `backup`, `undo`; подробная модель угроз описана в `docs/FILE_SERVICE_SECURITY.md`.
+- `VaultRoot`, `InboxRoot`, `BackupRoot`, `SourceFile`, `PersistentPath` и `VerifiedDestination` не дают смешивать абсолютные runtime paths и сериализуемые относительные пути.
+- Корни canonicalized и не могут быть `/`, домашним каталогом, широким системным каталогом или неявным `.`. Source обязан быть абсолютным обычным файлом и не может быть symlink.
+- Component-based проверка persistent path и повторная canonical-проверка parent-каталогов блокируют traversal и symlink escape.
+- SHA-256 читается потоком по 64 KiB. Planner различает `Copy`, `SameContent`, `NameConflict` и предлагает детерминированные имена с сохранением расширения.
+- Atomic copy использует same-directory `.kontur-<uuid>.tmp`, `create_new`, streaming copy, flush/sync, size/hash verification и `RENAME_NOREPLACE`; overwrite отсутствует, cleanup управляется RAII.
+- Backup создаётся до изменения, атомарно и без overwrite. CamelCase manifests содержат только относительные paths, hashes, размеры, operation ID и время.
+- Undo foundation проверяет `undoable`, повторный undo, submitted Homework, контролируемые roots и неизменность created/backup файлов по SHA-256. Применение undo ещё не подключено.
+- Добавлено 36 filesystem/security тестов; всего проходит 102 Rust- и 43 frontend-теста. Все файловые fixtures находятся в `TempDir`.
+- Новых Tauri commands, filesystem capabilities, startup actions, frontend/CSS изменений и schema migration нет. UI остаётся на `MockDesktopBridge`.
 
 ## TauriDesktopBridge и events — этап 4C.2A
 
@@ -174,7 +187,7 @@
 | `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
 | `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
-| `cargo test` | Успешно; 66 Rust-тестов пройдено на этапе 4C.2B |
+| `cargo test` | Успешно; 102 Rust-теста пройдено на этапе 4D.1 |
 | `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
 | `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
 
