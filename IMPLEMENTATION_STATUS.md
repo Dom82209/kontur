@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 4B.1 завершён: persistence schema version 2 синхронизирована с зафиксированным frontend-контрактом, миграция v1 сохранена неизменной. `TauriDesktopBridge` и прикладная backend-логика не начинались.
+Этап 4C.1 завершён: read-only связка SQLite → Rust query layer → Tauri IPC → TypeScript реализована на schema version 2. UI намеренно продолжает использовать `MockDesktopBridge`; `TauriDesktopBridge` и write/backend-функции остаются этапу 4C.2.
 
 ## Что уже реализовано
 
@@ -77,11 +77,25 @@
 
 ## Остаётся исключительно для backend
 
-- Реализация `TauriDesktopBridge`, Rust-команд и bridge-событий.
+- Реализация `TauriDesktopBridge`, write-команд и bridge-событий; read-only IPC уже готов.
 - Native picker и window drag-and-drop с обязательным `sourcePath`.
 - Реальные watcher, классификация, файловые операции, backup/undo, persistent storage и дедупликация на диске.
 - Реальные адаптеры официальных клиентов Codex/Claude, прогресс и отмена запусков без хранения секретов.
 - Хэши версий, сборка submission package и неизменяемый submitted snapshot на диске; фактическая отправка в LMS остаётся ручной.
+
+## Read-only backend и IPC — этап 4C.1
+
+- Добавлены точные camelCase Rust DTO для Subject, Week, FileRef, InboxFile, Homework, HomeworkVersion, AutomationRules и Operation.
+- Репозитории разделены на `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`; прежние write-методы сохранены в `mutations`. Агрегаты читаются фиксированным числом SQL-запросов без N+1.
+- Добавлен тестируемый `QueryService`, который собирает полные DTO и преобразует ошибки чтения в единый `AppError`.
+- Зарегистрированы `backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log`.
+- `get_week` и `get_homework` возвращают `not_found`; повреждённый JSON, неизвестный enum и небезопасный путь возвращают `database` без panic.
+- Inbox DTO не раскрывает persistent `sourcePath` или внутренний relative path. Activity log отсортирован по `startedAt DESC, id DESC`.
+- AutomationRules читаются типизированно; отсутствующие безопасные поля дополняются defaults, включая style threshold 4. Secrets по-прежнему запрещены.
+- Низкоуровневый `src/lib/bridge/tauri/ipc.ts` лениво загружает официальный `invoke`, проверяет Tauri runtime, типизирует девять команд и нормализует ошибки в `BridgeError`. Fallback на mock отсутствует.
+- Legacy nullable-связи сохраняются как null. Для пустых legacy полей версии используются документированные fallback basename, `legacy:<versionId>` и FileRef из относительного пути; обязательный отсутствующий deadline считается повреждённой записью.
+- Добавлены 15 read-only Rust-тестов и 6 TypeScript IPC-тестов. Всего проходит 43 Rust- и 25 frontend-тестов.
+- Документация архитектуры, persistence и frontend handoff синхронизирована с фактической границей 4C.1.
 
 ## Фундамент Rust backend — этап 4B
 
@@ -130,12 +144,12 @@
 |---|---|
 | `npm ci` | Успешно; добавлено 62 пакета |
 | `npm run typecheck` | Успешно; `tsc -b`, ошибок нет |
-| `npm run test` | Успешно; 3 test files, 19 тестов пройдено |
+| `npm run test` | Успешно; 4 test files, 25 тестов пройдено |
 | `npm run build` | Успешно; 2426 модулей, production-сборка Vite завершена |
 | `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
 | `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
-| `cargo test` | Успешно; 28 Rust-тестов пройдено на этапе 4B.1 |
+| `cargo test` | Успешно; 43 Rust-теста пройдено на этапе 4C.1 |
 | `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
 | `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
 

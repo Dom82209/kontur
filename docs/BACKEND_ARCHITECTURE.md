@@ -1,17 +1,21 @@
 # Архитектура Rust backend
 
-Статус документа: фундамент этапа 4B.1. Persistence синхронизирован с frontend-контрактом; `TauriDesktopBridge` и бизнес-команды ещё не подключены.
+Статус документа: этап 4C.1. Read-only путь SQLite → Rust → Tauri IPC → TypeScript реализован; UI по-прежнему использует `MockDesktopBridge`.
 
 ## Модули
 
 - `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, соединение SQLite и реестр будущих событий.
-- `commands` — минимальная команда `backend_health`. Она не раскрывает путь базы или другие локальные данные.
+- `commands` — тонкие read-only Tauri-команды; они получают managed `AppState` и делегируют запросы application-слою.
 - `db` — соединение SQLite, параметры соединения и транзакционная граница.
 - `db/migrations` — встроенные, версионированные SQL-миграции.
-- `domain` — сериализуемые доменные DTO и входные структуры репозиториев.
+- `domain` — доменные enum и входные структуры persistence.
+- `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
 - `events` — пустая типизированная граница для последующего подключения Tauri events; mock-события frontend сюда не перенесены.
-- `repositories` — транзакционные операции над настройками, предметами, неделями, ДЗ, версиями и журналом операций.
+- `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
+- `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
+
+Списковые агрегаты собираются фиксированной серией запросов: Subject — одним агрегатным запросом, Week — базовые строки + файлы + связи Homework, Homework — базовые строки + task files + versions. N+1-запросов по элементам списков нет.
 
 ## База данных
 
@@ -44,6 +48,12 @@ Foreign keys задают владение и политику удаления,
 
 Зарезервированы коды: `not_found`, `conflict`, `duplicate`, `confirmation_required`, `io_error`, `not_undoable`, `immutable`, `blocked`, `cancelled`, `database`, `unknown`.
 
+## Read-only IPC этапа 4C.1
+
+Зарегистрированы команды `backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log`. Запросы по идентификатору возвращают `{ code: "not_found", message }`, если запись отсутствует. Повреждённые JSON, неизвестные enum и небезопасные persistent paths дают структурированную ошибку `database`, без panic.
+
+Низкоуровневый TypeScript-клиент находится в `src/lib/bridge/tauri/ipc.ts`. Он лениво загружает официальный `@tauri-apps/api/core`, проверяет Tauri runtime, преобразует Rust-ошибки в `BridgeError` и вне native runtime возвращает `backend_unavailable`. Клиент не подменяет backend mock-данными и пока не является `TauriDesktopBridge`.
+
 ## Health check
 
 Tauri-команда `backend_health` проверяет доступность соединения и возвращает только:
@@ -56,6 +66,6 @@ Tauri-команда `backend_health` проверяет доступность 
 
 ## Граница следующего этапа
 
-React не обращается к SQLite напрямую: публичной границей должен остаться типизированный `DesktopBridge`, а будущий `TauriDesktopBridge` будет преобразовывать его вызовы в узкие Tauri commands и подписки на события. Это сохраняет системные полномочия в Rust и позволяет browser/mock работать без нативного доступа.
+React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; низкоуровневый IPC-клиент ещё не подключён к UI.
 
-Для подключения frontend остаются `TauriDesktopBridge`, полный набор Tauri-команд и событий, native picker/drop, файловые сервисы с проверкой путей, backup/undo и watcher. Будущие provider adapters будут запускать официальные локальные клиенты Codex/Claude без получения или сохранения их cookies, токенов и других секретов. Также остаётся сборка неизменяемого submission snapshot на диске. Эти части намеренно не реализованы на этапе 4B.
+Для этапа 4C.2 остаются write-команды и полноценный `TauriDesktopBridge`, события, native picker/drop, файловые сервисы с проверкой путей, backup/undo и watcher. Provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot на диске также не входят в 4C.1.

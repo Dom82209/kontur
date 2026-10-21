@@ -350,6 +350,8 @@ export type BridgeErrorCode =
   | "immutable" // отправленный снимок и созданные версии менять нельзя
   | "blocked" // не выполнены обязательные проверки
   | "cancelled"
+  | "database"
+  | "backend_unavailable"
   | "unknown";
 
 export interface BridgeErrorPayload {

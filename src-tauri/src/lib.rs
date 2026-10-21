@@ -2,8 +2,10 @@ mod app_state;
 mod commands;
 pub mod db;
 pub mod domain;
+pub mod dto;
 pub mod error;
 mod events;
+pub mod query_service;
 pub mod repositories;
 
 use app_state::AppState;
@@ -22,7 +24,17 @@ pub fn run() {
             app.manage(AppState::new(app_data_dir, database));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::backend_health])
+        .invoke_handler(tauri::generate_handler![
+            commands::backend_health,
+            commands::get_subjects,
+            commands::get_weeks,
+            commands::get_week,
+            commands::get_homework_list,
+            commands::get_homework,
+            commands::get_inbox_files,
+            commands::get_automation_rules,
+            commands::get_activity_log
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");
 }

@@ -24,6 +24,8 @@ pub struct BackendError {
     pub message: String,
 }
 
+pub type AppError = BackendError;
+
 impl BackendError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {

@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует фактическое состояние frontend на этапе 3. Источник истины по контракту — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock в `src/lib/bridge/mock/` является исполняемым примером поведения. Rust backend и `TauriDesktopBridge` ещё не реализованы.
+Документ фиксирует frontend-контракт и read-only IPC этапа 4C.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust read-only backend готов, полный `TauriDesktopBridge` ещё не реализован.
 
 ## 1. Граница архитектуры
 
@@ -15,7 +15,7 @@ React pages/components
 
 - React не обращается к файловой системе, shell, cookies или Tauri API напрямую.
 - Единственная системная граница — типизированный `DesktopBridge` из `src/lib/bridge`.
-- `createBridge()` сейчас всегда создаёт `MockDesktopBridge`. Реальный адаптер должен реализовать тот же интерфейс и преобразовать `invoke`/`listen` в типы frontend.
+- `createBridge()` сейчас всегда создаёт `MockDesktopBridge`. Модуль `src/lib/bridge/tauri/ipc.ts` предоставляет низкоуровневые read-only вызовы, но намеренно не подключён к UI и не делает fallback на mock.
 - Пути в моделях — относительные пути внутри выбранного хранилища. Абсолютный путь пользователя не хардкодится.
 - Все даты — ISO 8601, размеры — байты, идентификаторы непрозрачны для frontend.
 
@@ -157,6 +157,12 @@ start operation
 
 После `operation:completed` слушатель обязан видеть новое состояние. После resolve не должно оставаться отложенных мутаций. Undo восстанавливает весь согласованный снимок сущностей, а не только один массив.
 
+### Готовые read-only Tauri IPC-команды
+
+`backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log` зарегистрированы в Rust и доступны через типизированные функции одноимённого уровня в `tauri/ipc.ts`. Аргументы IPC передаются в camelCase, DTO возвращаются в точной форме frontend-контракта. Ошибки Rust `{ code, message }` преобразуются в `BridgeError`; отсутствие native runtime даёт `backend_unavailable`.
+
+Это только низкоуровневая граница: `TauriDesktopBridge`, write-команды и Tauri events не реализованы. UI продолжает использовать `MockDesktopBridge`.
+
 ## 8. Native и browser/mock file intake
 
 - Browser/mock использует HTML5 `FileList`; `DroppedItem` содержит `name`, `sizeBytes`, а `sourcePath` отсутствует.
@@ -212,4 +218,4 @@ start operation
 
 ## 12. Что остаётся backend-этапу
 
-Реализовать `TauriDesktopBridge`, Rust commands/events, системный picker и native drop listener, файловый watcher, классификацию, атомарные копирования/backup/undo, persistent storage, реальное открытие Finder и официальных приложений, provider adapters, хэши, пакеты и immutable snapshot. Frontend-контракт для этого зафиксирован выше.
+На этапе 4C.2 реализовать `TauriDesktopBridge`, write-команды/events и безопасные файловые операции. Далее остаются системный picker/native drop, watcher, классификация, атомарные копирования/backup/undo, открытие Finder и официальных приложений, provider adapters, хэши, пакеты и immutable snapshot. Read-only SQLite/IPC уже готов; frontend-контракт зафиксирован выше.
