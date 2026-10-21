@@ -24,12 +24,16 @@ pub mod names {
     pub const REVIEW_FAILED: &str = "review:failed";
     pub const SUBMISSION_CONFIRMED: &str = "submission:confirmed";
     pub const INBOX_UPDATED: &str = "inbox:updated";
+    /// Этап 6: состояние watcher загрузок и список кандидатов изменились.
+    pub const DOWNLOADS_WATCHER_UPDATED: &str = "downloads:watcher-updated";
+    /// Этап 6: фаза и прогресс импорта экспорта ЦУ.
+    pub const CU_IMPORT_PROGRESS: &str = "cu-import:progress";
 
     /// Служебные события native intake (не входят в `BridgeEvents`, слушает только Tauri adapter).
     pub const INTAKE_NATIVE_DROP: &str = "intake:native-drop";
     pub const INTAKE_DRAG_STATE: &str = "intake:drag-state";
 
-    pub const ALL: [&str; 13] = [
+    pub const ALL: [&str; 15] = [
         INBOX_FILE_ADDED,
         INBOX_CLASSIFICATION_UPDATED,
         OPERATION_PROGRESS,
@@ -43,7 +47,25 @@ pub mod names {
         REVIEW_FAILED,
         SUBMISSION_CONFIRMED,
         INBOX_UPDATED,
+        DOWNLOADS_WATCHER_UPDATED,
+        CU_IMPORT_PROGRESS,
     ];
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadsWatcherUpdatedPayload {
+    pub watcher: crate::lms::DownloadsWatcherDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CuImportProgressPayload {
+    pub operation_id: String,
+    pub phase: crate::lms::ExportPhase,
+    pub completed: usize,
+    pub total: usize,
+    pub entry_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -277,6 +299,8 @@ mod tests {
                 "review:failed",
                 "submission:confirmed",
                 "inbox:updated",
+                "downloads:watcher-updated",
+                "cu-import:progress",
             ]
         );
         assert_eq!(names::INTAKE_NATIVE_DROP, "intake:native-drop");

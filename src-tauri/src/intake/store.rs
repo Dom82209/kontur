@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::{
     db::Database,
-    dto::{DuplicateInfoDto, FileKind, OperationKind},
+    dto::{DuplicateInfoDto, FileKind, InboxOrigin, InboxStatus, OperationKind},
     error::{AppError, BackendError, ErrorCode},
     repositories::writes,
 };
@@ -25,6 +25,10 @@ pub struct NewInboxRow<'a> {
     pub mime_type: &'a str,
     pub operation_id: &'a str,
     pub duplicate: Option<&'a DuplicateInfoDto>,
+    pub origin: InboxOrigin,
+    pub status: InboxStatus,
+    pub provenance_json: &'a str,
+    pub classification_json: Option<&'a str>,
 }
 
 pub struct StoredInboxRow {
@@ -129,10 +133,11 @@ pub fn insert_inbox_file(database: &Database, row: &NewInboxRow<'_>) -> Result<(
         transaction.execute(
             "INSERT INTO inbox_files(
                id, name, kind, size_bytes, added_at, origin, status, relative_path,
-               classification_json, duplicate_json, sha256, mime_type, import_operation_id
+               classification_json, duplicate_json, sha256, mime_type, import_operation_id,
+               provenance_json
              ) VALUES (
-               ?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'drop', 'new', ?5,
-               NULL, ?6, ?7, ?8, ?9
+               ?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?10, ?11, ?5,
+               ?12, ?6, ?7, ?8, ?9, ?13
              )",
             params![
                 row.id,
@@ -144,6 +149,10 @@ pub fn insert_inbox_file(database: &Database, row: &NewInboxRow<'_>) -> Result<(
                 row.sha256,
                 row.mime_type,
                 row.operation_id,
+                inbox_origin_str(row.origin),
+                inbox_status_str(row.status),
+                row.classification_json,
+                row.provenance_json,
             ],
         )?;
         Ok(())
@@ -305,5 +314,23 @@ fn file_kind_str(kind: FileKind) -> &'static str {
         FileKind::Text => "text",
         FileKind::Archive => "archive",
         FileKind::Other => "other",
+    }
+}
+
+fn inbox_origin_str(origin: InboxOrigin) -> &'static str {
+    match origin {
+        InboxOrigin::Downloads => "downloads",
+        InboxOrigin::Drop => "drop",
+        InboxOrigin::Lms => "lms",
+    }
+}
+
+fn inbox_status_str(status: InboxStatus) -> &'static str {
+    match status {
+        InboxStatus::New => "new",
+        InboxStatus::Classifying => "classifying",
+        InboxStatus::Classified => "classified",
+        InboxStatus::Ambiguous => "ambiguous",
+        InboxStatus::Routed => "routed",
     }
 }

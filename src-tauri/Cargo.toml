@@ -12,6 +12,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+crc32fast = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustix = { version = "1", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -20,9 +22,10 @@ sha2 = "0.10"
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tempfile = "3"
 time = { version = "0.3", features = ["formatting"] }
+url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["macos-private-api", "test"] }
-tempfile = "3"

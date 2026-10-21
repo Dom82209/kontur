@@ -1,7 +1,13 @@
 import type {
+  AssignmentLinkTarget,
   AutomationRules,
   ClassificationPatch,
+  CourseLinkTarget,
+  DownloadCandidate,
+  DownloadsWatcher,
   DroppedItem,
+  ExportImportRequest,
+  ExportPreview,
   Homework,
   InboxFile,
   InboxImportReport,
@@ -185,6 +191,55 @@ export function revealInboxFile(fileId: string): Promise<void> {
 
 export function revealInFinder(relativePath: string): Promise<void> {
   return call("reveal_in_finder", { relativePath });
+}
+
+// ── Этап 6: watcher загрузок, экспорт ЦУ, ссылки LMS ──
+
+export function getDownloadsWatcher(): Promise<DownloadsWatcher> {
+  return call("get_downloads_watcher");
+}
+
+export function setDownloadsWatcher(enabled: boolean): Promise<DownloadsWatcher> {
+  return call("set_downloads_watcher", { enabled });
+}
+
+export function dismissDownloadCandidate(candidateId: string): Promise<DownloadsWatcher> {
+  return call("dismiss_download_candidate", { candidateId });
+}
+
+/** Системный выбор ZIP/PDF экспорта (диалог открывает Rust). Отмена — null. */
+export function pickCuExport(): Promise<DownloadCandidate | null> {
+  return call("pick_cu_export");
+}
+
+export function previewCuExport(candidateId: string): Promise<ExportPreview> {
+  return call("preview_cu_export", { candidateId });
+}
+
+export function importCuExport(
+  operationId: string,
+  request: ExportImportRequest,
+): Promise<OperationResult<InboxImportReport>> {
+  return call("import_cu_export", {
+    operationId,
+    request: { ...request, courseUrl: request.courseUrl ?? null, assignmentUrl: request.assignmentUrl ?? null },
+  });
+}
+
+export function setSubjectCourseUrl(subjectId: string, url: string | null): Promise<Subject> {
+  return call("set_subject_course_url", { subjectId, url });
+}
+
+export function setHomeworkAssignmentUrl(homeworkId: string, url: string | null): Promise<Homework> {
+  return call("set_homework_assignment_url", { homeworkId, url });
+}
+
+export function openCourse(target: CourseLinkTarget): Promise<void> {
+  return call("open_course", "subjectId" in target ? { subjectId: target.subjectId, fileId: null } : { subjectId: null, fileId: target.fileId });
+}
+
+export function openAssignment(target: AssignmentLinkTarget): Promise<void> {
+  return call("open_assignment", "homeworkId" in target ? { homeworkId: target.homeworkId, fileId: null } : { homeworkId: null, fileId: target.fileId });
 }
 
 /** Преобразует DroppedItem в аргумент IPC; без sourcePath импорт не начинается. */

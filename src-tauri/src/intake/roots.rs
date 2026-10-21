@@ -219,7 +219,7 @@ impl<'a> RootsService<'a> {
                 display_path: None,
                 message: Some(match kind {
                     RootKind::Downloads => {
-                        "Не выбрана (наблюдение подключается на следующем этапе)".to_owned()
+                        "Не выбрана — нужна для наблюдения за загрузками".to_owned()
                     }
                     _ => "Не выбрана".to_owned(),
                 }),

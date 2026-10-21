@@ -10,6 +10,8 @@ pub struct SubjectDto {
     pub short_name: String,
     pub current_week: i64,
     pub week_count: i64,
+    /// Необязательная ссылка на курс в LMS (allowlist HTTPS-домена).
+    pub course_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +151,39 @@ impl InboxStatus {
     }
 }
 
+/// Откуда файл попал во «Входящие».
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceSource {
+    /// Системный выбор файлов или перетаскивание.
+    Manual,
+    /// Обнаружен watcher папки загрузок.
+    Watcher,
+    /// Запись экспорта CU LMS Enhancer.
+    CuExport,
+}
+
+/// Как пользователь передал файл или архив.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceVia {
+    Picker,
+    Drop,
+    Watcher,
+}
+
+/// Происхождение без абсолютных путей: имя архива и относительный путь внутри него.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvenanceDto {
+    pub source: ProvenanceSource,
+    pub via: ProvenanceVia,
+    pub archive_name: Option<String>,
+    pub entry_path: Option<String>,
+    pub course_url: Option<String>,
+    pub assignment_url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxFileDto {
@@ -161,6 +196,9 @@ pub struct InboxFileDto {
     pub status: InboxStatus,
     pub classification: Option<ClassificationDto>,
     pub duplicate: Option<DuplicateInfoDto>,
+    /// `null` у файлов, импортированных до этапа 6.
+    #[serde(default)]
+    pub provenance: Option<ProvenanceDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

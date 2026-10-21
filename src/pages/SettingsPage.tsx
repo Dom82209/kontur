@@ -1,5 +1,6 @@
 import { BrainCircuit, Gauge, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun } from "lucide-react";
 import { usePrefs } from "../app/preferences";
+import { DownloadsWatcherToggle } from "../components/domain/DownloadsWatcher";
 import { ManagedRootsPanel } from "../components/domain/ManagedRootsPanel";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { SaveBar } from "../components/ui/SaveBar";
@@ -35,6 +36,7 @@ export function SettingsPage() {
         <section className="settings__group">
           <h2 className="settings__h">Управляемые каталоги</h2>
           <ManagedRootsPanel />
+          <DownloadsWatcherToggle />
         </section>
 
         <section className="settings__group">

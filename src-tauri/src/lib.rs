@@ -10,6 +10,8 @@ pub mod intake;
 mod intake_commands;
 #[cfg(test)]
 mod ipc_commands;
+pub mod lms;
+mod lms_commands;
 pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;
@@ -32,6 +34,8 @@ pub fn run() {
             let database = Database::open_file(app_data_dir.join("kontur.sqlite3"))?;
             database.migrate()?;
             app.manage(AppState::new(app_data_dir, home_dir, database));
+            // Watcher загрузок запускается только если пользователь включил его ранее.
+            lms_commands::resume_watcher(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -59,7 +63,17 @@ pub fn run() {
             intake_commands::get_operation_result,
             intake_commands::open_inbox_file,
             intake_commands::reveal_inbox_file,
-            intake_commands::reveal_in_finder
+            intake_commands::reveal_in_finder,
+            lms_commands::get_downloads_watcher,
+            lms_commands::set_downloads_watcher,
+            lms_commands::dismiss_download_candidate,
+            lms_commands::pick_cu_export,
+            lms_commands::preview_cu_export,
+            lms_commands::import_cu_export,
+            lms_commands::set_subject_course_url,
+            lms_commands::set_homework_assignment_url,
+            lms_commands::open_course,
+            lms_commands::open_assignment
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");

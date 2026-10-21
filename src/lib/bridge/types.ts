@@ -72,6 +72,8 @@ export interface Subject {
   currentWeek: number;
   /** Сколько недель уже создано в хранилище. */
   weekCount: number;
+  /** Необязательная ссылка на курс в LMS (только https://my.centraluniversity.ru). */
+  courseUrl: string | null;
 }
 
 export interface Week {
@@ -122,6 +124,18 @@ export interface InboxFile {
   classification: Classification | null;
   /** Если в целевой папке уже есть файл с таким содержимым/именем. */
   duplicate: DuplicateInfo | null;
+  /** Происхождение (этап 6). null — файл импортирован до появления журнала происхождения. */
+  provenance: InboxProvenance | null;
+}
+
+/** Откуда файл попал во «Входящие»: без абсолютных путей, только имя архива и путь внутри него. */
+export interface InboxProvenance {
+  source: "manual" | "watcher" | "cu_export";
+  via: "picker" | "drop" | "watcher";
+  archiveName: string | null;
+  entryPath: string | null;
+  courseUrl: string | null;
+  assignmentUrl: string | null;
 }
 
 export interface DuplicateInfo {
@@ -195,9 +209,90 @@ export interface InboxImportReport {
   imported: number;
   duplicates: number;
   failed: number;
+  /** Записи экспорта ЦУ, которые не выбраны или не могут быть импортированы. */
+  skipped: number;
   /** Повтор той же команды: итог прочитан из журнала, файлы не копировались повторно. */
   replayed: boolean;
 }
+
+// ───────────────────────── Загрузки и экспорт ЦУ (этап 6) ─────────────────────────
+
+/** Кандидат на импорт: найден watcher в папке загрузок или выбран кнопкой «Импортировать экспорт ЦУ». */
+export interface DownloadCandidate {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  detectedAt: ISODate;
+  origin: "watcher" | "manual";
+  kind: "zip" | "pdf" | "file";
+}
+
+export type DownloadsWatcherState = "disabled" | "no_folder" | "watching" | "error";
+
+export interface DownloadsWatcher {
+  /** Включён пользователем в Настройках. По умолчанию false. */
+  enabled: boolean;
+  state: DownloadsWatcherState;
+  message: string | null;
+  lastScanAt: ISODate | null;
+  candidates: DownloadCandidate[];
+}
+
+export interface ExportEntryPreview {
+  entryId: string;
+  /** Путь внутри архива (относительный). */
+  path: string;
+  name: string;
+  /** Имя, под которым файл появится во «Входящих». */
+  inboxName: string;
+  sizeBytes: number;
+  kind: FileKind;
+  classification: Classification;
+  status: "classified" | "ambiguous";
+  /** false — вложенный архив или слишком большой файл: импорт невозможен. */
+  selectable: boolean;
+  selected: boolean;
+  warnings: string[];
+}
+
+export interface ExportPreview {
+  candidateId: string;
+  archiveName: string;
+  /** Отпечаток предпросмотра: импорт отклоняется, если файл изменился. */
+  archiveSha256: string;
+  format: "zip" | "single";
+  courseTitle: string | null;
+  entries: ExportEntryPreview[];
+  ignored: string[];
+  warnings: string[];
+  totalFiles: number;
+  ambiguousFiles: number;
+  totalBytes: number;
+}
+
+export interface ExportImportEntry {
+  entryId: string;
+  subjectId: string | null;
+  weekNumber: number | null;
+  category: MaterialCategory;
+  /** Пользователь исправил классификацию в предпросмотре. */
+  edited: boolean;
+}
+
+export interface ExportImportRequest {
+  candidateId: string;
+  archiveSha256: string;
+  /** Только выбранные записи. */
+  entries: ExportImportEntry[];
+  courseUrl?: string | null;
+  assignmentUrl?: string | null;
+}
+
+export type CuImportPhase = "inspect" | "extract" | "import" | "cleanup";
+
+/** Цель команд «Открыть курс» / «Открыть задание». */
+export type CourseLinkTarget = { subjectId: string } | { fileId: string };
+export type AssignmentLinkTarget = { homeworkId: string } | { fileId: string };
 
 export interface OperationRecord {
   operation: Operation;
@@ -392,6 +487,10 @@ export interface BridgeEvents {
   "submission:confirmed": { receipt: SubmissionReceipt };
   /** Список «Входящих» изменился; клиент перечитывает getInboxFiles. */
   "inbox:updated": { reason: "import"; fileIds: string[] };
+  /** Состояние watcher загрузок и список кандидатов изменились. */
+  "downloads:watcher-updated": { watcher: DownloadsWatcher };
+  /** Фаза импорта экспорта ЦУ: проверка → распаковка во временную папку → импорт → удаление временных файлов. */
+  "cu-import:progress": { operationId: string; phase: CuImportPhase; completed: number; total: number; entryName: string | null };
 }
 
 export type BridgeEventName = keyof BridgeEvents;
@@ -464,6 +563,23 @@ export interface DesktopBridge {
   chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection>;
   /** Создать «Входящие» внутри хранилища, если папки ещё нет. */
   prepareInboxRoot(): Promise<ManagedRoots>;
+  // ── Загрузки и экспорт ЦУ (этап 6). Вход в LMS и отправка работ не автоматизируются. ──
+  getDownloadsWatcher(): Promise<DownloadsWatcher>;
+  /** Включение — только явным действием пользователя в Настройках. */
+  setDownloadsWatcher(enabled: boolean): Promise<DownloadsWatcher>;
+  dismissDownloadCandidate(candidateId: string): Promise<DownloadsWatcher>;
+  /** Системный выбор ZIP/PDF экспорта CU LMS Enhancer. Отмена — null. */
+  pickCuExport(): Promise<DownloadCandidate | null>;
+  /** Предпросмотр без распаковки и без записи на диск. */
+  previewCuExport(candidateId: string): Promise<ExportPreview>;
+  /** Импорт подтверждённых записей во «Входящие». Ничего не раскладывается автоматически. */
+  importCuExport(request: ExportImportRequest, operationId?: string): Promise<OperationResult<InboxImportReport>>;
+  setSubjectCourseUrl(subjectId: string, url: string | null): Promise<Subject>;
+  setHomeworkAssignmentUrl(homeworkId: string, url: string | null): Promise<Homework>;
+  /** Открывает ссылку во внешнем браузере после проверки allowlist HTTPS-домена LMS. */
+  openCourse(target: CourseLinkTarget): Promise<void>;
+  openAssignment(target: AssignmentLinkTarget): Promise<void>;
+
   classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>>;
   updateClassification(fileId: string, patch: ClassificationPatch): Promise<InboxFile>;
   previewRoute(fileId: string, destination: RouteDestination): Promise<RoutePreview>;

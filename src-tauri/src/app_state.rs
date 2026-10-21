@@ -8,6 +8,7 @@ use crate::{
     error::{AppError, BackendError},
     events::EventRegistry,
     intake::IntakeGrants,
+    lms::{CandidateRegistry, WatcherService},
 };
 
 pub struct AppState {
@@ -17,6 +18,8 @@ pub struct AppState {
     events: EventRegistry,
     grants: IntakeGrants,
     import_lock: Mutex<()>,
+    candidates: CandidateRegistry,
+    watcher: WatcherService,
 }
 
 impl AppState {
@@ -28,6 +31,8 @@ impl AppState {
             events: EventRegistry,
             grants: IntakeGrants::new(),
             import_lock: Mutex::new(()),
+            candidates: CandidateRegistry::new(),
+            watcher: WatcherService::new(),
         }
     }
 
@@ -50,6 +55,20 @@ impl AppState {
     /// Пути, полученные из native picker/drop; живут только в памяти процесса.
     pub fn grants(&self) -> &IntakeGrants {
         &self.grants
+    }
+
+    /// Кандидаты на импорт (watcher загрузок и выбранные экспорты ЦУ), только в памяти.
+    pub fn candidates(&self) -> &CandidateRegistry {
+        &self.candidates
+    }
+
+    pub fn watcher(&self) -> &WatcherService {
+        &self.watcher
+    }
+
+    /// Каталог для временной распаковки экспорта (внутри данных приложения).
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.app_data_dir.join("tmp")
     }
 
     /// Импорты выполняются последовательно: повтор команды с тем же operation id

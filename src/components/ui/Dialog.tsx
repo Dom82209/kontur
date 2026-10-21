@@ -10,10 +10,12 @@ interface Props {
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** Широкое окно для таблиц предпросмотра. */
+  extraWide?: boolean;
 }
 
 /** Модальное окно с ловушкой фокуса и возвратом фокуса на вызвавший элемент. */
-export function Dialog({ open, onClose, title, description, children, footer, wide }: Props) {
+export function Dialog({ open, onClose, title, description, children, footer, wide, extraWide }: Props) {
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
@@ -63,7 +65,7 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
               role="dialog"
               aria-modal="true"
               aria-labelledby={titleId}
-              className={`dialog${wide ? " dialog--wide" : ""}`}
+              className={`dialog${wide ? " dialog--wide" : ""}${extraWide ? " dialog--xl" : ""}`}
               initial={{ opacity: 0, y: 10, scale: 0.985 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.99, transition: { duration: 0.14 } }}

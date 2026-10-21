@@ -1931,6 +1931,8 @@ dependencies = [
 name = "kontur"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "flate2",
  "rusqlite",
  "rustix",
  "serde",
@@ -1942,6 +1944,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "time",
+ "url",
  "uuid",
 ]
 

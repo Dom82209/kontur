@@ -1,5 +1,8 @@
 use crate::{
-    dto::{ClassificationDto, DuplicateInfoDto, FileKind, InboxFileDto, InboxOrigin, InboxStatus},
+    dto::{
+        ClassificationDto, DuplicateInfoDto, FileKind, InboxFileDto, InboxOrigin, InboxStatus,
+        ProvenanceDto,
+    },
     error::BackendError,
 };
 use rusqlite::{params, Row};
@@ -12,7 +15,7 @@ impl ReadRepository<'_> {
             connection
                 .query_row(
                     "SELECT id, name, kind, size_bytes, added_at, origin, status, relative_path,
-                            classification_json, duplicate_json
+                            classification_json, duplicate_json, provenance_json
                      FROM inbox_files WHERE id = ?1",
                     params![file_id],
                     hydrate_inbox_file,
@@ -30,7 +33,7 @@ impl ReadRepository<'_> {
         self.database.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT id, name, kind, size_bytes, added_at, origin, status, relative_path,
-                        classification_json, duplicate_json
+                        classification_json, duplicate_json, provenance_json
                  FROM inbox_files ORDER BY added_at DESC, id DESC",
             )?;
             let mut rows = statement.query([])?;
@@ -51,6 +54,7 @@ fn hydrate_inbox_file(row: &Row<'_>) -> Result<InboxFileDto, rusqlite::Error> {
     let relative_path: String = row.get(7)?;
     let classification_json: Option<String> = row.get(8)?;
     let duplicate_json: Option<String> = row.get(9)?;
+    let provenance_json: Option<String> = row.get(10)?;
     require_relative_path(&relative_path, "inbox_files.relative_path")
         .map_err(|error| conversion_error(7, error.message))?;
     let classification = classification_json
@@ -76,6 +80,11 @@ fn hydrate_inbox_file(row: &Row<'_>) -> Result<InboxFileDto, rusqlite::Error> {
         require_relative_path(&value.existing_path, "duplicate.existingPath")
             .map_err(|error| conversion_error(9, error.message))?;
     }
+    let provenance = provenance_json
+        .as_deref()
+        .map(|raw| parse_json::<ProvenanceDto>(raw, "provenance_json"))
+        .transpose()
+        .map_err(|error| conversion_error(10, error.message))?;
     Ok(InboxFileDto {
         id,
         name: row.get(1)?,
@@ -88,6 +97,7 @@ fn hydrate_inbox_file(row: &Row<'_>) -> Result<InboxFileDto, rusqlite::Error> {
             .map_err(|message| conversion_error(6, message))?,
         classification,
         duplicate,
+        provenance,
     })
 }
 

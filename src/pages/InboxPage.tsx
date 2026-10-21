@@ -1,10 +1,12 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, Inbox, ListChecks, Pencil, TriangleAlert, WandSparkles } from "lucide-react";
+import { Archive, ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, GraduationCap, Inbox, ListChecks, NotebookPen, Pencil, TriangleAlert, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
 import { useOps } from "../app/operations";
 import { useToast } from "../app/toasts";
+import { CuExportDialog } from "../components/domain/CuExportDialog";
+import { DownloadCandidates } from "../components/domain/DownloadsWatcher";
 import { DropZone } from "../components/domain/DropZone";
 import { ImportPanel, type ImportRun } from "../components/domain/ImportPanel";
 import { FileChip } from "../components/domain/FileChip";
@@ -12,11 +14,18 @@ import { ClassifyWizard } from "../components/domain/ClassifyWizard";
 import { ClassificationFields } from "../components/domain/ClassificationFields";
 import { Confidence } from "../components/ui/Confidence";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
-import { bridge, BridgeError, newOperationId, type DroppedItem, type InboxFile, type RoutePreview } from "../lib/bridge";
+import { bridge, BridgeError, newOperationId, type DownloadCandidate, type DroppedItem, type InboxFile, type InboxImportReport, type InboxProvenance, type RoutePreview } from "../lib/bridge";
 import { CATEGORY_LABEL, formatBytes, formatRelative, pad2, plural } from "../lib/format";
 import { useBridgeEvent } from "../lib/hooks/useBridgeEvent";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
+import { useDownloadsWatcher } from "../lib/hooks/useDownloadsWatcher";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
+
+const PROVENANCE_LABEL: Record<InboxProvenance["source"], string> = {
+  manual: "Добавлен вручную",
+  watcher: "Найден в папке загрузок",
+  cu_export: "Экспорт CU LMS Enhancer",
+};
 
 interface Landed {
   file: InboxFile;
@@ -33,6 +42,43 @@ export function InboxPage() {
   const names = useSubjectNames();
   const q = useBridgeQuery(() => bridge.getInboxFiles(), [], ["inbox:file-added", "inbox:updated", "inbox:classification-updated", "operation:completed"]);
   const [importRun, setImportRun] = useState<ImportRun | null>(null);
+  const [exportCandidate, setExportCandidate] = useState<DownloadCandidate | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const watcher = useDownloadsWatcher();
+
+  // Переход из «Автоматизации»: /inbox?candidate=<id> открывает предпросмотр.
+  const requested = params.get("candidate");
+  useEffect(() => {
+    if (!requested || !watcher.data) return;
+    const found = watcher.data.candidates.find((c) => c.id === requested);
+    if (found) setExportCandidate(found);
+    setParams((p) => {
+      p.delete("candidate");
+      return p;
+    }, { replace: true });
+  }, [requested, watcher.data, setParams]);
+
+  const pickExport = async () => {
+    setPicking(true);
+    try {
+      const candidate = await bridge.pickCuExport();
+      if (candidate) setExportCandidate(candidate);
+    } catch (e) {
+      reportError(e, "Не удалось выбрать экспорт");
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const onExportImported = (report: InboxImportReport) => {
+    setExportCandidate(null);
+    setImportRun({ operationId: report.operationId, total: report.items.length, progress: 1, message: "", report, error: null });
+    if (report.imported > 0) toast.push({ tone: "ok", title: `Из экспорта добавлено ${report.imported} ${plural(report.imported, "файл", "файла", "файлов")}`, text: "Файлы ждут во «Входящих» — ничего не разложено автоматически" });
+  };
+
+  const openLink = (kind: "course" | "assignment", fileId: string) =>
+    void (kind === "course" ? bridge.openCourse({ fileId }) : bridge.openAssignment({ fileId })).catch((e: unknown) => reportError(e, "Ссылка не открыта"));
 
   useBridgeEvent("operation:progress", (p) => {
     setImportRun((run) => (run && run.operationId === p.operationId && !run.report ? { ...run, progress: p.progress, message: p.message } : run));
@@ -58,7 +104,12 @@ export function InboxPage() {
     const c = focus?.classification;
     if (!focus || !c?.subjectId || !c.weekNumber || c.category === "unknown") return;
     let alive = true;
-    void bridge.previewRoute(focus.id, { subjectId: c.subjectId, weekNumber: c.weekNumber, category: c.category }).then((p) => alive && setPreview(p));
+    // В Tauri раскладка ещё не реализована: путь не предсказываем, ошибку не скрываем в консоли.
+    if (bridge.kind === "tauri") return;
+    void bridge
+      .previewRoute(focus.id, { subjectId: c.subjectId, weekNumber: c.weekNumber, category: c.category })
+      .then((p) => alive && setPreview(p))
+      .catch(() => alive && setPreview(null));
     return () => {
       alive = false;
     };
@@ -145,9 +196,26 @@ export function InboxPage() {
           <h1 className="pagehead__title">
             {files.length > 0 ? `${files.length} ${plural(files.length, "файл", "файла", "файлов")} ждут раскладки` : "Всё разложено"}
           </h1>
-          <p className="muted">Загрузки из папки наблюдения и перетащенные файлы. Перед раскладкой можно поправить предмет, неделю и тип.</p>
+          <p className="muted">Загрузки из папки наблюдения, экспорт ЦУ и перетащенные файлы. Перед раскладкой можно поправить предмет, неделю и тип.</p>
+        </div>
+        <div className="pagehead__actions">
+          <button className="btn btn--sm" onClick={() => void pickExport()} disabled={picking || importing} title="ZIP или PDF, скачанный расширением CU LMS Enhancer">
+            <Archive /> Импортировать экспорт ЦУ
+          </button>
         </div>
       </header>
+
+      {watcher.data && watcher.data.candidates.length > 0 && (
+        <section className="panel inbox__candidates" aria-label="Новые загрузки">
+          <div className="panel__head">
+            <h2 className="panel__title">Новые загрузки</h2>
+            <span className="faint">Импорт — после предпросмотра</span>
+          </div>
+          <div className="panel__body">
+            <DownloadCandidates compact onPreview={setExportCandidate} />
+          </div>
+        </section>
+      )}
 
       <DropZone onFiles={(items) => void onImport(items)} onDemo={() => void onDemo()} onError={(error) => reportError(error, "Не удалось выбрать файлы")} busy={importing} />
 
@@ -289,6 +357,27 @@ export function InboxPage() {
                       </button>
                     </div>
                   )}
+                  {focus.provenance && (
+                    <div className="provenance">
+                      <span className="eyebrow">{PROVENANCE_LABEL[focus.provenance.source]}</span>
+                      {focus.provenance.archiveName && <span className="provenance__archive">{focus.provenance.archiveName}</span>}
+                      {focus.provenance.entryPath && <span className="mono faint provenance__path">{focus.provenance.entryPath}</span>}
+                      {(focus.provenance.courseUrl || focus.provenance.assignmentUrl) && (
+                        <div className="preview__actions">
+                          {focus.provenance.courseUrl && (
+                            <button className="btn btn--sm" onClick={() => openLink("course", focus.id)}>
+                              <GraduationCap /> Открыть курс
+                            </button>
+                          )}
+                          {focus.provenance.assignmentUrl && (
+                            <button className="btn btn--sm" onClick={() => openLink("assignment", focus.id)}>
+                              <NotebookPen /> Открыть задание
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {focus.classification && (
                     <ul className="preview__reasons">
                       {focus.classification.reasons.map((r) => (
@@ -325,7 +414,9 @@ export function InboxPage() {
                       </button>
                     </div>
                   ) : focus.status === "new" && bridge.kind === "tauri" ? (
-                    <p className="faint">Файл во «Входящих». Автоматическое распознавание предмета и недели подключается на следующем этапе.</p>
+                    <p className="faint">Файл во «Входящих». Автоматическое распознавание предмета и недели для обычных файлов подключается на следующем этапе.</p>
+                  ) : focus.status === "classified" && bridge.kind === "tauri" ? (
+                    <p className="faint">Предварительно распознан. Раскладка по предметам подключается на следующем этапе — файл остаётся во «Входящих».</p>
                   ) : (
                     <p className="faint">Определяется…</p>
                   )}
@@ -371,6 +462,7 @@ export function InboxPage() {
       </div>
 
       <ClassifyWizard open={wizard} files={files} onClose={() => setWizard(false)} onRoute={(ids) => void route(ids)} />
+      <CuExportDialog candidate={exportCandidate} onClose={() => setExportCandidate(null)} onImported={onExportImported} />
     </div>
   );
 }

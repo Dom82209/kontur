@@ -18,9 +18,9 @@ use serde::Serialize;
 
 pub use grants::{IntakeGrants, GRANT_TTL};
 pub use importer::{
-    stored_import_report, validate_operation_id, ImportItemInput, ImportItemReport, ImportOrigin,
-    ImportOutcome, ImportProgress, InboxImportReport, InboxImporter, MAX_IMPORT_BYTES,
-    MAX_IMPORT_ITEMS,
+    stored_import_report, validate_operation_id, ImportItemInput, ImportItemReport, ImportMeta,
+    ImportOrigin, ImportOutcome, ImportProgress, InboxImportReport, InboxImporter,
+    MAX_IMPORT_BYTES, MAX_IMPORT_ITEMS,
 };
 pub use naming::{detect_kind, is_risky_to_open, numbered_name, safe_inbox_name};
 pub use roots::{
@@ -29,12 +29,25 @@ pub use roots::{
 };
 pub use store::inbox_relative_path;
 
+/// Сохраняет прогресс операции импорта (0…1) для журнала.
+pub fn record_progress(
+    database: &crate::db::Database,
+    operation_id: &str,
+    progress: f64,
+) -> Result<(), crate::error::AppError> {
+    store::update_operation_progress(database, operation_id, progress)
+}
+
 /// Абстракция системного диалога. Production-реализация — официальный
 /// `tauri-plugin-dialog`, вызываемый из Rust; в тестах — заглушка.
 /// `None` означает, что пользователь закрыл диалог.
 pub trait FilePicker {
     fn pick_files(&self, start: Option<&Path>) -> Option<Vec<PathBuf>>;
     fn pick_folder(&self, title: &str, start: Option<&Path>) -> Option<PathBuf>;
+    /// Выбор одного файла экспорта ЦУ (ZIP или PDF). По умолчанию диалога нет.
+    fn pick_export(&self, _start: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// Элемент native intake для frontend (`DroppedItem`). `sourcePath` транзитный и не сохраняется.

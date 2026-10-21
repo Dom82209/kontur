@@ -77,7 +77,7 @@ mod tests {
 
     fn migrated_database() -> Database {
         let database = Database::open_in_memory().expect("open database");
-        assert_eq!(database.migrate().expect("migrate database"), 3);
+        assert_eq!(database.migrate().expect("migrate database"), 4);
         database
     }
 
@@ -161,7 +161,8 @@ mod tests {
                 "name": "Основы бизнес-аналитики",
                 "shortName": "ОБА",
                 "currentWeek": 7,
-                "weekCount": 2
+                "weekCount": 2,
+                "courseUrl": null
             })
         );
     }
@@ -373,7 +374,7 @@ mod tests {
         let health = QueryService::new(&database).health().unwrap();
         assert!(health.ready);
         assert!(health.database_exists);
-        assert_eq!(health.schema_version, 3);
+        assert_eq!(health.schema_version, 4);
         let value: Value = serde_json::to_value(health).unwrap();
         assert!(value.get("databasePath").is_none());
     }

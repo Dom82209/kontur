@@ -18,8 +18,8 @@ pub use hashing::{hash_source, Sha256Digest};
 #[cfg(test)]
 pub(crate) use hooks::{install as install_test_hook, HookPoint as TestHookPoint};
 pub use paths::{
-    BackupRoot, DownloadsRoot, InboxRoot, PersistentPath, SourceFile, VaultRoot,
-    VerifiedDestination,
+    BackupRoot, DownloadEntry, DownloadsRoot, FileIdentity, InboxRoot, PersistentPath, ScratchRoot,
+    SourceFile, VaultRoot, VerifiedDestination,
 };
 pub use planning::{plan_copy, CopyDecision};
 pub use undo::{

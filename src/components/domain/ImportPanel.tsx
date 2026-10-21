@@ -122,6 +122,7 @@ function summary(report: InboxImportReport): string {
     `добавлено ${report.imported}`,
     report.duplicates > 0 ? `${report.duplicates} ${plural(report.duplicates, "дубль", "дубля", "дублей")}` : null,
     report.failed > 0 ? `${report.failed} ${plural(report.failed, "ошибка", "ошибки", "ошибок")}` : null,
+    report.skipped > 0 ? `пропущено ${report.skipped}` : null,
   ].filter(Boolean);
   return `Импорт завершён: ${parts.join(" · ")}${report.replayed ? " (повтор)" : ""}`;
 }

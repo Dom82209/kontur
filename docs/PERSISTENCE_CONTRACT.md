@@ -1,16 +1,16 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 3. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации и импорт во «Входящие» доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 4. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие» и импорт экспорта ЦУ доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
 | TypeScript | Rust DTO/domain | Таблица/колонки | Nullable | JSON | Вычисляется | Источник истины |
 |---|---|---|---|---|---|---|
 | `AutomationRules`, `WorkflowSettings` | `AutomationRulesDto` и вложенные typed DTO | `app_settings` | отсутствующие безопасные поля дополняются defaults | весь тип в `value_json` | merge с defaults | `app_settings` |
-| `Subject` | `SubjectDto` | `subjects`: `id`, `name`, `short_name` | нет | — | `currentWeek`, `weekCount` из `weeks` | `subjects` + агрегат `weeks` |
+| `Subject` | `SubjectDto` | `subjects`: `id`, `name`, `short_name`, v4 `course_url` | `courseUrl` | — | `currentWeek`, `weekCount` из `weeks` | `subjects` + агрегат `weeks` |
 | `Week` | `WeekDto` | `weeks`: `id`, `subject_id`, `number`, `starts_at`, `ends_at`, `topic` | `topic`, `homeworkId` | — | `lectures`, `seminars`, `materials` из `files`; `homeworkId` из `homeworks` | `weeks`, `files`, `homeworks` |
 | `FileRef` | `FileRefDto` | `files`: `id`, `name`, `kind`, `size_bytes`, `modified_at`, `relative_path` | legacy `modified_at` | — | timestamp fallback из `updated_at`/`created_at` | `files` |
-| `InboxFile` | `InboxFileDto` | `inbox_files` (+ v3 `sha256`, `mime_type`, `import_operation_id`) | `classification`, `duplicate`; v3-колонки NULL у legacy | typed `classification_json`, `duplicate_json` | persistent `relative_path`, SHA-256 и MIME не выдаются | `inbox_files` |
+| `InboxFile` | `InboxFileDto` | `inbox_files` (+ v3 `sha256`, `mime_type`, `import_operation_id`; v4 `provenance_json`) | `classification`, `duplicate`, `provenance`; v3/v4-колонки NULL у legacy | typed `classification_json`, `duplicate_json`, `provenance_json` | persistent `relative_path`, SHA-256 и MIME не выдаются | `inbox_files` |
 | `ManagedRoots` | `ManagedRootsDto` (вычисляется) | `app_settings.managed_roots`: `vaultPath`, `backupPath`, `downloadsPath` | все три nullable | весь тип в `value_json` | состояние и `displayPath` вычисляются при каждом запросе | `app_settings` + файловая система |
 | `InboxImportReport`, `OperationRecord` | `InboxImportReport` | `operation_results`: `operation_id`, `kind = inbox_import`, `result_json` | `importReport` null для операций без итога | весь отчёт в `result_json` | `replayed` выставляется при повторе | immutable row `operation_results` |
 | `Homework` | `HomeworkDto` | `homeworks` + связи с `weeks`, `files`, `homework_versions` | `final_version_id`, `final_file_name`, `submitted_at`, `assignment_url`; legacy `deadline` | — | `subjectId`, `weekNumber`, `taskFiles`, `versions` через связи | `homeworks` и дочерние таблицы |
@@ -77,9 +77,19 @@ File service 4D.1 уточняет будущий typed undo payload: `UndoManif
 - `app_settings.managed_roots` — единственное место с абсолютными путями: канонические пути трёх выбранных пользователем корней. Пути исходных файлов, абсолютный путь «Входящих», security-scoped bookmarks и секреты не сохраняются. Разрешения picker/drop (`IntakeGrants`) живут только в памяти процесса.
 - `AutomationRules.inboxPath`, `downloadsWatchPath`, `obsidianVaultPath` остаются legacy-предпочтениями и file service не используются; источником истины для корней является `managed_roots`.
 
+## Экспорт ЦУ и watcher (schema v4)
+
+- v4 добавлена отдельной транзакционной миграцией; v1–v3 не изменялись.
+- `inbox_files.provenance_json` (`ProvenanceDto`, `deny_unknown_fields`): `source: manual | watcher | cu_export`, `via: picker | drop | watcher`, `archiveName` (имя файла экспорта без каталога), `entryPath` (относительный путь внутри архива), `courseUrl`, `assignmentUrl`. Триггеры INSERT/UPDATE отклоняют текстовые значения, начинающиеся с `/`, `\`, `~/`, `file:`, `../`, содержащие `/../` или с drive prefix. Legacy-строки — `NULL` → `provenance: null`.
+- Новые строки этапа 6: `origin = lms` (экспорт), `downloads` (обычная загрузка из watcher), `drop` (ручной импорт); `status` — `classified`/`ambiguous` с `classification_json` для экспорта, `new` для ручного импорта. `routed` этап 6 не ставит.
+- `subjects.course_url` — NULL или `https://…` ≤ 2048 символов (CHECK); allowlist хоста `my.centraluniversity.ru` проверяет backend при записи и перед открытием. `homeworks.assignment_url` (v2) использует тот же allowlist для новых записей через `set_homework_assignment_url`.
+- `download_seen`: `sha256` (PK), `name` (без `/` и `\`), `size_bytes`, `outcome: imported | dismissed`, `operation_id` (FK, `ON DELETE SET NULL`), `first_seen_at`, `updated_at`. Используется только для того, чтобы watcher не предлагал известное содержимое; пути папки загрузок не хранятся.
+- `app_settings.downloads_watcher = { enabled }` (`deny_unknown_fields`), отсутствие ключа = выключено. Абсолютный путь папки загрузок по-прежнему хранится только в `managed_roots.downloadsPath`.
+- `InboxImportReport` получил поле `skipped` (`#[serde(default)]` — старые сохранённые отчёты читаются как 0). Кандидаты watcher и разрешения выбора экспорта живут только в памяти процесса.
+
 ## Не сохраняемые представления
 
-`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation` — входные/предварительные DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
+`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation`, `ExportPreview`, `DownloadCandidate`, `DownloadsWatcher` — входные/предварительные/вычисляемые DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
 
 ## AutomationRules defaults
 

@@ -56,6 +56,10 @@ impl Identity {
     pub(crate) fn from_raw(dev: u64, ino: u64) -> Self {
         Self { dev, ino }
     }
+
+    pub(crate) fn raw(self) -> (u64, u64) {
+        (self.dev, self.ino)
+    }
 }
 
 fn directory_flags() -> OFlags {
@@ -86,6 +90,44 @@ pub(crate) fn file_type(stat: &Stat) -> FileType {
 
 pub(crate) fn stat_size(stat: &Stat) -> u64 {
     u64::try_from(stat.st_size).unwrap_or(0)
+}
+
+/// Время изменения в наносекундах (типы полей различаются между macOS и Linux).
+#[allow(clippy::unnecessary_cast)]
+pub(crate) fn stat_mtime_ns(stat: &Stat) -> i128 {
+    (stat.st_mtime as i128) * 1_000_000_000 + (stat.st_mtime_nsec as i128)
+}
+
+/// Перечисляет обычные файлы верхнего уровня открытого каталога.
+///
+/// Каталог читается через `fdopendir` дубликата fd; тип каждой записи
+/// проверяется `statat(AT_SYMLINK_NOFOLLOW)`, поэтому symlink, каталоги и
+/// специальные файлы отбрасываются, а имена не в UTF-8 пропускаются.
+pub(crate) fn list_regular_files(dir: &OwnedFd) -> Result<Vec<(String, Stat)>, AppError> {
+    let reader =
+        rfs::Dir::read_from(dir).map_err(|_| io_error("Не удалось прочитать папку загрузок"))?;
+    let mut output = Vec::new();
+    for entry in reader {
+        let Ok(entry) = entry else {
+            return Err(io_error("Не удалось прочитать папку загрузок"));
+        };
+        let Ok(name) = entry.file_name().to_str() else {
+            continue;
+        };
+        if name == "." || name == ".." {
+            continue;
+        }
+        let name = name.to_owned();
+        let stat = match rfs::statat(dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(_) => continue,
+        };
+        if file_type(&stat) == FileType::RegularFile {
+            output.push((name, stat));
+        }
+    }
+    output.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(output)
 }
 
 /// Открывает уже канонизированный абсолютный корень без следования symlink в последнем компоненте.

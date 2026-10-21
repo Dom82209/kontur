@@ -2,6 +2,7 @@ import { ArrowRight, Download, FileSignature, GitBranch, Hash, Lock, ShieldCheck
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ActivityLog } from "../components/domain/ActivityLog";
+import { DownloadCandidates } from "../components/domain/DownloadsWatcher";
 import { SaveBar } from "../components/ui/SaveBar";
 import { Segmented } from "../components/ui/Segmented";
 import { ErrorState, SkeletonRows } from "../components/ui/States";
@@ -80,10 +81,14 @@ export function AutomationPage() {
             <>
               <Rule icon={<Download />} n="01" title="Куда попадают скачанные файлы">
                 <p className="rule__sentence">
-                  Новые файлы в <span className="token mono">{rules.downloadsWatchPath}</span> перемещаются в <span className="token mono">{rules.inboxPath}</span> и появляются во «Входящих».
+                  Если наблюдение включено, «Контур» замечает завершённые загрузки в выбранной папке и показывает их кандидатами. Ничего не копируется, пока вы не откроете предпросмотр и не подтвердите импорт во <span className="token mono">{rules.inboxPath}</span>.
                 </p>
+                <p className="rule__sentence">
+                  Экспорт CU LMS Enhancer (ZIP с материалами и ДЗ, ZIP без ДЗ или PDF) проверяется до распаковки: опасные пути, ссылки, вложенные архивы и zip-бомбы отклоняются. Вход в LMS и отправка работ не автоматизируются.
+                </p>
+                <DownloadCandidates />
                 <Link to="/settings" className="rule__link">
-                  Пути меняются в настройках <ArrowRight size={12} />
+                  Папка загрузок и включение наблюдения — в настройках <ArrowRight size={12} />
                 </Link>
               </Rule>
 

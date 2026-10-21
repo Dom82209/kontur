@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 5. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder.
+Документ фиксирует frontend-контракт и границу этапа 6. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS.
 
 ## 1. Граница архитектуры
 
@@ -110,6 +110,10 @@ React pages/components
 
 `getManagedRoots`, `chooseManagedRoot`, `prepareInboxRoot`.
 
+### Загрузки, экспорт ЦУ и ссылки LMS (этап 6)
+
+`getDownloadsWatcher`, `setDownloadsWatcher`, `dismissDownloadCandidate`, `pickCuExport`, `previewCuExport`, `importCuExport`, `setSubjectCourseUrl`, `setHomeworkAssignmentUrl`, `openCourse`, `openAssignment`.
+
 ### ДЗ и версии
 
 `getHomeworkList`, `getHomework`, `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`.
@@ -149,6 +153,8 @@ React pages/components
 | `review:failed` | run и ошибка |
 | `submission:confirmed` | неизменяемый `SubmissionReceipt` |
 | `inbox:updated` | `{ reason: "import", fileIds }` — список «Входящих» изменился, перечитать `getInboxFiles` |
+| `downloads:watcher-updated` | `{ watcher: DownloadsWatcher }` — состояние watcher и список кандидатов |
+| `cu-import:progress` | `{ operationId, phase: inspect \| extract \| import \| cleanup, completed, total, entryName }` — фазы импорта экспорта ЦУ |
 
 Событие «файл добавлен» в контракте называется `inbox:file-added` (`{ files }`) и эмитится только для впервые импортированных файлов. Служебные `intake:native-drop` и `intake:drag-state` слушает только Tauri adapter; в `BridgeEvents` они не входят.
 
@@ -174,6 +180,8 @@ start operation
 `ClassificationPatch` сохраняет различие между отсутствием и очисткой: TypeScript `undefined` кодируется как `{ state: "absent" }`, `null` как `{ state: "null" }`, значение как `{ state: "value", value }`. Для category явная очистка означает `unknown`. Команда не перемещает файл и не обращается к файловой системе.
 
 Команды этапа 5: `check_managed_roots`, `choose_managed_root { kind }`, `prepare_inbox_root`, `pick_import_files`, `import_inbox_files { operationId, items: [{ sourcePath, origin }] }`, `get_operation_result { operationId }`, `open_inbox_file { fileId }`, `reveal_inbox_file { fileId }`, `reveal_in_finder { relativePath }`. `TauriDesktopBridge` подключает к ним `getManagedRoots`, `chooseManagedRoot`, `prepareInboxRoot`, `pickFiles`, `importFiles`, `importDroppedFiles` (файлы из отчёта без ошибок), `getOperationResult` (`not_found` → `null`), `openInboxFile`, `revealInboxFile`, `revealInFinder`; `onNativeFileDrop` и `onNativeDragState` слушают `intake:native-drop`/`intake:drag-state`.
+
+Команды этапа 6: `get_downloads_watcher`, `set_downloads_watcher { enabled }`, `dismiss_download_candidate { candidateId }`, `pick_cu_export`, `preview_cu_export { candidateId }`, `import_cu_export { operationId, request }`, `set_subject_course_url { subjectId, url }`, `set_homework_assignment_url { homeworkId, url }`, `open_course { subjectId, fileId }`, `open_assignment { homeworkId, fileId }` (в двух последних задаётся ровно одно поле, второе — `null`). `TauriDesktopBridge` подключает к ним одноимённые методы `DesktopBridge` напрямую; `importCuExport` без `operationId` генерирует UUID v4. Mock fallback нет.
 
 Пока unsupported:
 
@@ -205,6 +213,17 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - `getManagedRoots()` возвращает `vault`, `inbox`, `backup`, `downloads` с состоянием `ok | not_configured | missing | unsafe` и `displayPath` только для показа (`~` вместо home). `chooseManagedRoot(kind)` открывает системный выбор папки, `cancelled: true` при отмене. «Входящие» всегда `Предметы/00 Входящие` внутри хранилища; `prepareInboxRoot()` создаёт папку заранее, иначе её создаёт первый импорт.
 - `openInboxFile(fileId)` открывает файл приложением по умолчанию (исполняемые файлы и скрипты — `blocked`), `revealInboxFile(fileId)` и `revealInFinder(relativePath)` показывают элемент в Finder.
 - Экран «Входящие» показывает `ImportPanel`: прогресс по `operation:progress` с тем же `operationId`, итог по каждому файлу, «В Finder». «Симулировать загрузку» — только mock. «Настройки» содержат «Управляемые каталоги» вместо текстовых полей путей. Классификация и раскладка в Tauri-режиме пока unsupported: новые файлы остаются со статусом `new` («Ждёт распознавания»).
+
+## 8a. Загрузки и экспорт CU LMS Enhancer (этап 6)
+
+- «Контур» не входит в LMS, не хранит логин, пароль, cookies или сессию и не отправляет работы. Читаются только файлы, скачанные пользователем браузером.
+- `DownloadsWatcher`: `enabled` (по умолчанию `false`, меняется только `setDownloadsWatcher` из переключателя в Настройках), `state: disabled | no_folder | watching | error`, `message`, `lastScanAt`, `candidates: DownloadCandidate[]`. Включение без выбранной папки загрузок → `blocked`. Watcher ничего не импортирует сам.
+- `DownloadCandidate`: `id` (непрозрачный), `name`, `sizeBytes`, `detectedAt`, `origin: watcher | manual`, `kind: zip | pdf | file`. Абсолютного пути нет. `pickCuExport()` — системный выбор ZIP/PDF, отмена `null`; `dismissDownloadCandidate` скрывает файл (watcher не предложит его снова).
+- `previewCuExport(candidateId)` → `ExportPreview`: `archiveSha256` (отпечаток), `format: zip | single`, `courseTitle`, `entries: ExportEntryPreview[]` (`entryId`, путь внутри архива, имя, `inboxName`, размер, тип, `classification`, `status: classified | ambiguous`, `selectable`, `selected`, `warnings`), `ignored`, `warnings`, счётчики. Ничего не пишет на диск. Вредоносный архив отклоняется `blocked` с объяснением.
+- `importCuExport(request, operationId?)`: `ExportImportRequest { candidateId, archiveSha256, entries: ExportImportEntry[], courseUrl?, assignmentUrl? }`; в `entries` — только выбранные записи, у каждой `subjectId`, `weekNumber`, `category` и `edited` (пользователь изменил классификацию → `source: manual`). Изменённый после preview файл → `conflict`. Результат — `OperationResult<InboxImportReport>` (поле `skipped`). Файлы попадают только во «Входящие» со статусом `classified`/`ambiguous`; раскладки нет.
+- `InboxFile.provenance: InboxProvenance | null` — `source: manual | watcher | cu_export`, `via: picker | drop | watcher`, `archiveName`, `entryPath` (относительный путь в архиве), `courseUrl`, `assignmentUrl`. `InboxFile.origin` — `lms` для экспорта, `downloads` для обычной загрузки из watcher, `drop` для ручного импорта.
+- `Subject.courseUrl` — необязательная ссылка; `Homework.assignmentUrl` — как раньше. `openCourse({ subjectId } | { fileId })`, `openAssignment({ homeworkId } | { fileId })` открывают сохранённую ссылку во внешнем браузере после повторной проверки allowlist (`https://my.centraluniversity.ru`). Frontend не открывает URL сам; `lmsUrlProblem` в `src/lib/lmsLinks.ts` — только подсказка для формы.
+- UI: «Настройки» — переключатель watcher; «Автоматизация» — статус и кандидаты; «Входящие» — «Импортировать экспорт ЦУ», «Новые загрузки», окно предпросмотра (`CuExportDialog`), итог в `ImportPanel`, происхождение и кнопки ссылок в панели файла.
 
 ## 9. Инварианты workflow и сдачи
 
@@ -252,4 +271,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Следующий этап — watcher загрузок, ZIP LMS, автоматическая классификация и раскладка по предметам поверх готового импорта. Затем — применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие». Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

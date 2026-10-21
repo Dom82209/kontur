@@ -124,16 +124,138 @@ impl BackupRoot {
     }
 }
 
-/// Наблюдаемая папка загрузок: та же политика корня, только чтение в этом этапе.
+/// Наблюдаемая папка загрузок: та же политика корня, только чтение.
+///
+/// Watcher читает лишь верхний уровень каталога через открытый fd
+/// (`fdopendir` + `statat(AT_SYMLINK_NOFOLLOW)`), не спускается в подкаталоги и
+/// не следует symlink. Файл открывается `openat(O_NOFOLLOW)` и сверяется с
+/// identity, которую watcher видел при стабилизации.
 #[derive(Debug, Clone)]
 pub struct DownloadsRoot {
-    /// Открытый fd корня; чтение загрузок (watcher) подключается следующим этапом.
-    _root: ControlledRoot,
+    root: ControlledRoot,
+}
+
+/// Наблюдение одного файла верхнего уровня папки загрузок.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadEntry {
+    pub name: String,
+    pub size_bytes: u64,
+    /// Время изменения, наносекунды от эпохи (только для сравнения наблюдений).
+    pub modified_ns: i128,
+    pub identity: FileIdentity,
+}
+
+/// Непрозрачная идентичность inode (устройство + inode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileIdentity {
+    fn of(identity: Identity) -> Self {
+        let (dev, ino) = identity.raw();
+        Self { dev, ino }
+    }
+
+    fn as_identity(self) -> Identity {
+        Identity::from_raw(self.dev, self.ino)
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(dev: u64, ino: u64) -> Self {
+        Self { dev, ino }
+    }
 }
 
 impl DownloadsRoot {
     pub fn new(path: &Path, home_dir: Option<&Path>) -> Result<Self, AppError> {
-        ControlledRoot::new(path, home_dir, "Папка загрузок").map(|root| Self { _root: root })
+        ControlledRoot::new(path, home_dir, "Папка загрузок").map(|root| Self { root })
+    }
+
+    /// Перечисляет обычные файлы верхнего уровня. Каталоги, symlink, специальные
+    /// файлы и имена не в UTF-8 пропускаются; содержимое файлов не читается.
+    pub fn list_files(&self) -> Result<Vec<DownloadEntry>, AppError> {
+        let entries = fd::list_regular_files(self.root.fd())?;
+        Ok(entries
+            .into_iter()
+            .map(|(name, stat)| DownloadEntry {
+                name,
+                size_bytes: fd::stat_size(&stat),
+                modified_ns: fd::stat_mtime_ns(&stat),
+                identity: FileIdentity::of(Identity::of(&stat)),
+            })
+            .collect())
+    }
+
+    /// Открывает файл верхнего уровня по имени: `openat(O_NOFOLLOW)` в fd корня.
+    /// Если inode отличается от наблюдавшегося, файл был подменён — `conflict`.
+    pub fn open_file(&self, name: &str, expected: FileIdentity) -> Result<SourceFile, AppError> {
+        if !is_plain_file_name(name) {
+            return Err(blocked("Недопустимое имя файла в папке загрузок"));
+        }
+        match fd::open_leaf(self.root.fd(), OsStr::new(name))? {
+            fd::Leaf::Missing => Err(BackendError::not_found("Файл исчез из папки загрузок")),
+            fd::Leaf::NotRegular => {
+                Err(blocked("Файл в папке загрузок не является обычным файлом"))
+            }
+            fd::Leaf::File(file, stat) => {
+                let identity = Identity::of(&stat);
+                if identity != expected.as_identity() {
+                    return Err(BackendError::conflict(
+                        "Файл в папке загрузок был заменён после обнаружения; проверьте его заново",
+                    ));
+                }
+                Ok(SourceFile {
+                    file: Arc::new(file),
+                    identity,
+                })
+            }
+        }
+    }
+}
+
+/// Одноуровневое имя файла без разделителей, `.`/`..` и управляющих символов.
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.len() <= 255
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control)
+}
+
+/// Временный каталог распаковки (например, `tempfile::TempDir`), привязанный к fd.
+///
+/// Файлы создаются только `openat(O_CREAT | O_EXCL | O_NOFOLLOW)` внутри
+/// подкаталогов, созданных `mkdirat`; перезапись и выход за пределы невозможны.
+/// Удаление каталога целиком — забота владельца `TempDir`.
+#[derive(Debug, Clone)]
+pub struct ScratchRoot {
+    root: ControlledRoot,
+}
+
+impl ScratchRoot {
+    pub fn new(path: &Path) -> Result<Self, AppError> {
+        ControlledRoot::new(path, None, "Временный каталог распаковки").map(|root| Self { root })
+    }
+
+    /// Создаёт новый файл по относительному пути. Существующий файл → `conflict`.
+    pub fn create_file(&self, relative: &PersistentPath) -> Result<File, AppError> {
+        let parent = self.root.ensure_parent(relative)?;
+        let file = fd::create_exclusive(&parent, relative.file_name())?;
+        self.root.verify_parent(relative, &parent)?;
+        Ok(file)
+    }
+
+    /// Открывает ранее созданный файл как source для импорта (fd-relative, без symlink).
+    pub fn open_source(&self, relative: &PersistentPath) -> Result<SourceFile, AppError> {
+        let destination = VerifiedDestination {
+            root: self.root.clone(),
+            relative: relative.clone(),
+        };
+        SourceFile::open_in(&destination)
     }
 }
 
@@ -270,6 +392,13 @@ impl SourceFile {
 
     pub(crate) fn file(&self) -> &File {
         &self.file
+    }
+
+    /// Время изменения открытого inode (нс), чтобы сверить с наблюдением watcher.
+    pub fn modified_ns(&self) -> Result<i128, AppError> {
+        let stat = rustix::fs::fstat(self.file.as_ref())
+            .map_err(|_| io_error("Не удалось повторно проверить исходный файл"))?;
+        Ok(fd::stat_mtime_ns(&stat))
     }
 
     /// Проверяет через `fstat` открытого дескриптора, что это всё ещё тот же regular inode.

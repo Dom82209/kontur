@@ -25,6 +25,16 @@ export interface TauriIpcClient {
   openInboxFile: typeof ipc.openInboxFile;
   revealInboxFile: typeof ipc.revealInboxFile;
   revealInFinder: typeof ipc.revealInFinder;
+  getDownloadsWatcher: typeof ipc.getDownloadsWatcher;
+  setDownloadsWatcher: typeof ipc.setDownloadsWatcher;
+  dismissDownloadCandidate: typeof ipc.dismissDownloadCandidate;
+  pickCuExport: typeof ipc.pickCuExport;
+  previewCuExport: typeof ipc.previewCuExport;
+  importCuExport: typeof ipc.importCuExport;
+  setSubjectCourseUrl: typeof ipc.setSubjectCourseUrl;
+  setHomeworkAssignmentUrl: typeof ipc.setHomeworkAssignmentUrl;
+  openCourse: typeof ipc.openCourse;
+  openAssignment: typeof ipc.openAssignment;
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
@@ -101,6 +111,23 @@ export class TauriDesktopBridge implements DesktopBridge {
   getManagedRoots: DesktopBridge["getManagedRoots"] = () => this.ipcClient.checkManagedRoots();
   chooseManagedRoot: DesktopBridge["chooseManagedRoot"] = (kind) => this.ipcClient.chooseManagedRoot(kind);
   prepareInboxRoot: DesktopBridge["prepareInboxRoot"] = () => this.ipcClient.prepareInboxRoot();
+
+  // ── Загрузки и экспорт ЦУ ──
+
+  getDownloadsWatcher: DesktopBridge["getDownloadsWatcher"] = () => this.ipcClient.getDownloadsWatcher();
+  setDownloadsWatcher: DesktopBridge["setDownloadsWatcher"] = (enabled) => this.ipcClient.setDownloadsWatcher(enabled);
+  dismissDownloadCandidate: DesktopBridge["dismissDownloadCandidate"] = (candidateId) =>
+    this.ipcClient.dismissDownloadCandidate(candidateId);
+  pickCuExport: DesktopBridge["pickCuExport"] = () => this.ipcClient.pickCuExport();
+  previewCuExport: DesktopBridge["previewCuExport"] = (candidateId) => this.ipcClient.previewCuExport(candidateId);
+  importCuExport: DesktopBridge["importCuExport"] = (request, operationId = newOperationId()) =>
+    this.ipcClient.importCuExport(operationId, request);
+  setSubjectCourseUrl: DesktopBridge["setSubjectCourseUrl"] = (subjectId, url) =>
+    this.ipcClient.setSubjectCourseUrl(subjectId, url);
+  setHomeworkAssignmentUrl: DesktopBridge["setHomeworkAssignmentUrl"] = (homeworkId, url) =>
+    this.ipcClient.setHomeworkAssignmentUrl(homeworkId, url);
+  openCourse: DesktopBridge["openCourse"] = (target) => this.ipcClient.openCourse(target);
+  openAssignment: DesktopBridge["openAssignment"] = (target) => this.ipcClient.openAssignment(target);
 
   getDashboard: DesktopBridge["getDashboard"] = () => unsupportedBackend("Главная");
   createWeek: DesktopBridge["createWeek"] = () => unsupportedBackend("Создание недели");

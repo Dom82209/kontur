@@ -1,10 +1,10 @@
 # Архитектура Rust backend
 
-Статус документа: этап 5. Read-only путь, две DB-only мутации и реальный импорт во «Входящие» через fd-relative file service подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 6. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок и импорт экспорта CU LMS Enhancer подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
 
-- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants` и mutex последовательных импортов.
+- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants`, mutex последовательных импортов, in-memory `CandidateRegistry` и `WatcherService` (этап 6).
 - `commands` — тонкие Tauri-команды; они получают managed `AppState`, делегируют чтение query-слою и DB-only записи mutation-слою, а после commit доставляют события.
 - `db` — соединение SQLite, параметры соединения и транзакционная граница.
 - `db/migrations` — встроенные, версионированные SQL-миграции.
@@ -14,6 +14,8 @@
 - `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
 - `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy (в том числе компенсируемый `atomic_copy_committed`), read-only `inspect_stored_file`, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI.
 - `intake` — этап 5 без зависимости от GUI: управляемые каталоги (`RootsService`), безопасные имена и MIME, `IntakeGrants`, `InboxImporter` с дедупликацией, компенсацией и идемпотентностью, абстракция `FilePicker`, SQL-граница `store`.
+- `lms` — этап 6 без зависимости от GUI: `zip_safe` (строгий парсер ZIP и ограниченная распаковка), `classify` (классификация по путям), `export` (предпросмотр и импорт экспорта через `InboxImporter`), `watcher` (чистый `DownloadScanner`, `WatcherCore`, фоновый `WatcherService`), `candidates`, `links` (allowlist LMS), `store` (SQL этапа 6).
+- `lms_commands` — тонкие Tauri-команды этапа 6, диалог выбора экспорта, хост watcher-потока (`AppWatcherHost`), открытие ссылок во внешнем браузере через `tauri-plugin-opener`.
 - `intake_commands` — тонкие Tauri-команды этапа 5, `DialogPicker` поверх официального `tauri-plugin-dialog`, действия Finder через `tauri-plugin-opener`, обработчик native drag-and-drop окна.
 - `ipc_commands` — единый список IPC-команд, который `build.rs` передаёт в `AppManifest`; тест сверяет его с capability.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
@@ -26,7 +28,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `3`. Неизменяемые v1, v2 и добавочная v3 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `4`. Неизменяемые v1, v2, v3 и добавочная v4 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
 
 Схема содержит таблицы:
 
@@ -37,7 +39,8 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `review_runs`, `revision_prompts`;
 - `teacher_comments`, `teacher_requirements`;
 - `submission_packages`, `submission_receipts`;
-- `operations`, `operation_results` (v3).
+- `operations`, `operation_results` (v3);
+- `download_seen` (v4).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 
@@ -109,7 +112,24 @@ Foreign keys задают владение и политику удаления,
 
 Native drag-and-drop: `Builder::on_window_event` → `WindowEvent::DragDrop` → `register_native_paths` (только абсолютные regular files) → `intake:native-drop { items }`; Enter/Leave → `intake:drag-state`.
 
-Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` генерирует `allow-<command>` (каталог `permissions/autogenerated/` создаётся при сборке и не хранится в Git). `capabilities/default.json` содержит только `core:event:default`, `core:window:allow-start-dragging` и `allow-*` для 20 команд.
+Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` генерирует `allow-<command>` (каталог `permissions/autogenerated/` создаётся при сборке и не хранится в Git). `capabilities/default.json` содержит только `core:event:default`, `core:window:allow-start-dragging` и `allow-*` для 30 команд (20 этапов 4–5 и 10 этапа 6).
+
+## Экспорт ЦУ и watcher загрузок — этап 6
+
+| Команда | Назначение |
+|---|---|
+| `get_downloads_watcher` | Состояние watcher и кандидаты (`DownloadsWatcherDto`) |
+| `set_downloads_watcher { enabled }` | Явно включить/выключить; включение требует папку загрузок |
+| `dismiss_download_candidate { candidateId }` | Скрыть кандидата (`download_seen.outcome = dismissed`) |
+| `pick_cu_export` | Системный выбор ZIP/PDF; путь → `IntakeGrants`, кандидат `manual` |
+| `preview_cu_export { candidateId }` | Индекс без распаковки, классификация, предупреждения, SHA-256 |
+| `import_cu_export { operationId, request }` | Проверка, распаковка в `TempDir`, импорт через `InboxImporter` |
+| `set_subject_course_url`, `set_homework_assignment_url` | Ссылки LMS после allowlist |
+| `open_course`, `open_assignment` | Открыть сохранённую ссылку во внешнем браузере после повторной проверки |
+
+- Watcher: фоновый поток `kontur-downloads-watcher`, шаг раз в 1,5 с; каждый шаг заново открывает `DownloadsRoot` по сохранённому пути (политика корня), читает верхний уровень через fd, стабилизирует наблюдения (`DownloadScanner`), хэширует готовый файл из открытого inode, отбрасывает известное содержимое и регистрирует кандидата. Изменения доставляются `downloads:watcher-updated`. Остановка — флаг + `join`. Поток стартует при запуске приложения, только если пользователь включил watcher ранее.
+- Импорт экспорта: сериализуется тем же mutex, что и импорт этапа 5; повтор с тем же `operationId` возвращает сохранённый итог без событий. Ошибки запроса и отпечатка возвращаются до создания операции. Порядок событий: `cu-import:progress` + `operation:progress` → `inbox:file-added` → `inbox:updated` → `operation:completed`/`operation:failed` → `downloads:watcher-updated`.
+- Подробная модель угроз ZIP и watcher — `FILE_SERVICE_SECURITY.md`.
 
 ## Health check
 
@@ -125,4 +145,4 @@ Tauri-команда `backend_health` проверяет доступность 
 
 React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` по умолчанию создаёт `MockDesktopBridge`; `TauriDesktopBridge` целиком включается только флагом разработчика `VITE_KONTUR_BRIDGE=tauri`. Hybrid bridge запрещён.
 
-Следующий этап — watcher загрузок, ZIP LMS, классификация и раскладка по предметам поверх того же импорта; затем применение backup/undo, provider adapters, AI/LMS-интеграции и immutable submission snapshot.
+Следующий этап — классификация обычных файлов и раскладка по предметам поверх того же импорта; затем применение backup/undo, provider adapters, AI-интеграции и immutable submission snapshot. Отправка работ в LMS остаётся ручной.

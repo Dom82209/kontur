@@ -48,17 +48,17 @@ export function weekRange(n: number): { startsAt: string; endsAt: string } {
 }
 
 export const SUBJECTS: Subject[] = [
-  { id: "eng", name: "Английский", shortName: "Англ", currentWeek: 8, weekCount: 8 },
-  { id: "bstudio", name: "Бизнес-студия", shortName: "Б-студия", currentWeek: 8, weekCount: 8 },
-  { id: "linal", name: "Линейная алгебра", shortName: "Линал", currentWeek: 8, weekCount: 8 },
-  { id: "matan", name: "Математический анализ", shortName: "Матан", currentWeek: 8, weekCount: 8 },
-  { id: "matan-adv", name: "Математический анализ, продвинутый", shortName: "Матан+", currentWeek: 8, weekCount: 7 },
-  { id: "meow", name: "Мяу", shortName: "Мяу", currentWeek: 8, weekCount: 6 },
-  { id: "org", name: "ОРГ", shortName: "ОРГ", currentWeek: 8, weekCount: 8 },
-  { id: "oba", name: "Основы бизнес-аналитики", shortName: "ОБА", currentWeek: 8, weekCount: 8 },
-  { id: "oba-adv", name: "Основы бизнес-аналитики, продвинутый", shortName: "ОБА+", currentWeek: 8, weekCount: 7 },
-  { id: "stat", name: "Статистика", shortName: "Стат", currentWeek: 8, weekCount: 8 },
-  { id: "stress", name: "Стресс-менеджмент", shortName: "Стресс", currentWeek: 8, weekCount: 5 },
+  { id: "eng", name: "Английский", shortName: "Англ", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "bstudio", name: "Бизнес-студия", shortName: "Б-студия", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "linal", name: "Линейная алгебра", shortName: "Линал", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "matan", name: "Математический анализ", shortName: "Матан", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "matan-adv", name: "Математический анализ, продвинутый", shortName: "Матан+", currentWeek: 8, weekCount: 7, courseUrl: null },
+  { id: "meow", name: "Мяу", shortName: "Мяу", currentWeek: 8, weekCount: 6, courseUrl: null },
+  { id: "org", name: "ОРГ", shortName: "ОРГ", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "oba", name: "Основы бизнес-аналитики", shortName: "ОБА", currentWeek: 8, weekCount: 8, courseUrl: "https://my.centraluniversity.ru/learn/courses/view/actual/oba" },
+  { id: "oba-adv", name: "Основы бизнес-аналитики, продвинутый", shortName: "ОБА+", currentWeek: 8, weekCount: 7, courseUrl: null },
+  { id: "stat", name: "Статистика", shortName: "Стат", currentWeek: 8, weekCount: 8, courseUrl: null },
+  { id: "stress", name: "Стресс-менеджмент", shortName: "Стресс", currentWeek: 8, weekCount: 5, courseUrl: null },
 ];
 
 export function subjectName(id: string | null): string {
@@ -233,6 +233,7 @@ export function buildInbox(): InboxFile[] {
     status: "new",
     classification: null,
     duplicate: null,
+    provenance: origin === "lms" ? { source: "cu_export", via: "watcher", archiveName: "Основы бизнес-аналитики — экспорт.zip", entryPath: `Основы бизнес-аналитики/Неделя 8/${name}`, courseUrl: "https://my.centraluniversity.ru/learn/courses/view/actual/oba", assignmentUrl: null } : origin === "downloads" ? { source: "watcher", via: "watcher", archiveName: null, entryPath: null, courseUrl: null, assignmentUrl: null } : { source: "manual", via: "drop", archiveName: null, entryPath: null, courseUrl: null, assignmentUrl: null },
   });
   return [
     base("Лекция_8_Ряды_Тейлора.pdf", 2_310_000, 12, "downloads"),

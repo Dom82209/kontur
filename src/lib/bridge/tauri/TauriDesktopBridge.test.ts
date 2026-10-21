@@ -12,6 +12,7 @@ const subject: Subject = {
   shortName: "ОБА",
   currentWeek: 7,
   weekCount: 1,
+  courseUrl: null,
 };
 
 const week: Week = {
@@ -106,6 +107,7 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
       status: "ambiguous",
       classification: null,
       duplicate: null,
+      provenance: null,
     }),
     checkManagedRoots: unexpected("checkManagedRoots"),
     chooseManagedRoot: unexpected("chooseManagedRoot"),
@@ -116,6 +118,16 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     openInboxFile: unexpected("openInboxFile"),
     revealInboxFile: unexpected("revealInboxFile"),
     revealInFinder: unexpected("revealInFinder"),
+    getDownloadsWatcher: unexpected("getDownloadsWatcher"),
+    setDownloadsWatcher: unexpected("setDownloadsWatcher"),
+    dismissDownloadCandidate: unexpected("dismissDownloadCandidate"),
+    pickCuExport: unexpected("pickCuExport"),
+    previewCuExport: unexpected("previewCuExport"),
+    importCuExport: unexpected("importCuExport"),
+    setSubjectCourseUrl: unexpected("setSubjectCourseUrl"),
+    setHomeworkAssignmentUrl: unexpected("setHomeworkAssignmentUrl"),
+    openCourse: unexpected("openCourse"),
+    openAssignment: unexpected("openAssignment"),
     ...overrides,
   };
 }
@@ -151,6 +163,7 @@ describe("TauriDesktopBridge", () => {
         status: "ambiguous" as const,
         classification: null,
         duplicate: null,
+        provenance: null,
       })),
     });
     const adapter = new TauriDesktopBridge(client);

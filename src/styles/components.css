@@ -658,6 +658,10 @@ button.row:focus-visible {
 .dialog--wide {
   width: min(760px, calc(100vw - 48px));
 }
+.dialog--xl {
+  width: min(1080px, calc(100vw - 48px));
+  max-height: 82vh;
+}
 .dialog__head {
   display: flex;
   align-items: flex-start;

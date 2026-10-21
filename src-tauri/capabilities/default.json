@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги и Finder вызываются только из Rust-команд «Контура».",
-  "windows": ["main"],
+  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура».",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:default",
     "core:window:allow-start-dragging",
@@ -25,6 +27,16 @@
     "allow-get-operation-result",
     "allow-open-inbox-file",
     "allow-reveal-inbox-file",
-    "allow-reveal-in-finder"
+    "allow-reveal-in-finder",
+    "allow-get-downloads-watcher",
+    "allow-set-downloads-watcher",
+    "allow-dismiss-download-candidate",
+    "allow-pick-cu-export",
+    "allow-preview-cu-export",
+    "allow-import-cu-export",
+    "allow-set-subject-course-url",
+    "allow-set-homework-assignment-url",
+    "allow-open-course",
+    "allow-open-assignment"
   ]
 }

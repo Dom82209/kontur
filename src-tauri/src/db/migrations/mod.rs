@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 struct Migration {
     version: u32,
@@ -21,6 +21,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         sql: include_str!("v3.sql"),
+    },
+    Migration {
+        version: 4,
+        sql: include_str!("v4.sql"),
     },
 ];
 
@@ -60,6 +64,7 @@ mod tests {
         assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
         let expected = [
             "app_settings",
+            "download_seen",
             "files",
             "homework_versions",
             "homeworks",
@@ -207,7 +212,7 @@ mod tests {
     #[test]
     fn v3_keeps_legacy_inbox_rows_without_hash() {
         let mut connection = v2_database_with_inbox_row();
-        assert_eq!(migrate(&mut connection).unwrap(), 3);
+        assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
         let (name, sha): (String, Option<String>) = connection
             .query_row(
                 "SELECT name, sha256 FROM inbox_files WHERE id = 'legacy'",
@@ -266,5 +271,90 @@ mod tests {
         assert!(connection
             .execute("UPDATE operation_results SET result_json = '{}'", [])
             .is_err());
+    }
+
+    #[test]
+    fn v4_keeps_v3_inbox_rows_and_adds_nullable_provenance() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        let (provenance, course): (Option<String>, i64) = connection
+            .query_row(
+                "SELECT provenance_json, (SELECT count(*) FROM subjects WHERE course_url IS NOT NULL)
+                 FROM inbox_files WHERE id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(provenance.is_none());
+        assert_eq!(course, 0);
+        assert_eq!(schema_version(&connection).unwrap(), 4);
+    }
+
+    #[test]
+    fn v4_provenance_rejects_absolute_paths_on_insert_and_update() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        let insert = |id: &str, json: &str| {
+            connection.execute(
+                "INSERT INTO inbox_files(id, name, kind, size_bytes, added_at, origin, status, relative_path, provenance_json)
+                 VALUES (?1, 'x.pdf', 'pdf', 1, '2026-10-21T10:00:00Z', 'lms', 'new', ?2, ?3)",
+                rusqlite::params![id, format!("Предметы/00 Входящие/{id}.pdf"), json],
+            )
+        };
+        for bad in [
+            r#"{"source":"cu_export","entryPath":"/Users/me/x.pdf"}"#,
+            r#"{"source":"cu_export","entryPath":"../x.pdf"}"#,
+            r#"{"source":"cu_export","entryPath":"a/../../x.pdf"}"#,
+            r#"{"source":"cu_export","archiveName":"C:\\x.zip"}"#,
+            r#"{"source":"cu_export","archiveName":"~/Downloads/x.zip"}"#,
+            r#"{"source":"cu_export","archiveName":"file:///x.zip"}"#,
+        ] {
+            assert!(insert("bad", bad).is_err(), "accepted {bad}");
+        }
+        insert(
+            "ok",
+            r#"{"source":"cu_export","archiveName":"Курс.zip","entryPath":"Неделя 3/Лекция.pdf","courseUrl":"https://my.centraluniversity.ru/learn/courses/1"}"#,
+        )
+        .unwrap();
+        assert!(connection
+            .execute(
+                "UPDATE inbox_files SET provenance_json = '{\"entryPath\":\"/etc/passwd\"}' WHERE id = 'ok'",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn v4_course_url_requires_https_and_download_seen_rejects_paths() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO subjects(id, name, short_name, folder_path) VALUES ('s1', 'ОБА', 'ОБА', 'Предметы/ОБА')",
+                [],
+            )
+            .unwrap();
+        assert!(connection
+            .execute(
+                "UPDATE subjects SET course_url = 'http://x' WHERE id = 's1'",
+                []
+            )
+            .is_err());
+        connection
+            .execute(
+                "UPDATE subjects SET course_url = 'https://my.centraluniversity.ru/learn/courses/1' WHERE id = 's1'",
+                [],
+            )
+            .unwrap();
+        let seen = |name: &str| {
+            connection.execute(
+                "INSERT INTO download_seen(sha256, name, size_bytes, outcome, first_seen_at, updated_at)
+                 VALUES (?1, ?2, 1, 'imported', 'now', 'now')",
+                rusqlite::params!["b".repeat(64), name],
+            )
+        };
+        assert!(seen("Downloads/x.zip").is_err());
+        assert!(seen("a\\b.zip").is_err());
+        seen("Курс.zip").unwrap();
     }
 }

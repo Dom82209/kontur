@@ -10,7 +10,7 @@ const LABEL: Record<ManagedRootKind, { title: string; hint: string }> = {
   vault: { title: "Хранилище Obsidian", hint: "Структура предметов и недель создаётся внутри." },
   inbox: { title: "Папка «Входящие»", hint: "Всегда внутри хранилища: Предметы/00 Входящие." },
   backup: { title: "Резервные копии", hint: "Отдельная папка вне хранилища — для копий перед изменениями." },
-  downloads: { title: "Наблюдаемые загрузки", hint: "Откуда выбор файлов начинает показ. Наблюдение подключается позже." },
+  downloads: { title: "Наблюдаемые загрузки", hint: "Сюда браузер скачивает материалы и экспорт ЦУ. Наблюдение включается переключателем ниже." },
 };
 
 const STATE: Record<ManagedRootState, { label: string; tone: string }> = {

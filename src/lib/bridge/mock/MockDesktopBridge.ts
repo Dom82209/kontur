@@ -52,8 +52,10 @@ import {
   weekRange,
 } from "./data";
 import { plural } from "../../format";
+import { lmsUrlProblem } from "../../lmsLinks";
 import { newOperationId } from "../intake";
 import { MockWorkflow, type MockContext } from "./workflow";
+import { MockLms } from "./lms";
 
 /**
  * MockDesktopBridge — имитация desktop-backend.
@@ -74,7 +76,7 @@ function buildRoots(): ManagedRoots {
     vault: { kind: "vault", state: "ok", displayPath: DEMO_ROOT_PATHS.vault, message: null },
     inbox: { kind: "inbox", state: "ok", displayPath: `${DEMO_ROOT_PATHS.vault}/Предметы/00 Входящие`, message: null },
     backup: { kind: "backup", state: "not_configured", displayPath: null, message: "Не выбрана" },
-    downloads: { kind: "downloads", state: "not_configured", displayPath: null, message: "Не выбрана (наблюдение подключается на следующем этапе)" },
+    downloads: { kind: "downloads", state: "not_configured", displayPath: null, message: "Не выбрана — нужна для наблюдения за загрузками" },
     importReady: true,
   };
 }
@@ -110,10 +112,24 @@ export class MockDesktopBridge implements DesktopBridge {
   private candidateSeq = 0;
   private readonly latency: number;
   private readonly workflow: MockWorkflow;
+  private readonly lms: MockLms;
 
   constructor(options: MockOptions = {}) {
     this.latency = options.latency ?? 1;
     this.workflow = new MockWorkflow(this.context());
+    this.lms = new MockLms({
+      emitter: this.emitter,
+      wait: (ms) => this.wait(ms),
+      roots: () => this.roots,
+      subjects: () => this.subjects,
+      inbox: () => this.inbox,
+      addInbox: (files) => {
+        this.inbox = [...files, ...this.inbox];
+      },
+      log: (op) => {
+        this.log.unshift(op);
+      },
+    });
     // Привязываем ДЗ к неделям.
     for (const h of this.homework) {
       const w = this.weeks.get(h.subjectId)?.find((x) => x.number === h.weekNumber);
@@ -234,6 +250,7 @@ export class MockDesktopBridge implements DesktopBridge {
       status: "new",
       classification: null,
       duplicate: null,
+      provenance: { source: "manual", via: "drop", archiveName: null, entryPath: null, courseUrl: null, assignmentUrl: null },
     }));
     this.inbox = [...files, ...this.inbox];
     this.emitter.emit("inbox:file-added", { files: clone(files) });
@@ -272,7 +289,7 @@ export class MockDesktopBridge implements DesktopBridge {
     if (this.roots.inbox.state === "missing") this.roots.inbox = { ...this.roots.inbox, state: "ok", message: null };
 
     const count = (status: ImportItemReport["status"]) => reports.filter((r) => r.status === status).length;
-    const report: InboxImportReport = { operationId, items: reports, imported: count("imported"), duplicates: count("duplicate"), failed: count("failed"), replayed: false };
+    const report: InboxImportReport = { operationId, items: reports, imported: count("imported"), duplicates: count("duplicate"), failed: count("failed"), skipped: 0, replayed: false };
     op.paths = added.map((f) => `Предметы/00 Входящие/${f.name}`);
     op.detail = `Добавлено: ${report.imported} · дублей: ${report.duplicates} · ошибок: ${report.failed}`;
     op.finishedAt = new Date().toISOString();
@@ -311,6 +328,7 @@ export class MockDesktopBridge implements DesktopBridge {
       status: "new",
       classification: null,
       duplicate: renamedFrom ? { existingPath: `Предметы/00 Входящие/${renamedFrom}`, sameContent: false, suggestedName: candidate } : null,
+      provenance: { source: "manual", via: item.origin ?? "drop", archiveName: null, entryPath: null, courseUrl: null, assignmentUrl: null },
     };
     added.push(file);
     return { status: "imported", name, file: clone(file), renamedFrom, recovered: false };
@@ -354,6 +372,37 @@ export class MockDesktopBridge implements DesktopBridge {
     if (this.roots.vault.state !== "ok") throw new BridgeError("blocked", "Сначала выберите хранилище Obsidian");
     this.roots.inbox = { ...this.roots.inbox, state: "ok", message: null };
     return clone(this.roots);
+  }
+
+  // ───────────── Загрузки и экспорт ЦУ (имитация этапа 6) ─────────────
+
+  getDownloadsWatcher: DesktopBridge["getDownloadsWatcher"] = () => this.lms.getWatcher();
+  setDownloadsWatcher: DesktopBridge["setDownloadsWatcher"] = (enabled) => this.lms.setWatcher(enabled);
+  dismissDownloadCandidate: DesktopBridge["dismissDownloadCandidate"] = (candidateId) => this.lms.dismiss(candidateId);
+  pickCuExport: DesktopBridge["pickCuExport"] = () => this.lms.pick();
+  previewCuExport: DesktopBridge["previewCuExport"] = (candidateId) => this.lms.preview(candidateId);
+  importCuExport: DesktopBridge["importCuExport"] = (request, operationId) => this.lms.import(request, operationId);
+  setSubjectCourseUrl: DesktopBridge["setSubjectCourseUrl"] = (subjectId, url) => this.lms.setCourseUrl(subjectId, url);
+  openCourse: DesktopBridge["openCourse"] = (target) => this.lms.openCourse(target);
+
+  async setHomeworkAssignmentUrl(homeworkId: string, url: string | null): Promise<Homework> {
+    await this.wait(80);
+    const h = this.homework.find((x) => x.id === homeworkId);
+    if (!h) throw new BridgeError("not_found", "Домашнее задание не найдено");
+    if (h.stage === "submitted") throw new BridgeError("immutable", "Отправленную работу изменить нельзя");
+    const problem = url ? lmsUrlProblem(url) : null;
+    if (problem) throw new BridgeError("blocked", problem);
+    h.assignmentUrl = url?.trim() || null;
+    return clone(h);
+  }
+
+  async openAssignment(target: { homeworkId: string } | { fileId: string }): Promise<void> {
+    if ("fileId" in target) return this.lms.openAssignmentFromFile(target.fileId);
+    await this.wait(60);
+    const url = this.homework.find((x) => x.id === target.homeworkId)?.assignmentUrl;
+    if (!url) throw new BridgeError("not_found", "Ссылка на задание не задана");
+    const problem = lmsUrlProblem(url);
+    if (problem) throw new BridgeError("blocked", problem);
   }
 
   async classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>> {

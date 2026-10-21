@@ -29,6 +29,7 @@ const file: InboxFile = {
   status: "new",
   classification: null,
   duplicate: null,
+  provenance: null,
 };
 
 const operation: Operation = {
@@ -55,6 +56,7 @@ const report: InboxImportReport = {
   imported: 1,
   duplicates: 1,
   failed: 1,
+  skipped: 0,
   replayed: false,
 };
 
@@ -88,6 +90,16 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     openInboxFile: fail("openInboxFile"),
     revealInboxFile: fail("revealInboxFile"),
     revealInFinder: fail("revealInFinder"),
+    getDownloadsWatcher: fail("getDownloadsWatcher"),
+    setDownloadsWatcher: fail("setDownloadsWatcher"),
+    dismissDownloadCandidate: fail("dismissDownloadCandidate"),
+    pickCuExport: fail("pickCuExport"),
+    previewCuExport: fail("previewCuExport"),
+    importCuExport: fail("importCuExport"),
+    setSubjectCourseUrl: fail("setSubjectCourseUrl"),
+    setHomeworkAssignmentUrl: fail("setHomeworkAssignmentUrl"),
+    openCourse: fail("openCourse"),
+    openAssignment: fail("openAssignment"),
     ...overrides,
   };
 }
