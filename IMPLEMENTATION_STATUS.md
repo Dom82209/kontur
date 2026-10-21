@@ -1,10 +1,10 @@
 # Статус реализации «Контур»
 
-Дата аудита: 20 октября 2026 года.
+Дата аудита: 21 октября 2026 года.
 
 ## Текущий этап
 
-Этап 4B завершён: добавлены архитектурный каркас Rust backend, SQLite-схема и миграции, базовые репозитории, health-команда и изолированные тесты. `TauriDesktopBridge` и прикладная backend-логика не начинались.
+Этап 4B.1 завершён: persistence schema version 2 синхронизирована с зафиксированным frontend-контрактом, миграция v1 сохранена неизменной. `TauriDesktopBridge` и прикладная backend-логика не начинались.
 
 ## Что уже реализовано
 
@@ -96,6 +96,21 @@
 - `cargo fmt --check`, `cargo check`, строгий Clippy и `cargo test` успешны; frontend typecheck/19 тестов/build также прошли. Debug app-only сборка создана в `src-tauri/target/debug/bundle/macos/Контур.app` (31.23 MiB), DMG не запускался.
 - Не реализованы `TauriDesktopBridge`, рабочие Tauri events/commands, native intake, watcher, файловые операции, AI-провайдеры и submission snapshot на диске — это граница следующих этапов.
 
+## Синхронизация persistence — этап 4B.1
+
+- Добавлена неизменяющая v1 миграция `v2.sql`; `CURRENT_SCHEMA_VERSION = 2`. Fresh database проходит v1→v2, заполненная v1 обновляется транзакционно с сохранением записей всех прежних таблиц.
+- Добавлена карта `docs/PERSISTENCE_CONTRACT.md`: TypeScript ↔ Rust DTO ↔ SQLite, nullable/JSON/вычисляемые поля и источники истины.
+- `HomeworkStage` и `HomeworkWorkflowStage` стали исчерпывающими Rust enum. Контрактное `ready` преобразуется во внутреннее `ready_to_submit`, девять workflow-стадий — в legacy DB-значения и обратно без raw strings во frontend.
+- Subject, Week, Homework и HomeworkVersion дополнены недостающими контрактными полями; сложные sections/files сохраняются как JSON с `json_valid`.
+- `SourceBundle.versionId`, `ReviewRun.versionId`, `RevisionPrompt.basedOnVersionId` и `reviewRunId` стали nullable. Проверен полный первичный SourceBundle и анализ до появления v01.
+- Добавлена `inbox_files`: classification/duplicate сохраняются, абсолютный native `sourcePath` после импорта не записывается.
+- Workflow, teacher, submission и operation таблицы дополнены полями frontend-контракта; RequirementStatus хранится как `done/not_done/manual/na`.
+- SQLite triggers запрещают UPDATE/DELETE HomeworkVersion и SubmissionReceipt, изменение/удаление submitted Homework и добавление к ней новых дочерних данных.
+- `app_settings` рекурсивно отклоняет очевидные ключи secrets; разрешённые категории и JSON-политика документированы.
+- Rust tests покрывают fresh/populated migration, сохранность данных, enum mapping, nullable analysis, Inbox roundtrip, JSON/path validation, secret rejection и прямые нарушения immutable-инвариантов.
+- Финальная проверка: Cargo fmt/check/Clippy/test, frontend typecheck/19 тестов/build и app-only Tauri debug build успешны. Собран `Контур.app` размером 31.25 MiB; DMG не запускался.
+- Persistence-структуры готовы к будущим командам, но CRUD repository API для всех workflow-таблиц, Tauri commands/events и TypeScript adapter ещё не реализованы.
+
 ## Окружение Rust/Tauri — этап 4A
 
 - Mac: Apple Silicon `arm64` (`aarch64-apple-darwin`), shell `/bin/zsh`.
@@ -120,7 +135,7 @@
 | `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
 | `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
-| `cargo test` | Успешно; 16 Rust-тестов пройдено |
+| `cargo test` | Успешно; 28 Rust-тестов пройдено на этапе 4B.1 |
 | `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
 | `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
 
