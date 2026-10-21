@@ -15,7 +15,8 @@ const REACH = 420; // px — с какого расстояния зона на�
 /**
  * Drag-and-drop зона с магнитным свечением: пока файл тащат по окну,
  * свечение усиливается по мере приближения и смещается к курсору.
- * В Tauri backend может заменить HTML5 drop на событие окна с абсолютными путями.
+ * В Tauri drop приходит событием окна с настоящими путями (`onNativeFileDrop`),
+ * а «Выбрать файлы» открывает системный диалог через backend.
  */
 export function DropZone({ onFiles, onDemo, onError, busy }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -25,10 +26,22 @@ export function DropZone({ onFiles, onDemo, onError, busy }: Props) {
   const raf = useRef(0);
   const depth = useRef(0);
 
+  // Native drag-and-drop: backend передаёт настоящие sourcePath. Подписка не
+  // пересоздаётся при каждом рендере — обработчик берётся из ref.
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
   useEffect(() => {
     if (bridge.kind !== "tauri") return;
-    return bridge.onNativeFileDrop(onFiles);
-  }, [onFiles]);
+    const offDrop = bridge.onNativeFileDrop((items) => onFilesRef.current(items));
+    const offDrag = bridge.onNativeDragState((active) => {
+      setDragging(active);
+      setOver(active);
+    });
+    return () => {
+      offDrop();
+      offDrag();
+    };
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -131,9 +144,11 @@ export function DropZone({ onFiles, onDemo, onError, busy }: Props) {
           >
             <FolderInput /> Выбрать файлы
           </button>
-          <button className="btn btn--ghost" onClick={onDemo} disabled={busy}>
-            Симулировать загрузку
-          </button>
+          {bridge.kind === "mock" && (
+            <button className="btn btn--ghost" onClick={onDemo} disabled={busy}>
+              Симулировать загрузку
+            </button>
+          )}
         </div>
       </div>
       <input

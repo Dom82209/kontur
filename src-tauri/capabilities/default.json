@@ -1,7 +1,30 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Минимальные права окна. Файловая система не открыта для frontend.",
+  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги и Finder вызываются только из Rust-команд «Контура».",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "allow-backend-health",
+    "allow-get-subjects",
+    "allow-get-weeks",
+    "allow-get-week",
+    "allow-get-homework-list",
+    "allow-get-homework",
+    "allow-get-inbox-files",
+    "allow-get-automation-rules",
+    "allow-get-activity-log",
+    "allow-update-automation-rules",
+    "allow-update-classification",
+    "allow-check-managed-roots",
+    "allow-choose-managed-root",
+    "allow-prepare-inbox-root",
+    "allow-pick-import-files",
+    "allow-import-inbox-files",
+    "allow-get-operation-result",
+    "allow-open-inbox-file",
+    "allow-reveal-inbox-file",
+    "allow-reveal-in-finder"
+  ]
 }

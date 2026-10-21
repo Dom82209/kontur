@@ -196,6 +196,83 @@
 }
 
 /* ═════════════ Входящие ═════════════ */
+.importrun {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.importrun[data-state="error"] {
+  border-color: var(--warn-soft);
+}
+.importrun__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.importrun__title {
+  font-weight: 600;
+  font-size: var(--t-md);
+}
+.importrun__head .btn {
+  margin-left: auto;
+}
+.importrun__message {
+  font-size: var(--t-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.importrun__items {
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.importrun__item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 0.9fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  font-size: var(--t-sm);
+}
+.importrun__item:hover {
+  background: var(--surface-hover);
+}
+.importrun__name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.importrun__note {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.importrun__item[data-status="failed"] .importrun__note {
+  color: var(--danger);
+}
+.importrun__icon {
+  width: 15px;
+  height: 15px;
+}
+.importrun__icon--ok {
+  color: var(--ok);
+}
+.importrun__icon--dup {
+  color: var(--warn);
+}
+.importrun__icon--fail {
+  color: var(--danger);
+}
+.preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .inbox__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1468,4 +1545,51 @@
   .style-threshold { grid-template-columns: minmax(0, 1fr) minmax(180px, .7fr) auto; }
   .deadline__action { display: none; }
   .vcmp__deltas { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ═════════════ Управляемые каталоги ═════════════ */
+.roots {
+  display: grid;
+  gap: 4px;
+}
+.roots__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.roots__main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.roots__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.roots__path {
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.roots__row[data-state="unsafe"] .roots__path,
+.roots__row[data-state="missing"] .roots__path {
+  color: var(--warn);
+}
+.roots__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+  font-size: var(--t-sm);
+}
+.roots__foot .btn {
+  margin-left: auto;
+}
+.roots__blocked {
+  color: var(--warn);
 }

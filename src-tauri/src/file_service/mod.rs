@@ -7,13 +7,19 @@ mod paths;
 mod planning;
 mod undo;
 
-pub use atomic_copy::{atomic_copy, CopyReceipt};
+pub use atomic_copy::{
+    atomic_copy, atomic_copy_committed, inspect_stored_file, CommittedCopy, CopyReceipt,
+    StoredFileState,
+};
 pub use backup::{create_backup, BackupManifest};
 #[cfg(test)]
 pub(crate) use hashing::sha256_file;
 pub use hashing::{hash_source, Sha256Digest};
+#[cfg(test)]
+pub(crate) use hooks::{install as install_test_hook, HookPoint as TestHookPoint};
 pub use paths::{
-    BackupRoot, InboxRoot, PersistentPath, SourceFile, VaultRoot, VerifiedDestination,
+    BackupRoot, DownloadsRoot, InboxRoot, PersistentPath, SourceFile, VaultRoot,
+    VerifiedDestination,
 };
 pub use planning::{plan_copy, CopyDecision};
 pub use undo::{

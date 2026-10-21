@@ -52,6 +52,10 @@ impl Identity {
             ino: stat.st_ino as u64,
         }
     }
+
+    pub(crate) fn from_raw(dev: u64, ino: u64) -> Self {
+        Self { dev, ino }
+    }
 }
 
 fn directory_flags() -> OFlags {
@@ -174,6 +178,15 @@ pub(crate) fn walk_directory(
     walk(root, &components, false)
 }
 
+/// Обходит и при необходимости создаёт (`mkdirat`) все компоненты как каталоги.
+pub(crate) fn ensure_directory_path(
+    root: &DirFd,
+    relative: &PersistentPath,
+) -> Result<DirFd, AppError> {
+    let components = normal_components(relative)?;
+    walk(root, &components, true)?.ok_or_else(|| io_error("Не удалось создать папку"))
+}
+
 fn walk(root: &DirFd, components: &[&OsStr], create: bool) -> Result<Option<DirFd>, AppError> {
     let mut current: DirFd = Arc::clone(root);
     for name in components {
@@ -237,6 +250,32 @@ pub(crate) fn open_leaf(dir: &OwnedFd, name: &OsStr) -> Result<Leaf, AppError> {
         return Ok(Leaf::NotRegular);
     }
     Ok(Leaf::File(File::from(fd), stat))
+}
+
+/// Открывает абсолютный канонический каталог покомпонентно от `/` с `O_NOFOLLOW`.
+///
+/// Используется для внешнего source (native picker/drop): ни один компонент
+/// пути не может оказаться symlink в момент открытия.
+pub(crate) fn open_absolute_directory(path: &Path) -> Result<DirFd, AppError> {
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return Err(blocked("Путь к исходному файлу должен быть абсолютным"));
+    }
+    let root = rfs::open("/", directory_flags(), Mode::empty())
+        .map_err(|_| io_error("Не удалось открыть корень файловой системы"))?;
+    let mut current: DirFd = Arc::new(root);
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(blocked(
+                "Путь к исходному файлу содержит небезопасный компонент",
+            ));
+        };
+        let next = open_child_directory(&current, name)
+            .map_err(|_| blocked("Путь к исходному файлу проходит через символическую ссылку"))?
+            .ok_or_else(|| BackendError::not_found("Папка исходного файла не найдена"))?;
+        current = Arc::new(next);
+    }
+    Ok(current)
 }
 
 /// Открывает абсолютный недоверенный source один раз; symlink в последнем компоненте отклоняется.

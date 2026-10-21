@@ -19,6 +19,14 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
+Ручная проверка реального импорта во «Входящие» (весь UI на `TauriDesktopBridge`; ещё не реализованные функции отвечают `backend_unavailable`):
+
+```bash
+VITE_KONTUR_BRIDGE=tauri npm run tauri:dev
+```
+
+Перед импортом выберите хранилище Obsidian в «Настройки → Управляемые каталоги». Для экспериментов используйте отдельную тестовую папку, а не настоящий vault.
+
 ## Стек
 
 React 19 · TypeScript strict · Vite · Motion for React (`motion/react`) · React Router (hash) · Lucide · CSS variables, собственная дизайн-система (без Tailwind) · шрифты Onest и JetBrains Mono локально через `@fontsource`.

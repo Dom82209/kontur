@@ -23,8 +23,13 @@ pub mod names {
     pub const REVIEW_COMPLETED: &str = "review:completed";
     pub const REVIEW_FAILED: &str = "review:failed";
     pub const SUBMISSION_CONFIRMED: &str = "submission:confirmed";
+    pub const INBOX_UPDATED: &str = "inbox:updated";
 
-    pub const ALL: [&str; 12] = [
+    /// Служебные события native intake (не входят в `BridgeEvents`, слушает только Tauri adapter).
+    pub const INTAKE_NATIVE_DROP: &str = "intake:native-drop";
+    pub const INTAKE_DRAG_STATE: &str = "intake:drag-state";
+
+    pub const ALL: [&str; 13] = [
         INBOX_FILE_ADDED,
         INBOX_CLASSIFICATION_UPDATED,
         OPERATION_PROGRESS,
@@ -37,6 +42,7 @@ pub mod names {
         REVIEW_COMPLETED,
         REVIEW_FAILED,
         SUBMISSION_CONFIRMED,
+        INBOX_UPDATED,
     ];
 }
 
@@ -44,6 +50,39 @@ pub mod names {
 #[serde(rename_all = "camelCase")]
 pub struct InboxFileAddedPayload {
     pub files: Vec<InboxFileDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxUpdateReason {
+    Import,
+}
+
+/// Список «Входящих» изменился; клиент перечитывает `get_inbox_files`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxUpdatedPayload {
+    pub reason: InboxUpdateReason,
+    pub file_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeDropPayload {
+    pub items: Vec<crate::intake::DroppedItemDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DragState {
+    Enter,
+    Leave,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DragStatePayload {
+    pub state: DragState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,8 +276,21 @@ mod tests {
                 "review:completed",
                 "review:failed",
                 "submission:confirmed",
+                "inbox:updated",
             ]
         );
+        assert_eq!(names::INTAKE_NATIVE_DROP, "intake:native-drop");
+        assert_eq!(names::INTAKE_DRAG_STATE, "intake:drag-state");
+    }
+
+    #[test]
+    fn inbox_updated_payload_is_camel_case() {
+        let value = serde_json::to_value(super::InboxUpdatedPayload {
+            reason: super::InboxUpdateReason::Import,
+            file_ids: vec!["f1".to_owned()],
+        })
+        .unwrap();
+        assert_eq!(value, json!({ "reason": "import", "fileIds": ["f1"] }));
     }
 
     #[test]

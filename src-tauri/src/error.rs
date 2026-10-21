@@ -1,8 +1,8 @@
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     NotFound,
@@ -18,7 +18,7 @@ pub enum ErrorCode {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendError {
     pub code: ErrorCode,
     pub message: String,
@@ -48,6 +48,14 @@ impl BackendError {
 
     pub fn database(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Database, message)
+    }
+
+    pub fn blocked(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Blocked, message)
+    }
+
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::IoError, message)
     }
 }
 

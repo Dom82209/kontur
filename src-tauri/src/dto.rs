@@ -149,7 +149,7 @@ impl InboxStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxFileDto {
     pub id: String,
@@ -228,6 +228,7 @@ pub enum OperationKind {
     MarkReady,
     ConfirmSubmission,
     UpdateRules,
+    Import,
     Undo,
 }
 
@@ -249,6 +250,7 @@ impl OperationKind {
             Self::MarkReady => "mark_ready",
             Self::ConfirmSubmission => "confirm_submission",
             Self::UpdateRules => "update_rules",
+            Self::Import => "import",
             Self::Undo => "undo",
         }
     }
@@ -270,6 +272,7 @@ impl OperationKind {
             "mark_ready" => Ok(Self::MarkReady),
             "confirm_submission" => Ok(Self::ConfirmSubmission),
             "update_rules" => Ok(Self::UpdateRules),
+            "import" => Ok(Self::Import),
             "undo" => Ok(Self::Undo),
             _ => Err(format!("unknown operation kind: {value}")),
         }

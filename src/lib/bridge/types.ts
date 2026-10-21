@@ -150,6 +150,58 @@ export interface DroppedItem {
   sizeBytes: number;
   /** Абсолютный исходный путь. Обязателен для native Tauri intake, отсутствует у HTML5 File. */
   sourcePath?: string;
+  /** Как файл получен: системный выбор или перетаскивание. По умолчанию — drop. */
+  origin?: "picker" | "drop";
+}
+
+// ───────────────────────── Управляемые каталоги и импорт ─────────────────────────
+
+export type ManagedRootKind = "vault" | "inbox" | "backup" | "downloads";
+/** Корень, который пользователь выбирает системным диалогом. «Входящие» живут внутри хранилища. */
+export type SelectableRootKind = Exclude<ManagedRootKind, "inbox">;
+export type ManagedRootState = "ok" | "not_configured" | "missing" | "unsafe";
+
+export interface ManagedRootStatus {
+  kind: ManagedRootKind;
+  state: ManagedRootState;
+  /** Только для показа: домашний каталог сокращён до «~». В моделях не используется. */
+  displayPath: string | null;
+  message: string | null;
+}
+
+export interface ManagedRoots {
+  vault: ManagedRootStatus;
+  inbox: ManagedRootStatus;
+  backup: ManagedRootStatus;
+  downloads: ManagedRootStatus;
+  /** Хранилище доступно, импорт во «Входящие» возможен. */
+  importReady: boolean;
+}
+
+export interface RootSelection {
+  /** Пользователь закрыл системный диалог; настройки не изменились. */
+  cancelled: boolean;
+  roots: ManagedRoots;
+}
+
+export type ImportItemReport =
+  | { status: "imported"; name: string; file: InboxFile; renamedFrom: string | null; recovered: boolean }
+  | { status: "duplicate"; name: string; file: InboxFile; restored: boolean }
+  | { status: "failed"; name: string; error: BridgeErrorPayload };
+
+export interface InboxImportReport {
+  operationId: string;
+  items: ImportItemReport[];
+  imported: number;
+  duplicates: number;
+  failed: number;
+  /** Повтор той же команды: итог прочитан из журнала, файлы не копировались повторно. */
+  replayed: boolean;
+}
+
+export interface OperationRecord {
+  operation: Operation;
+  importReport: InboxImportReport | null;
 }
 
 // ───────────────────────── Домашние задания ─────────────────────────
@@ -275,6 +327,7 @@ export type OperationKind =
   | "mark_ready"
   | "confirm_submission"
   | "update_rules"
+  | "import"
   | "undo";
 
 export type OperationStatus = "running" | "completed" | "failed" | "undone";
@@ -337,6 +390,8 @@ export interface BridgeEvents {
   "review:completed": { run: ReviewRun };
   "review:failed": { run: ReviewRun; error: BridgeErrorPayload };
   "submission:confirmed": { receipt: SubmissionReceipt };
+  /** Список «Входящих» изменился; клиент перечитывает getInboxFiles. */
+  "inbox:updated": { reason: "import"; fileIds: string[] };
 }
 
 export type BridgeEventName = keyof BridgeEvents;
@@ -391,7 +446,24 @@ export interface DesktopBridge {
   pickFiles(): Promise<DroppedItem[]>;
   /** Native drag-and-drop окна. Mock/browser возвращает пустую отписку и использует HTML5 drop. */
   onNativeFileDrop(listener: (items: DroppedItem[]) => void): Unsubscribe;
+  /** Файлы тащат над окном (native). Mock/browser — пустая отписка. */
+  onNativeDragState(listener: (active: boolean) => void): Unsubscribe;
   importDroppedFiles(items: DroppedItem[]): Promise<InboxFile[]>;
+  /**
+   * Импорт во «Входящие» с отчётом по каждому файлу: импортирован, дубль или ошибка.
+   * operationId (UUID v4) задаёт клиент, чтобы сопоставить operation:progress и
+   * безопасно повторить команду: повтор с тем же id возвращает сохранённый итог.
+   */
+  importFiles(items: DroppedItem[], operationId?: string): Promise<OperationResult<InboxImportReport>>;
+  getOperationResult(operationId: string): Promise<OperationRecord | null>;
+  openInboxFile(fileId: string): Promise<void>;
+  revealInboxFile(fileId: string): Promise<void>;
+
+  getManagedRoots(): Promise<ManagedRoots>;
+  /** Системный выбор папки (backend). Отмена — cancelled: true. */
+  chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection>;
+  /** Создать «Входящие» внутри хранилища, если папки ещё нет. */
+  prepareInboxRoot(): Promise<ManagedRoots>;
   classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>>;
   updateClassification(fileId: string, patch: ClassificationPatch): Promise<InboxFile>;
   previewRoute(fileId: string, destination: RouteDestination): Promise<RoutePreview>;

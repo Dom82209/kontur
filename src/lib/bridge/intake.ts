@@ -1,4 +1,4 @@
-import { BridgeError, type DroppedItem } from "./types";
+import { BridgeError, type DroppedItem, type InboxFile, type InboxImportReport } from "./types";
 
 /**
  * Native Tauri intake must provide an absolute sourcePath for every file.
@@ -23,4 +23,21 @@ export function droppedItemsFromNativePaths(paths: string[]): DroppedItem[] {
   }));
   assertNativeSourcePaths(items);
   return items;
+}
+
+/** UUID v4 для operationId импорта: связывает operation:progress с вызовом и делает повтор безопасным. */
+export function newOperationId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") return cryptoApi.randomUUID();
+  const bytes = new Uint8Array(16);
+  cryptoApi.getRandomValues(bytes);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Файлы «Входящих», появившиеся или найденные при импорте (без ошибок). */
+export function filesFromImportReport(report: InboxImportReport): InboxFile[] {
+  return report.items.flatMap((item) => (item.status === "failed" ? [] : [item.file]));
 }

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 struct Migration {
     version: u32,
@@ -17,6 +17,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 2,
         sql: include_str!("v2.sql"),
+    },
+    Migration {
+        version: 3,
+        sql: include_str!("v3.sql"),
     },
 ];
 
@@ -60,6 +64,7 @@ mod tests {
             "homework_versions",
             "homeworks",
             "inbox_files",
+            "operation_results",
             "operations",
             "review_runs",
             "revision_prompts",
@@ -142,7 +147,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migrate(&mut connection).unwrap(), 2);
+        assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
         for table in [
             "app_settings",
             "subjects",
@@ -175,5 +180,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(requirement_status, "done");
+    }
+
+    fn v2_database_with_inbox_row() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        connection.execute_batch(include_str!("v1.sql")).unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(include_str!("v2.sql")).unwrap();
+        transaction.pragma_update(None, "user_version", 2).unwrap();
+        transaction.commit().unwrap();
+        connection
+            .execute(
+                "INSERT INTO inbox_files(id, name, kind, size_bytes, added_at, origin, status, relative_path)
+                 VALUES ('legacy', 'Лекция.pdf', 'pdf', 10, '2026-10-20T10:00:00Z', 'drop', 'new',
+                         'Предметы/00 Входящие/Лекция.pdf')",
+                [],
+            )
+            .unwrap();
+        connection
+    }
+
+    #[test]
+    fn v3_keeps_legacy_inbox_rows_without_hash() {
+        let mut connection = v2_database_with_inbox_row();
+        assert_eq!(migrate(&mut connection).unwrap(), 3);
+        let (name, sha): (String, Option<String>) = connection
+            .query_row(
+                "SELECT name, sha256 FROM inbox_files WHERE id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Лекция.pdf");
+        assert!(sha.is_none());
+    }
+
+    #[test]
+    fn v3_rejects_two_active_inbox_rows_with_same_content() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        let sha = "a".repeat(64);
+        let insert = |id: &str, path: &str, status: &str| {
+            connection.execute(
+                "INSERT INTO inbox_files(id, name, kind, size_bytes, added_at, origin, status, relative_path, sha256)
+                 VALUES (?1, 'x.pdf', 'pdf', 1, '2026-10-21T10:00:00Z', 'drop', ?3, ?2, ?4)",
+                rusqlite::params![id, path, status, sha],
+            )
+        };
+        insert("a", "Предметы/00 Входящие/a.pdf", "new").unwrap();
+        assert!(insert("b", "Предметы/00 Входящие/b.pdf", "new").is_err());
+        insert("c", "Предметы/00 Входящие/c.pdf", "routed").unwrap();
+        assert!(connection
+            .execute(
+                "UPDATE inbox_files SET sha256 = 'XYZ' WHERE id = 'legacy'",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn v3_operation_results_reject_absolute_paths_and_updates() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO operations(id, kind, status) VALUES ('o1', 'import', 'completed')",
+                [],
+            )
+            .unwrap();
+        let insert = |json: &str| {
+            connection.execute(
+                "INSERT INTO operation_results(operation_id, kind, result_json) VALUES ('o1', 'inbox_import', ?1)",
+                [json],
+            )
+        };
+        assert!(insert(r#"{"items":[{"name":"/Users/me/secret.pdf"}]}"#).is_err());
+        assert!(insert(r#"{"items":[{"name":"file:///tmp/x"}]}"#).is_err());
+        assert!(insert(r#"{"items":[{"name":"~/Downloads/x"}]}"#).is_err());
+        insert(r#"{"items":[{"name":"Лекция.pdf","path":"Предметы/00 Входящие/Лекция.pdf"}]}"#)
+            .unwrap();
+        assert!(connection
+            .execute("UPDATE operation_results SET result_json = '{}'", [])
+            .is_err());
     }
 }

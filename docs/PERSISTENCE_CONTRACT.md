@@ -1,6 +1,6 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 2. SQLite доступен только Rust backend; read-only DTO и две DB-only мутации доступны через Tauri IPC, но React пока работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 3. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации и импорт во «Входящие» доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
@@ -10,7 +10,9 @@
 | `Subject` | `SubjectDto` | `subjects`: `id`, `name`, `short_name` | нет | — | `currentWeek`, `weekCount` из `weeks` | `subjects` + агрегат `weeks` |
 | `Week` | `WeekDto` | `weeks`: `id`, `subject_id`, `number`, `starts_at`, `ends_at`, `topic` | `topic`, `homeworkId` | — | `lectures`, `seminars`, `materials` из `files`; `homeworkId` из `homeworks` | `weeks`, `files`, `homeworks` |
 | `FileRef` | `FileRefDto` | `files`: `id`, `name`, `kind`, `size_bytes`, `modified_at`, `relative_path` | legacy `modified_at` | — | timestamp fallback из `updated_at`/`created_at` | `files` |
-| `InboxFile` | `InboxFileDto` | `inbox_files` | `classification`, `duplicate` | typed `classification_json`, `duplicate_json` | persistent `relative_path` не выдаётся | `inbox_files` |
+| `InboxFile` | `InboxFileDto` | `inbox_files` (+ v3 `sha256`, `mime_type`, `import_operation_id`) | `classification`, `duplicate`; v3-колонки NULL у legacy | typed `classification_json`, `duplicate_json` | persistent `relative_path`, SHA-256 и MIME не выдаются | `inbox_files` |
+| `ManagedRoots` | `ManagedRootsDto` (вычисляется) | `app_settings.managed_roots`: `vaultPath`, `backupPath`, `downloadsPath` | все три nullable | весь тип в `value_json` | состояние и `displayPath` вычисляются при каждом запросе | `app_settings` + файловая система |
+| `InboxImportReport`, `OperationRecord` | `InboxImportReport` | `operation_results`: `operation_id`, `kind = inbox_import`, `result_json` | `importReport` null для операций без итога | весь отчёт в `result_json` | `replayed` выставляется при повторе | immutable row `operation_results` |
 | `Homework` | `HomeworkDto` | `homeworks` + связи с `weeks`, `files`, `homework_versions` | `final_version_id`, `final_file_name`, `submitted_at`, `assignment_url`; legacy `deadline` | — | `subjectId`, `weekNumber`, `taskFiles`, `versions` через связи | `homeworks` и дочерние таблицы |
 | `HomeworkVersion` | `HomeworkVersionDto` | `homework_versions` | `note`, `prompt_id`, `source_bundle_id` | typed `sections_json`, `files_json`, legacy `metadata_json` | legacy file fallback | immutable row `homework_versions` |
 | `SourceBundle` | `SourceBundle`, `SourceBundleItem` | `source_bundles`, `source_bundle_items` | `version_id` | `missing_json`; FileRef элемента восстанавливается join с `files` | `items` через join | обе таблицы |
@@ -52,7 +54,7 @@
 
 `OperationStatus` также типизирован: legacy `started` и `running` восстанавливаются как frontend `running`, `failed` и legacy `cancelled` — как `failed`, `completed` и `undone` совпадают напрямую.
 
-Остальные enum-поля read-only DTO (`FileKind`, inbox origin/status/classification, operation kind, provider roles, week detection) преобразуются typed Rust enum и сериализуются в строковые значения TypeScript union.
+`OperationKind` в v3 дополнен значением `import` (колонка `operations.kind` без CHECK, миграция не требуется). Остальные enum-поля read-only DTO (`FileKind`, inbox origin/status/classification, operation kind, provider roles, week detection) преобразуются typed Rust enum и сериализуются в строковые значения TypeScript union.
 
 ## JSON и валидация
 
@@ -64,7 +66,16 @@ JSON используется только для вложенных неизм�
 
 Постоянные пути учебных файлов относительны корню хранилища. Inbox хранит только путь внутри `Предметы/00 Входящие/`. `DroppedItem.sourcePath` может быть абсолютным лишь как краткоживущий аргумент native intake до безопасного копирования и в SQLite не сохраняется. Repository проверяет `..`, абсолютные Unix/Windows-пути и drive prefix, включая path-поля вложенного JSON; SQL дополнительно ограничивает inbox/operation paths и базовые абсолютные варианты в path-колонках v1.
 
-File service 4D.1 уточняет будущий typed undo payload: `UndoManifest { operationId, createdFiles, backups }`. `createdFiles` содержит только относительный `path` и `expectedSha256`; `backups` — относительные `originalPath`, `backupPath` и `expectedBackupSha256`. `BackupManifest` содержит operation ID, относительные source/backup paths, SHA-256, размер и UTC timestamp. Абсолютные source/root paths никогда не сериализуются. Формат пока не записывается production-кодом и не требует schema v3.
+File service 4D.1 уточняет будущий typed undo payload: `UndoManifest { operationId, createdFiles, backups }`. `createdFiles` содержит только относительный `path` и `expectedSha256`; `backups` — относительные `originalPath`, `backupPath` и `expectedBackupSha256`. `BackupManifest` содержит operation ID, относительные source/backup paths, SHA-256, размер и UTC timestamp. Абсолютные source/root paths никогда не сериализуются. Формат пока не записывается production-кодом (undo импорта не реализован).
+
+## Импорт во «Входящие» (schema v3)
+
+- v3 добавлена отдельной транзакционной миграцией; v1 и v2 не изменялись. Legacy-строки `inbox_files` получают `sha256 = NULL`.
+- `sha256` — 64 символа `[0-9a-f]`; частичный уникальный индекс запрещает две неразложенные (`status <> 'routed'`) записи с одинаковым содержимым. `mime_type` — MIME по расширению. `import_operation_id` ссылается на операцию импорта (`ON DELETE SET NULL`).
+- Строка `inbox_files` вставляется только после проверенной публикации файла; `origin = 'drop'` и для picker, и для drag-and-drop, `status = 'new'`, `classification = NULL`. Если имя было занято, `duplicate = { existingPath, sameContent: false, suggestedName }`.
+- `operation_results` хранит отчёт `InboxImportReport` для чтения командой и идемпотентного повтора. Триггеры запрещают UPDATE и текстовые значения JSON, начинающиеся с `/`, `\`, `~/`, `file:` или содержащие `/../`. В отчёте только безопасные имена, `InboxFile` DTO и коды/сообщения ошибок без путей.
+- `app_settings.managed_roots` — единственное место с абсолютными путями: канонические пути трёх выбранных пользователем корней. Пути исходных файлов, абсолютный путь «Входящих», security-scoped bookmarks и секреты не сохраняются. Разрешения picker/drop (`IntakeGrants`) живут только в памяти процесса.
+- `AutomationRules.inboxPath`, `downloadsWatchPath`, `obsidianVaultPath` остаются legacy-предпочтениями и file service не используются; источником истины для корней является `managed_roots`.
 
 ## Не сохраняемые представления
 
@@ -82,7 +93,7 @@ IPC-поле каждого из `subjectId`, `weekNumber`, `category` пере�
 
 Если subject задан, он обязан существовать. Если одновременно заданы subject и week, неделя обязана принадлежать этому предмету. Routed-запись неизменяема этой командой. После ручного изменения `classification.source = manual`, `confidence = 1`, reason не содержит локальных путей. Статус `classified` устанавливается только при subject + week + category, отличной от `unknown`; иначе сохраняется `ambiguous`.
 
-Обе DB-only мутации создают журнал с UUID, ISO 8601 UTC timestamps, пустым безопасным списком paths и `undoable = false`. Успех фиксирует целевую запись и `completed` одной транзакцией. Ошибка откатывает её и сохраняет одну `failed`-операцию отдельной транзакцией; error payload не содержит секретов и абсолютных путей. Schema version остаётся 2.
+Обе DB-only мутации создают журнал с UUID, ISO 8601 UTC timestamps, пустым безопасным списком paths и `undoable = false`. Успех фиксирует целевую запись и `completed` одной транзакцией. Ошибка откатывает её и сохраняет одну `failed`-операцию отдельной транзакцией; error payload не содержит секретов и абсолютных путей.
 
 ## Legacy v1
 

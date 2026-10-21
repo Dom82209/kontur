@@ -629,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_remains_two() {
+    fn schema_version_is_three_after_inbox_import_stage() {
         let database = database();
-        assert_eq!(CURRENT_SCHEMA_VERSION, 2);
-        assert_eq!(database.schema_version().unwrap(), 2);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 3);
+        assert_eq!(database.schema_version().unwrap(), 3);
     }
 
     #[test]

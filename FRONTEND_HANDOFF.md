@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 4D.1.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust file service существует только как backend foundation и не меняет bridge-контракт.
+Документ фиксирует frontend-контракт и границу этапа 5. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder.
 
 ## 1. Граница архитектуры
 
@@ -15,7 +15,7 @@ React pages/components
 
 - React не обращается к файловой системе, shell, cookies или Tauri API напрямую.
 - Единственная системная граница — типизированный `DesktopBridge` из `src/lib/bridge`.
-- `createBridge()` сейчас всегда создаёт `MockDesktopBridge`. Явная фабрика `createTauriBridge()` существует отдельно; две DB-only мутации не являются основанием для преждевременного переключения всего UI.
+- `createBridge()` по умолчанию создаёт `MockDesktopBridge`. Только флаг разработчика `VITE_KONTUR_BRIDGE=tauri` в нативном runtime создаёт `TauriDesktopBridge` целиком (для ручной проверки реального импорта); ни один npm-скрипт его не выставляет. Переключение UI по умолчанию — отдельный будущий этап.
 - Hybrid bridge запрещён: реальный адаптер не смешивает SQLite-чтения с mock-записями, поскольку это создаёт несогласованное состояние и ложный успешный результат операций.
 - Пути в моделях — относительные пути внутри выбранного хранилища. Абсолютный путь пользователя не хардкодится.
 - Все даты — ISO 8601, размеры — байты, идентификаторы непрозрачны для frontend.
@@ -104,7 +104,11 @@ React pages/components
 
 ### Intake и раскладка
 
-`getInboxFiles`, `pickFiles`, `onNativeFileDrop`, `importDroppedFiles`, `classifyFiles`, `updateClassification`, `previewRoute`, `routeFiles`.
+`getInboxFiles`, `pickFiles`, `onNativeFileDrop`, `onNativeDragState`, `importDroppedFiles`, `importFiles`, `getOperationResult`, `openInboxFile`, `revealInboxFile`, `classifyFiles`, `updateClassification`, `previewRoute`, `routeFiles`.
+
+### Управляемые каталоги
+
+`getManagedRoots`, `chooseManagedRoot`, `prepareInboxRoot`.
 
 ### ДЗ и версии
 
@@ -144,6 +148,9 @@ React pages/components
 | `review:completed` | завершённый `ReviewRun` |
 | `review:failed` | run и ошибка |
 | `submission:confirmed` | неизменяемый `SubmissionReceipt` |
+| `inbox:updated` | `{ reason: "import", fileIds }` — список «Входящих» изменился, перечитать `getInboxFiles` |
+
+Событие «файл добавлен» в контракте называется `inbox:file-added` (`{ files }`) и эмитится только для впервые импортированных файлов. Служебные `intake:native-drop` и `intake:drag-state` слушает только Tauri adapter; в `BridgeEvents` они не входят.
 
 Для любой undoable мутации обязателен порядок:
 
@@ -166,17 +173,19 @@ start operation
 
 `ClassificationPatch` сохраняет различие между отсутствием и очисткой: TypeScript `undefined` кодируется как `{ state: "absent" }`, `null` как `{ state: "null" }`, значение как `{ state: "value", value }`. Для category явная очистка означает `unknown`. Команда не перемещает файл и не обращается к файловой системе.
 
+Команды этапа 5: `check_managed_roots`, `choose_managed_root { kind }`, `prepare_inbox_root`, `pick_import_files`, `import_inbox_files { operationId, items: [{ sourcePath, origin }] }`, `get_operation_result { operationId }`, `open_inbox_file { fileId }`, `reveal_inbox_file { fileId }`, `reveal_in_finder { relativePath }`. `TauriDesktopBridge` подключает к ним `getManagedRoots`, `chooseManagedRoot`, `prepareInboxRoot`, `pickFiles`, `importFiles`, `importDroppedFiles` (файлы из отчёта без ошибок), `getOperationResult` (`not_found` → `null`), `openInboxFile`, `revealInboxFile`, `revealInFinder`; `onNativeFileDrop` и `onNativeDragState` слушают `intake:native-drop`/`intake:drag-state`.
+
 Пока unsupported:
 
 - dashboard/week writes: `getDashboard`, `createWeek`;
-- intake/routing: `pickFiles`, `onNativeFileDrop`, `importDroppedFiles`, `classifyFiles`, `previewRoute`, `routeFiles`;
+- классификация и раскладка: `classifyFiles`, `previewRoute`, `routeFiles`;
 - версии: `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`;
 - AI/workflow: `getStyleProfile`, `prepareSourceBundle`, `setSourceIncluded`, `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `createRevisionPrompt`, `sendPromptToAuthor`, `updatePromptText`, `getPrompts`, `cancelRun`, `getReviewRuns`, `saveRunAsIteration`, `getIterations`, `compareVersions`;
 - преподаватель: `getTeacherComments`, `saveTeacherComments`, `importTeacherTranscript`, `removeTeacherComment`, `runTeacherReview`, `getTeacherRequirements`, `resolveRequirement`;
 - сдача: `getReadiness`, `markReadyToSubmit`, `buildSubmissionPackage`, `getSubmissionPackage`, `setPackageCheck`, `confirmSubmission`, `getSubmissionReceipt`;
-- system/provider/write: `revealInFinder`, `openProviderApp`, `connectProvider`, `disconnectProvider`, `getProviderStatus`, `undoOperation`.
+- system/provider/write: `openProviderApp`, `connectProvider`, `disconnectProvider`, `getProviderStatus`, `undoOperation`.
 
-UI продолжает использовать `MockDesktopBridge`: импорт Tauri-фабрики в основной `createBridge()` отсутствует.
+UI по умолчанию продолжает использовать `MockDesktopBridge`; Tauri-фабрика выбирается только флагом `VITE_KONTUR_BRIDGE=tauri` при наличии Tauri runtime.
 
 ### Tauri event adapter
 
@@ -186,13 +195,16 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 8. Native и browser/mock file intake
 
-- Browser/mock использует HTML5 `FileList`; `DroppedItem` содержит `name`, `sizeBytes`, а `sourcePath` отсутствует.
-- Native Tauri drag-and-drop включён через `app.windows[].dragDropEnabled: true`. Адаптер должен слушать window drag-drop, преобразовывать paths через `droppedItemsFromNativePaths` и вызывать подписчиков `onNativeFileDrop`.
-- `pickFiles()` открывает системный выбор файлов в Tauri adapter и возвращает элементы с абсолютным `sourcePath`.
-- Для native intake `sourcePath` обязателен. `assertNativeSourcePaths` выявляет отсутствие пути и останавливает импорт с `io_error`, а не создаёт имитацию.
-- Размер, тип и существование native файла уточняет Rust backend; frontend не читает файл.
-- Реальный диалог выбора и native event listener требуют Tauri adapter/plugin/backend и на текущем этапе отсутствуют.
-- Этап 4D.1 добавил внутренние Rust primitives для безопасных roots, persistent paths, hashing, planning, atomic copy, backup и undo validation; этап 4D.1.1 перевёл их на fd-relative операции без TOCTOU/symlink-race. Они не являются Tauri-командами и не вызываются frontend; контракт `DesktopBridge` не изменился. Политика описана в `docs/FILE_SERVICE_SECURITY.md`.
+- Browser/mock использует HTML5 `FileList`; `DroppedItem` содержит `name`, `sizeBytes`, а `sourcePath` отсутствует. Mock `importFiles` реализует тот же контракт отчёта: дубль по имени и размеру (содержимого HTML5 File для SHA-256 нет), « (N)» при совпадении имени, повтор по `operationId`.
+- Native Tauri drag-and-drop включён (`dragDropEnabled: true`). Rust регистрирует пути из `WindowEvent::DragDrop` как разрешённые и отправляет `intake:native-drop { items }` с `name`, `sizeBytes`, `sourcePath`; adapter добавляет `origin: "drop"`. `onNativeDragState(active)` подсвечивает зону.
+- `pickFiles()` вызывает `pick_import_files`: системный диалог открывает Rust через официальный `tauri-plugin-dialog`. Отмена — `[]`; элементы получают `origin: "picker"`.
+- `importFiles(items, operationId?)` — основной путь импорта. Клиент генерирует UUID v4 (`newOperationId()`), чтобы сопоставить `operation:progress` с вызовом и безопасно повторить команду: повтор с тем же id возвращает сохранённый итог (`replayed: true`). Для native intake `sourcePath` обязателен — `assertNativeSourcePaths` останавливает импорт с `io_error` до IPC.
+- Backend принимает только пути, полученные им самим из picker или drop; произвольный путь из WebView отклоняется `blocked`.
+- `InboxImportReport.items[]`: `imported` (`file`, `renamedFrom`, `recovered`), `duplicate` (`file`, `restored`), `failed` (`error`). Ошибка отдельного файла не прерывает остальные; если не удались все — операция `failed` и событие `operation:failed`. Ошибки уровня команды (не выбрано хранилище, неверный id, незавершённая операция с тем же id) отклоняют Promise структурированным `BridgeError`.
+- Порядок событий импорта: `operation:progress` (0, затем после каждого файла) → `inbox:file-added` (если есть новые) → `inbox:updated` → `operation:completed`/`operation:failed` → resolve.
+- `getManagedRoots()` возвращает `vault`, `inbox`, `backup`, `downloads` с состоянием `ok | not_configured | missing | unsafe` и `displayPath` только для показа (`~` вместо home). `chooseManagedRoot(kind)` открывает системный выбор папки, `cancelled: true` при отмене. «Входящие» всегда `Предметы/00 Входящие` внутри хранилища; `prepareInboxRoot()` создаёт папку заранее, иначе её создаёт первый импорт.
+- `openInboxFile(fileId)` открывает файл приложением по умолчанию (исполняемые файлы и скрипты — `blocked`), `revealInboxFile(fileId)` и `revealInFinder(relativePath)` показывают элемент в Finder.
+- Экран «Входящие» показывает `ImportPanel`: прогресс по `operation:progress` с тем же `operationId`, итог по каждому файлу, «В Finder». «Симулировать загрузку» — только mock. «Настройки» содержат «Управляемые каталоги» вместо текстовых полей путей. Классификация и раскладка в Tauri-режиме пока unsupported: новые файлы остаются со статусом `new` («Ждёт распознавания»).
 
 ## 9. Инварианты workflow и сдачи
 
@@ -240,4 +252,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Следующий этап 4D.2 — системный picker/native drop и реальный импорт во «Входящие» через готовый безопасный file service. Затем — watcher, routing, применение backup/undo, автоматическая классификация, открытие Finder и официальных приложений, provider adapters, пакеты и immutable snapshot. UI всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Следующий этап — watcher загрузок, ZIP LMS, автоматическая классификация и раскладка по предметам поверх готового импорта. Затем — применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

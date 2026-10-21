@@ -1,10 +1,16 @@
 import type {
   AutomationRules,
   ClassificationPatch,
+  DroppedItem,
   Homework,
   InboxFile,
+  InboxImportReport,
+  ManagedRoots,
   Operation,
+  OperationRecord,
   OperationResult,
+  RootSelection,
+  SelectableRootKind,
   Subject,
   Week,
 } from "../types";
@@ -126,6 +132,64 @@ export function updateClassification(
     category: patchField(patch, "category"),
   };
   return call("update_classification", { fileId, patch: encoded });
+}
+
+// ── Этап 5: управляемые каталоги, native intake, импорт во «Входящие» ──
+
+export interface NativeIntakeItem {
+  name: string;
+  sizeBytes: number;
+  sourcePath: string;
+}
+
+export interface ImportItemIpc {
+  sourcePath: string;
+  origin: "picker" | "drop";
+}
+
+export function checkManagedRoots(): Promise<ManagedRoots> {
+  return call("check_managed_roots");
+}
+
+export function chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection> {
+  return call("choose_managed_root", { kind });
+}
+
+export function prepareInboxRoot(): Promise<ManagedRoots> {
+  return call("prepare_inbox_root");
+}
+
+/** Системный выбор нескольких файлов (диалог открывает Rust). Отмена — пустой массив. */
+export function pickImportFiles(): Promise<NativeIntakeItem[]> {
+  return call("pick_import_files");
+}
+
+export function importInboxFiles(
+  operationId: string,
+  items: ImportItemIpc[],
+): Promise<OperationResult<InboxImportReport>> {
+  return call("import_inbox_files", { operationId, items });
+}
+
+export function getOperationResult(operationId: string): Promise<OperationRecord> {
+  return call("get_operation_result", { operationId });
+}
+
+export function openInboxFile(fileId: string): Promise<void> {
+  return call("open_inbox_file", { fileId });
+}
+
+export function revealInboxFile(fileId: string): Promise<void> {
+  return call("reveal_inbox_file", { fileId });
+}
+
+export function revealInFinder(relativePath: string): Promise<void> {
+  return call("reveal_in_finder", { relativePath });
+}
+
+/** Преобразует DroppedItem в аргумент IPC; без sourcePath импорт не начинается. */
+export function toImportItems(items: DroppedItem[]): ImportItemIpc[] {
+  return items.map((item) => ({ sourcePath: item.sourcePath!, origin: item.origin ?? "drop" }));
 }
 
 /** Только для unit-тестов низкоуровневого IPC-клиента. */

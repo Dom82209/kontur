@@ -65,11 +65,45 @@ struct TempGuard(CreatedEntry);
 /// Опубликованный файл до успешной финальной проверки.
 struct FinalGuard(CreatedEntry);
 
+/// Опубликованная копия, которую ещё можно компенсировать.
+///
+/// Если последующая запись в SQLite не удалась, вызывающий код вызывает
+/// [`CommittedCopy::compensate`]: файл удаляется `unlinkat(dir_fd, name)` только
+/// если имя всё ещё указывает на inode, созданный этой операцией. Пользовательский
+/// файл, подложенный конкурентом на то же имя, не удаляется.
+#[derive(Debug)]
+pub struct CommittedCopy {
+    pub receipt: CopyReceipt,
+    dir: DirFd,
+    name: OsString,
+    identity: Identity,
+}
+
+impl CommittedCopy {
+    /// Удаляет созданный файл. `true` — удалён именно созданный inode.
+    pub fn compensate(self) -> bool {
+        let removed = fd::unlink_if_same(&self.dir, &self.name, self.identity);
+        if removed {
+            let _synced = fd::sync_directory(&self.dir);
+        }
+        removed
+    }
+}
+
 pub fn atomic_copy(
     source: &SourceFile,
     destination: &VerifiedDestination,
 ) -> Result<CopyReceipt, AppError> {
-    copy_inner(source, destination, None)
+    copy_inner(source, destination, None).map(|committed| committed.receipt)
+}
+
+/// Как [`atomic_copy`], но возвращает handle для компенсации при ошибке БД.
+pub fn atomic_copy_committed(
+    source: &SourceFile,
+    destination: &VerifiedDestination,
+    expected_hash: Option<&Sha256Digest>,
+) -> Result<CommittedCopy, AppError> {
+    copy_inner(source, destination, expected_hash)
 }
 
 pub(crate) fn atomic_copy_expected(
@@ -77,14 +111,14 @@ pub(crate) fn atomic_copy_expected(
     destination: &VerifiedDestination,
     expected_hash: &Sha256Digest,
 ) -> Result<CopyReceipt, AppError> {
-    copy_inner(source, destination, Some(expected_hash))
+    copy_inner(source, destination, Some(expected_hash)).map(|committed| committed.receipt)
 }
 
 fn copy_inner(
     source: &SourceFile,
     destination: &VerifiedDestination,
     expected_hash: Option<&Sha256Digest>,
-) -> Result<CopyReceipt, AppError> {
+) -> Result<CommittedCopy, AppError> {
     let size_before = source.revalidate()?;
     let parent = destination.ensure_parent()?;
     let final_name = destination.file_name().to_owned();
@@ -131,11 +165,45 @@ fn copy_inner(
     fd::sync_directory(&parent)?;
     final_guard.0.keep = true;
 
-    Ok(CopyReceipt {
-        destination: destination.relative().clone(),
-        sha256: copied_hash,
-        size_bytes: copied,
+    Ok(CommittedCopy {
+        receipt: CopyReceipt {
+            destination: destination.relative().clone(),
+            sha256: copied_hash,
+            size_bytes: copied,
+        },
+        dir: parent,
+        name: final_name,
+        identity: temp_identity,
     })
+}
+
+/// Состояние существующего файла внутри контролируемого корня.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredFileState {
+    Missing,
+    NotRegular,
+    Present {
+        sha256: Sha256Digest,
+        size_bytes: u64,
+    },
+}
+
+/// Read-only fd-relative проверка файла по относительному пути: обход без symlink,
+/// `openat(O_NOFOLLOW)`, SHA-256 открытого inode и контроль подмены родителя.
+pub fn inspect_stored_file(destination: &VerifiedDestination) -> Result<StoredFileState, AppError> {
+    let Some(parent) = destination.open_existing_parent()? else {
+        return Ok(StoredFileState::Missing);
+    };
+    let state = match fd::open_leaf(&parent, destination.file_name())? {
+        fd::Leaf::Missing => StoredFileState::Missing,
+        fd::Leaf::NotRegular => StoredFileState::NotRegular,
+        fd::Leaf::File(file, _) => {
+            let (sha256, size_bytes) = fd::hash_open_file(&file)?;
+            StoredFileState::Present { sha256, size_bytes }
+        }
+    };
+    destination.verify_parent(&parent)?;
+    Ok(state)
 }
 
 fn reject_existing(parent: &DirFd, name: &OsStr) -> Result<(), AppError> {

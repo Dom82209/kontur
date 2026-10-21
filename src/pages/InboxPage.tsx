@@ -1,18 +1,20 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRight, CircleCheck, Copy, Inbox, ListChecks, Pencil, TriangleAlert, WandSparkles } from "lucide-react";
+import { ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, Inbox, ListChecks, Pencil, TriangleAlert, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { weekPath } from "../app/nav";
 import { useOps } from "../app/operations";
 import { useToast } from "../app/toasts";
 import { DropZone } from "../components/domain/DropZone";
+import { ImportPanel, type ImportRun } from "../components/domain/ImportPanel";
 import { FileChip } from "../components/domain/FileChip";
 import { ClassifyWizard } from "../components/domain/ClassifyWizard";
 import { ClassificationFields } from "../components/domain/ClassificationFields";
 import { Confidence } from "../components/ui/Confidence";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
-import { bridge, type DroppedItem, type InboxFile, type RoutePreview } from "../lib/bridge";
+import { bridge, BridgeError, newOperationId, type DroppedItem, type InboxFile, type RoutePreview } from "../lib/bridge";
 import { CATEGORY_LABEL, formatBytes, formatRelative, pad2, plural } from "../lib/format";
+import { useBridgeEvent } from "../lib/hooks/useBridgeEvent";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
 
@@ -29,7 +31,12 @@ export function InboxPage() {
   const toast = useToast();
   const { reportError, undo } = useOps();
   const names = useSubjectNames();
-  const q = useBridgeQuery(() => bridge.getInboxFiles(), [], ["inbox:file-added", "inbox:classification-updated", "operation:completed"]);
+  const q = useBridgeQuery(() => bridge.getInboxFiles(), [], ["inbox:file-added", "inbox:updated", "inbox:classification-updated", "operation:completed"]);
+  const [importRun, setImportRun] = useState<ImportRun | null>(null);
+
+  useBridgeEvent("operation:progress", (p) => {
+    setImportRun((run) => (run && run.operationId === p.operationId && !run.report ? { ...run, progress: p.progress, message: p.message } : run));
+  });
   const files = q.data ?? [];
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -65,14 +72,34 @@ export function InboxPage() {
       return n;
     });
 
-  const onDrop = async (items: DroppedItem[]) => {
+  /** Реальный импорт (picker или drop): прогресс по operation:progress, итог по каждому файлу. */
+  const onImport = async (items: DroppedItem[]) => {
+    if (items.length === 0 || (importRun && !importRun.report && !importRun.error)) return;
+    const operationId = newOperationId();
+    setImportRun({ operationId, total: items.length, progress: 0, message: "Проверка файлов", report: null, error: null });
     try {
-      const added = await bridge.importDroppedFiles(items);
+      const result = await bridge.importFiles(items, operationId);
+      setImportRun((run) => (run?.operationId === operationId ? { ...run, progress: 1, report: result.value } : run));
+      const { imported, duplicates } = result.value;
+      if (imported > 0) toast.push({ tone: "ok", title: `Добавлено ${imported} ${plural(imported, "файл", "файла", "файлов")}`, text: duplicates > 0 ? `Дублей без копирования: ${duplicates}` : undefined });
+    } catch (e) {
+      const error = e instanceof BridgeError ? { code: e.code, message: e.message } : { code: "unknown" as const, message: e instanceof Error ? e.message : "Неизвестная ошибка" };
+      setImportRun((run) => (run?.operationId === operationId ? { ...run, error } : run));
+    }
+  };
+
+  /** Демонстрационная загрузка mock-режима. */
+  const onDemo = async () => {
+    try {
+      const added = await bridge.importDroppedFiles([]);
       toast.push({ tone: "info", title: `Добавлено ${added.length} ${plural(added.length, "файл", "файла", "файлов")}`, text: "Классификация запущена" });
     } catch (e) {
       reportError(e, "Не удалось добавить файлы");
     }
   };
+
+  const reveal = (fileId: string) => void bridge.revealInboxFile(fileId).catch((e: unknown) => reportError(e, "Не удалось показать файл"));
+  const importing = !!importRun && !importRun.report && !importRun.error;
 
   const route = async (ids: string[]) => {
     if (ids.length === 0) return;
@@ -122,7 +149,9 @@ export function InboxPage() {
         </div>
       </header>
 
-      <DropZone onFiles={(items) => void onDrop(items)} onDemo={() => void onDrop([])} onError={(error) => reportError(error, "Не удалось выбрать файлы")} />
+      <DropZone onFiles={(items) => void onImport(items)} onDemo={() => void onDemo()} onError={(error) => reportError(error, "Не удалось выбрать файлы")} busy={importing} />
+
+      {importRun && <ImportPanel run={importRun} onDismiss={() => setImportRun(null)} onReveal={reveal} />}
 
       <div className="inbox__layout">
         <section className="panel inbox__list" aria-label="Новые файлы">
@@ -188,10 +217,12 @@ export function InboxPage() {
                         <FileChip id={f.id} name={f.name} kind={f.kind} sub={`${formatBytes(f.sizeBytes)} · ${formatRelative(f.addedAt)}`} />
                       </button>
                       <div className="irow__class">
-                        {f.status === "classifying" || f.status === "new" ? (
+                        {f.status === "classifying" || (f.status === "new" && bridge.kind === "mock") ? (
                           <span className="irow__scanning">
                             <span className="scanline" aria-hidden /> Распознаётся…
                           </span>
+                        ) : f.status === "new" ? (
+                          <span className="faint">Ждёт распознавания</span>
                         ) : c ? (
                           <div className="irow__tags">
                             <span className={c.subjectId ? "" : "irow__missing"}>{c.subjectId ? names(c.subjectId) : "Предмет?"}</span>
@@ -205,8 +236,8 @@ export function InboxPage() {
                       </div>
                       <div className="irow__meta">
                         {f.duplicate && (
-                          <span className="badge badge--warn" title={`Уже есть: ${f.duplicate.existingPath}`}>
-                            <Copy /> Дубль
+                          <span className="badge badge--warn" title={f.duplicate.sameContent ? `Уже есть: ${f.duplicate.existingPath}` : `Имя занято: ${f.duplicate.existingPath}. Сохранён как ${f.duplicate.suggestedName}`}>
+                            <Copy /> {f.duplicate.sameContent ? "Дубль" : "Имя занято"}
                           </span>
                         )}
                         {c && f.status !== "classifying" && <Confidence value={c.confidence} />}
@@ -248,6 +279,16 @@ export function InboxPage() {
               ) : (
                 <div className="preview">
                   <div className="preview__name">{focus.name}</div>
+                  {bridge.kind === "tauri" && (
+                    <div className="preview__actions">
+                      <button className="btn btn--sm" onClick={() => void bridge.openInboxFile(focus.id).catch((e: unknown) => reportError(e, "Не удалось открыть файл"))}>
+                        <ExternalLink /> Открыть
+                      </button>
+                      <button className="btn btn--sm btn--ghost" onClick={() => reveal(focus.id)}>
+                        <FolderSearch /> Показать в Finder
+                      </button>
+                    </div>
+                  )}
                   {focus.classification && (
                     <ul className="preview__reasons">
                       {focus.classification.reasons.map((r) => (
@@ -283,6 +324,8 @@ export function InboxPage() {
                         Уточнить
                       </button>
                     </div>
+                  ) : focus.status === "new" && bridge.kind === "tauri" ? (
+                    <p className="faint">Файл во «Входящих». Автоматическое распознавание предмета и недели подключается на следующем этапе.</p>
                   ) : (
                     <p className="faint">Определяется…</p>
                   )}

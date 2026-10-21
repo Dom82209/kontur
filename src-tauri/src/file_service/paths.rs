@@ -93,6 +93,22 @@ impl VaultRoot {
     pub(crate) fn controlled(&self) -> &ControlledRoot {
         &self.0
     }
+
+    /// Проверяет fd-relative, что относительный путь существует и является
+    /// обычным файлом или каталогом (без symlink в любом компоненте).
+    pub fn ensure_existing_path(&self, relative: &PersistentPath) -> Result<(), AppError> {
+        let parent = self
+            .0
+            .open_existing_parent(relative)?
+            .ok_or_else(|| BackendError::not_found("Путь не найден в хранилище"))?;
+        let stat = fd::stat_leaf(&parent, relative.file_name())?
+            .ok_or_else(|| BackendError::not_found("Путь не найден в хранилище"))?;
+        match fd::file_type(&stat) {
+            rustix::fs::FileType::Directory | rustix::fs::FileType::RegularFile => {}
+            _ => return Err(blocked("Путь не является обычным файлом или папкой")),
+        }
+        self.0.verify_parent(relative, &parent)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,12 +124,35 @@ impl BackupRoot {
     }
 }
 
+/// Наблюдаемая папка загрузок: та же политика корня, только чтение в этом этапе.
+#[derive(Debug, Clone)]
+pub struct DownloadsRoot {
+    /// Открытый fd корня; чтение загрузок (watcher) подключается следующим этапом.
+    _root: ControlledRoot,
+}
+
+impl DownloadsRoot {
+    pub fn new(path: &Path, home_dir: Option<&Path>) -> Result<Self, AppError> {
+        ControlledRoot::new(path, home_dir, "Папка загрузок").map(|root| Self { _root: root })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InboxRoot {
     root: ControlledRoot,
 }
 
 impl InboxRoot {
+    /// Открывает или создаёт папку входящих покомпонентно (`openat`/`mkdirat`) от fd vault.
+    /// Symlink или файл в любом компоненте отклоняется; за пределы vault выйти нельзя.
+    pub fn open_or_create(vault: &VaultRoot, path: PersistentPath) -> Result<Self, AppError> {
+        let fd = fd::ensure_directory_path(vault.0.fd(), &path)
+            .map_err(|_| blocked("Папку «Входящие» нельзя безопасно открыть или создать"))?;
+        Ok(Self {
+            root: ControlledRoot { fd },
+        })
+    }
+
     /// Открывает папку входящих покомпонентно от fd vault; symlink в любом компоненте отклоняется.
     pub fn new(vault: &VaultRoot, path: PersistentPath) -> Result<Self, AppError> {
         let fd = fd::walk_directory(vault.0.fd(), &path)
@@ -148,6 +187,66 @@ impl SourceFile {
         Ok(Self {
             file: Arc::new(file),
             identity: Identity::of(&stat),
+        })
+    }
+
+    /// Открывает недоверенный внешний файл из native picker/drop.
+    ///
+    /// Строже `new`: отклоняются `.`/`..`, symlink в любом компоненте родителя
+    /// (кроме системных алиасов macOS `/var`, `/tmp`, `/etc` → `/private/...`),
+    /// symlink в последнем компоненте, каталоги и специальные файлы. Канонический
+    /// родитель открывается покомпонентно от `/` с `O_NOFOLLOW`, затем файл —
+    /// `openat(O_NOFOLLOW)`. После открытия путь повторно сверяется с inode,
+    /// чтобы подмена между проверкой и открытием дала `blocked`.
+    pub fn open_external(path: &Path) -> Result<Self, AppError> {
+        if !path.is_absolute() {
+            return Err(blocked("Исходный файл должен иметь абсолютный путь"));
+        }
+        if path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(blocked("Путь к исходному файлу содержит «.» или «..»"));
+        }
+        let name = path
+            .file_name()
+            .ok_or_else(|| blocked("Не указано имя исходного файла"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| blocked("Не указана папка исходного файла"))?;
+        for ancestor in parent.ancestors() {
+            if ancestor.parent().is_none() {
+                break;
+            }
+            let metadata = fs::symlink_metadata(ancestor)
+                .map_err(|_| BackendError::not_found("Папка исходного файла не найдена"))?;
+            if metadata.file_type().is_symlink() && !is_system_alias(ancestor) {
+                return Err(blocked(
+                    "Путь к исходному файлу проходит через символическую ссылку",
+                ));
+            }
+        }
+        let canonical_parent = fs::canonicalize(parent)
+            .map_err(|_| BackendError::not_found("Папка исходного файла не найдена"))?;
+        let directory = fd::open_absolute_directory(&canonical_parent)?;
+        let (file, stat) = match fd::open_leaf(&directory, name)? {
+            fd::Leaf::Missing => return Err(BackendError::not_found("Исходный файл не найден")),
+            fd::Leaf::NotRegular => {
+                return Err(blocked(
+                    "Источник должен быть обычным файлом, а не ссылкой, папкой или устройством",
+                ))
+            }
+            fd::Leaf::File(file, stat) => (file, stat),
+        };
+        let identity = Identity::of(&stat);
+        let current = fs::metadata(path)
+            .map_err(|_| BackendError::not_found("Исходный файл исчез во время проверки"))?;
+        if !same_identity(&current, identity) {
+            return Err(blocked("Исходный файл был подменён во время проверки"));
+        }
+        Ok(Self {
+            file: Arc::new(file),
+            identity,
         })
     }
 
@@ -310,6 +409,17 @@ impl VerifiedDestination {
     pub(crate) fn verify_parent(&self, parent: &DirFd) -> Result<(), AppError> {
         self.root.verify_parent(&self.relative, parent)
     }
+}
+
+/// Системные алиасы macOS: `/var`, `/tmp`, `/etc` — symlink на `/private/...`.
+fn is_system_alias(path: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && [Path::new("/var"), Path::new("/tmp"), Path::new("/etc")].contains(&path)
+}
+
+fn same_identity(metadata: &fs::Metadata, identity: Identity) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    Identity::from_raw(metadata.dev(), metadata.ino()) == identity
 }
 
 fn is_too_broad(path: &Path) -> bool {

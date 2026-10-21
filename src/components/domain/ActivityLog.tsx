@@ -22,6 +22,7 @@ const KIND: Record<OperationKind, string> = {
   mark_ready: "Готовность",
   confirm_submission: "Отправка",
   update_rules: "Правила",
+  import: "Импорт",
   undo: "Отмена",
 };
 

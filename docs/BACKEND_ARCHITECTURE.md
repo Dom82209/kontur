@@ -1,10 +1,10 @@
 # Архитектура Rust backend
 
-Статус документа: этап 4D.1.1. Read-only путь и две DB-only мутации реализованы; изолированный fd-relative file-service foundation пока не имеет production entry point. UI по-прежнему использует `MockDesktopBridge`.
+Статус документа: этап 5. Read-only путь, две DB-only мутации и реальный импорт во «Входящие» через fd-relative file service подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
 
-- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, соединение SQLite и реестр будущих событий.
+- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants` и mutex последовательных импортов.
 - `commands` — тонкие Tauri-команды; они получают managed `AppState`, делегируют чтение query-слою и DB-only записи mutation-слою, а после commit доставляют события.
 - `db` — соединение SQLite, параметры соединения и транзакционная граница.
 - `db/migrations` — встроенные, версионированные SQL-миграции.
@@ -12,7 +12,10 @@
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
 - `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
-- `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI и не зарегистрирована в IPC.
+- `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy (в том числе компенсируемый `atomic_copy_committed`), read-only `inspect_stored_file`, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI.
+- `intake` — этап 5 без зависимости от GUI: управляемые каталоги (`RootsService`), безопасные имена и MIME, `IntakeGrants`, `InboxImporter` с дедупликацией, компенсацией и идемпотентностью, абстракция `FilePicker`, SQL-граница `store`.
+- `intake_commands` — тонкие Tauri-команды этапа 5, `DialogPicker` поверх официального `tauri-plugin-dialog`, действия Finder через `tauri-plugin-opener`, обработчик native drag-and-drop окна.
+- `ipc_commands` — единый список IPC-команд, который `build.rs` передаёт в `AppManifest`; тест сверяет его с capability.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
@@ -23,7 +26,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `2`. Неизменяемая v1 и добавочная v2 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `3`. Неизменяемые v1, v2 и добавочная v3 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
 
 Схема содержит таблицы:
 
@@ -34,7 +37,7 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `review_runs`, `revision_prompts`;
 - `teacher_comments`, `teacher_requirements`;
 - `submission_packages`, `submission_receipts`;
-- `operations`.
+- `operations`, `operation_results` (v3).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 
@@ -76,7 +79,37 @@ Foreign keys задают владение и политику удаления,
 
 Обход относительного пути выполняется покомпонентно через `openat(O_NOFOLLOW)`, создание — через `mkdirat`, проверка имён — `statat(AT_SYMLINK_NOFOLLOW)`, публикация — `renameat_with(RENAME_NOREPLACE)` в одном dir fd, cleanup — `unlinkat` только при совпадении identity созданного inode. Source открывается один раз; SHA-256, размер и копирование читают один inode через `pread`. Перед публикацией, после неё и в конце planning/undo повторный обход сравнивает inode родителя с открытым fd, подмена каталога даёт `blocked`. Undo пока только валидируется.
 
-Модуль не вызывается из `run()`, commands, AppState или bridge. Capabilities остаются минимальными и не открывают frontend доступ к filesystem. Все тестовые операции выполняются в `tempfile::TempDir`; race-тесты используют синхронные test hooks и `Barrier`, без sleep. Полная политика находится в `FILE_SERVICE_SECURITY.md`.
+С этапа 5 модуль используется импортом во «Входящие» (`intake`); прямого IPC к file service нет, frontend получает только команды этапа 5. Все тестовые операции выполняются в `tempfile::TempDir`; race-тесты используют синхронные test hooks и `Barrier`, без sleep. Полная политика находится в `FILE_SERVICE_SECURITY.md`.
+
+## Импорт во «Входящие» — этап 5
+
+Команды (все возвращают структурированный `AppError { code, message }`, без panic):
+
+| Команда | Назначение |
+|---|---|
+| `check_managed_roots` | Проверить корни: повторно открыть fd, вернуть `ManagedRoots` |
+| `choose_managed_root { kind }` | Системный выбор папки (`vault`/`backup`/`downloads`); отмена → `cancelled: true` |
+| `prepare_inbox_root` | Создать `Предметы/00 Входящие` внутри хранилища fd-relative |
+| `pick_import_files` | Системный выбор нескольких файлов; пути регистрируются в `IntakeGrants` |
+| `import_inbox_files { operationId, items }` | Импорт; `OperationResult<InboxImportReport>` |
+| `get_operation_result { operationId }` | Операция и сохранённый отчёт импорта |
+| `open_inbox_file { fileId }` | Открыть файл приложением по умолчанию (не для исполняемых файлов) |
+| `reveal_inbox_file { fileId }`, `reveal_in_finder { relativePath }` | Показать в Finder |
+
+Долгие команды — `async` и выполняют работу в `spawn_blocking`, поэтому главный поток и доставка `operation:progress` не блокируются. Диалоги и Finder вызываются Rust-кодом через официальные плагины; frontend не получает их permissions.
+
+`InboxImporter::run(operationId, items, progress)`:
+
+1. UUID v4 operation id; повтор с сохранённым итогом → replay без файловых действий; незавершённая операция с тем же id → `conflict`.
+2. Операция `running` (kind `import`) в отдельной транзакции, `progress(0)`.
+3. Для каждого файла: разрешение picker/drop → `SourceFile::open_external` → размер ≤ 4 ГБ → безопасное имя → SHA-256 → дубль по SHA-256 → свободное имя (диск и БД) → `atomic_copy_committed` → `insert_inbox_file`; при ошибке БД — компенсация. Ошибка файла фиксируется в отчёте, остальные продолжаются; после каждого файла — progress.
+4. Одна транзакция завершает операцию (`completed`, или `failed`, если не удались все) и пишет `operation_results`.
+
+Команда после возврата importer эмитит `inbox:file-added` (только новые файлы), `inbox:updated`, затем `operation:completed`/`operation:failed`. Replay событий не эмитит. Ошибка доставки события не откатывает данные и возвращает `unknown` с просьбой перечитать «Входящие».
+
+Native drag-and-drop: `Builder::on_window_event` → `WindowEvent::DragDrop` → `register_native_paths` (только абсолютные regular files) → `intake:native-drop { items }`; Enter/Leave → `intake:drag-state`.
+
+Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` генерирует `allow-<command>` (каталог `permissions/autogenerated/` создаётся при сборке и не хранится в Git). `capabilities/default.json` содержит только `core:event:default`, `core:window:allow-start-dragging` и `allow-*` для 20 команд.
 
 ## Health check
 
@@ -90,6 +123,6 @@ Tauri-команда `backend_health` проверяет доступность 
 
 ## Граница следующего этапа
 
-React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; наличие двух DB-only write-команд ещё не означает готовность полного production bridge. Hybrid bridge запрещён, чтобы реальные чтения не смешивались с несохраняемыми mock-мутациями.
+React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` по умолчанию создаёт `MockDesktopBridge`; `TauriDesktopBridge` целиком включается только флагом разработчика `VITE_KONTUR_BRIDGE=tauri`. Hybrid bridge запрещён.
 
-Следующий этап 4D.2 — native picker/drop и реальный импорт во «Входящие» через принятый file service. Watcher, routing по vault, полное применение backup/undo, provider adapters, AI/LMS-интеграции и immutable submission snapshot остаются отдельными этапами.
+Следующий этап — watcher загрузок, ZIP LMS, классификация и раскладка по предметам поверх того же импорта; затем применение backup/undo, provider adapters, AI/LMS-интеграции и immutable submission snapshot.

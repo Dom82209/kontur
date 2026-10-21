@@ -44,13 +44,34 @@ export function listenToBridgeEvent<E extends BridgeEventName>(
   event: E,
   listener: BridgeListener<E>,
 ): Unsubscribe {
+  return listenToTauriEvent<BridgeEvents[E]>(event, listener);
+}
+
+/** Служебные события native intake: пути уже зарегистрированы backend как разрешённые. */
+export interface NativeIntakeEvents {
+  "intake:native-drop": { items: { name: string; sizeBytes: number; sourcePath: string }[] };
+  "intake:drag-state": { state: "enter" | "leave" };
+}
+
+export function listenToIntakeEvent<E extends keyof NativeIntakeEvents>(
+  event: E,
+  listener: (payload: NativeIntakeEvents[E]) => void,
+): Unsubscribe {
+  return listenToTauriEvent<NativeIntakeEvents[E]>(event, listener);
+}
+
+/**
+ * Общая логика подписки: синхронный Unsubscribe, ранняя отписка до регистрации,
+ * идемпотентная повторная отписка, блокировка callback после отмены.
+ */
+function listenToTauriEvent<T>(event: string, listener: (payload: T) => void): Unsubscribe {
   let active = true;
   let registeredUnlisten: Unsubscribe | undefined;
 
   void resolveListen()
     .then((listen) =>
       listen(event, (message) => {
-        if (active) listener(message.payload as BridgeEvents[E]);
+        if (active) listener(message.payload as T);
       }),
     )
     .then((unlisten) => {

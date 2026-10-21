@@ -107,8 +107,21 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
       classification: null,
       duplicate: null,
     }),
+    checkManagedRoots: unexpected("checkManagedRoots"),
+    chooseManagedRoot: unexpected("chooseManagedRoot"),
+    prepareInboxRoot: unexpected("prepareInboxRoot"),
+    pickImportFiles: unexpected("pickImportFiles"),
+    importInboxFiles: unexpected("importInboxFiles"),
+    getOperationResult: unexpected("getOperationResult"),
+    openInboxFile: unexpected("openInboxFile"),
+    revealInboxFile: unexpected("revealInboxFile"),
+    revealInFinder: unexpected("revealInFinder"),
     ...overrides,
   };
+}
+
+function unexpected(name: string): () => Promise<never> {
+  return () => Promise.reject(new Error(`unexpected IPC call: ${name}`));
 }
 
 describe("TauriDesktopBridge", () => {

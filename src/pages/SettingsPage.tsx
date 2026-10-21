@@ -1,5 +1,6 @@
 import { BrainCircuit, Gauge, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun } from "lucide-react";
 import { usePrefs } from "../app/preferences";
+import { ManagedRootsPanel } from "../components/domain/ManagedRootsPanel";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { SaveBar } from "../components/ui/SaveBar";
 import { Segmented } from "../components/ui/Segmented";
@@ -32,26 +33,8 @@ export function SettingsPage() {
 
       <div className="settings__grid">
         <section className="settings__group">
-          <h2 className="settings__h">Хранилище</h2>
-          {!rules ? (
-            <SkeletonRows count={3} />
-          ) : (
-            <div className="settings__fields">
-              <label className="field">
-                <span className="field__label">Путь к хранилищу Obsidian</span>
-                <input className="input mono" value={rules.obsidianVaultPath} onChange={(e) => update({ obsidianVaultPath: e.target.value })} spellCheck={false} />
-                <span className="field__hint">Структура предметов и недель создаётся внутри. Выбор папки через Finder подключит backend.</span>
-              </label>
-              <label className="field">
-                <span className="field__label">Папка «Входящие»</span>
-                <input className="input mono" value={rules.inboxPath} onChange={(e) => update({ inboxPath: e.target.value })} spellCheck={false} />
-              </label>
-              <label className="field">
-                <span className="field__label">Наблюдать за загрузками</span>
-                <input className="input mono" value={rules.downloadsWatchPath} onChange={(e) => update({ downloadsWatchPath: e.target.value })} spellCheck={false} />
-              </label>
-            </div>
-          )}
+          <h2 className="settings__h">Управляемые каталоги</h2>
+          <ManagedRootsPanel />
         </section>
 
         <section className="settings__group">

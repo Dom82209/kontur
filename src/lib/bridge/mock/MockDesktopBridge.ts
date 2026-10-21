@@ -11,7 +11,13 @@ import {
   type FileRef,
   type Homework,
   type HomeworkVersion,
+  type ImportItemReport,
   type InboxFile,
+  type InboxImportReport,
+  type ManagedRoots,
+  type OperationRecord,
+  type RootSelection,
+  type SelectableRootKind,
   type MaterialCategory,
   type Operation,
   type OperationKind,
@@ -46,6 +52,7 @@ import {
   weekRange,
 } from "./data";
 import { plural } from "../../format";
+import { newOperationId } from "../intake";
 import { MockWorkflow, type MockContext } from "./workflow";
 
 /**
@@ -55,6 +62,27 @@ import { MockWorkflow, type MockContext } from "./workflow";
  */
 
 export const clone = <T,>(v: T): T => structuredClone(v);
+
+const DEMO_ROOT_PATHS: Record<SelectableRootKind, string> = {
+  vault: "~/Documents/Учёба",
+  backup: "~/Documents/Контур — резервные копии",
+  downloads: "~/Downloads",
+};
+
+function buildRoots(): ManagedRoots {
+  return {
+    vault: { kind: "vault", state: "ok", displayPath: DEMO_ROOT_PATHS.vault, message: null },
+    inbox: { kind: "inbox", state: "ok", displayPath: `${DEMO_ROOT_PATHS.vault}/Предметы/00 Входящие`, message: null },
+    backup: { kind: "backup", state: "not_configured", displayPath: null, message: "Не выбрана" },
+    downloads: { kind: "downloads", state: "not_configured", displayPath: null, message: "Не выбрана (наблюдение подключается на следующем этапе)" },
+    importReady: true,
+  };
+}
+
+function numberedMockName(name: string, index: number): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)} (${index})${name.slice(dot)}` : `${name} (${index})`;
+}
 
 export interface MockOptions {
   /** Множитель задержек: 1 — реалистично, 0 — мгновенно (тесты). */
@@ -76,6 +104,8 @@ export class MockDesktopBridge implements DesktopBridge {
   private log: Operation[] = [];
   private undoers = new Map<string, () => void>();
   private homeworkCandidates = new Map<string, FileRef[]>();
+  private roots: ManagedRoots = buildRoots();
+  private importResults = new Map<string, OperationResult<InboxImportReport>>();
   private codexAttempts = 0;
   private candidateSeq = 0;
   private readonly latency: number;
@@ -210,6 +240,120 @@ export class MockDesktopBridge implements DesktopBridge {
     // Автоклассификация после добавления, как это будет делать backend-наблюдатель.
     void this.classifyFiles(files.map((f) => f.id));
     return clone(files);
+  }
+
+  onNativeDragState(_listener: (active: boolean) => void): Unsubscribe {
+    return () => undefined;
+  }
+
+  /**
+   * Имитация импорта с тем же контрактом, что у backend: отчёт по каждому файлу,
+   * дубль (то же имя и размер — у HTML5 File нет содержимого для SHA-256),
+   * « (N)» при совпадении имени, повтор той же операции возвращает сохранённый итог.
+   */
+  async importFiles(items: DroppedItem[], operationId: string = newOperationId()): Promise<OperationResult<InboxImportReport>> {
+    const stored = this.importResults.get(operationId);
+    if (stored) return clone({ operation: stored.operation, value: { ...stored.value, replayed: true } });
+    if (items.length === 0) throw new BridgeError("blocked", "Не выбрано ни одного файла");
+    if (!this.roots.importReady) throw new BridgeError("blocked", "Хранилище Obsidian не выбрано. Откройте «Настройки → Управляемые каталоги».");
+
+    const op: Operation = { id: operationId, kind: "import", title: "Импорт во «Входящие»", detail: `Файлов: ${items.length}`, status: "running", startedAt: new Date().toISOString(), finishedAt: null, undoable: false, paths: [], backupPath: null, homeworkId: null };
+    this.log.unshift(op);
+    this.emitter.emit("operation:progress", { operationId, kind: "import", progress: 0, message: "Проверка файлов" });
+
+    const reports: ImportItemReport[] = [];
+    const added: InboxFile[] = [];
+    for (const [index, item] of items.entries()) {
+      await this.wait(160);
+      reports.push(this.mockImportOne(item, added));
+      this.emitter.emit("operation:progress", { operationId, kind: "import", progress: (index + 1) / items.length, message: item.name });
+    }
+    if (added.length > 0) this.inbox = [...added, ...this.inbox];
+    if (this.roots.inbox.state === "missing") this.roots.inbox = { ...this.roots.inbox, state: "ok", message: null };
+
+    const count = (status: ImportItemReport["status"]) => reports.filter((r) => r.status === status).length;
+    const report: InboxImportReport = { operationId, items: reports, imported: count("imported"), duplicates: count("duplicate"), failed: count("failed"), replayed: false };
+    op.paths = added.map((f) => `Предметы/00 Входящие/${f.name}`);
+    op.detail = `Добавлено: ${report.imported} · дублей: ${report.duplicates} · ошибок: ${report.failed}`;
+    op.finishedAt = new Date().toISOString();
+    if (added.length > 0) this.emitter.emit("inbox:file-added", { files: clone(added) });
+    this.emitter.emit("inbox:updated", { reason: "import", fileIds: reports.flatMap((r) => (r.status === "failed" ? [] : [r.file.id])) });
+    const firstError = reports.find((r) => r.status === "failed");
+    if (report.failed === items.length && firstError?.status === "failed") {
+      op.status = "failed";
+      this.emitter.emit("operation:failed", { operation: clone(op), error: firstError.error });
+    } else {
+      op.status = "completed";
+      this.emitter.emit("operation:completed", { operation: clone(op) });
+    }
+    const result = { operation: clone(op), value: report };
+    this.importResults.set(operationId, clone(result));
+    if (added.length > 0) void this.classifyFiles(added.map((f) => f.id));
+    return clone(result);
+  }
+
+  private mockImportOne(item: DroppedItem, added: InboxFile[]): ImportItemReport {
+    const name = item.name.replace(/[/\\:]/g, "-").trim();
+    if (!name) return { status: "failed", name: "Файл", error: { code: "blocked", message: "Не указано имя файла" } };
+    const active = [...added, ...this.inbox.filter((f) => f.status !== "routed")];
+    const same = active.find((f) => f.name === name && f.sizeBytes === item.sizeBytes);
+    if (same) return { status: "duplicate", name, file: clone(same), restored: false };
+    let candidate = name;
+    for (let n = 2; active.some((f) => f.name === candidate); n += 1) candidate = numberedMockName(name, n);
+    const renamedFrom = candidate === name ? null : name;
+    const file: InboxFile = {
+      id: nextFileId(),
+      name: candidate,
+      kind: kindFromName(candidate),
+      sizeBytes: item.sizeBytes,
+      addedAt: new Date().toISOString(),
+      origin: "drop",
+      status: "new",
+      classification: null,
+      duplicate: renamedFrom ? { existingPath: `Предметы/00 Входящие/${renamedFrom}`, sameContent: false, suggestedName: candidate } : null,
+    };
+    added.push(file);
+    return { status: "imported", name, file: clone(file), renamedFrom, recovered: false };
+  }
+
+  async getOperationResult(operationId: string): Promise<OperationRecord | null> {
+    await this.wait(60);
+    const stored = this.importResults.get(operationId);
+    if (stored) return clone({ operation: stored.operation, importReport: stored.value });
+    const op = this.log.find((o) => o.id === operationId);
+    return op ? clone({ operation: op, importReport: null }) : null;
+  }
+
+  async openInboxFile(fileId: string): Promise<void> {
+    await this.wait(60);
+    if (!this.inbox.some((f) => f.id === fileId)) throw new BridgeError("not_found", "Файл во «Входящих» не найден");
+  }
+
+  async revealInboxFile(fileId: string): Promise<void> {
+    await this.openInboxFile(fileId);
+  }
+
+  // ───────────── Управляемые каталоги (имитация) ─────────────
+
+  async getManagedRoots(): Promise<ManagedRoots> {
+    await this.wait(120);
+    return clone(this.roots);
+  }
+
+  async chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection> {
+    await this.wait(200);
+    // В браузере системного диалога нет: имитируем выбор демонстрационной папки.
+    this.roots = { ...this.roots, [kind]: { kind, state: "ok", displayPath: DEMO_ROOT_PATHS[kind], message: null } };
+    if (kind === "vault") this.roots.inbox = { ...this.roots.inbox, displayPath: `${DEMO_ROOT_PATHS.vault}/Предметы/00 Входящие` };
+    this.roots.importReady = this.roots.vault.state === "ok";
+    return clone({ cancelled: false, roots: this.roots });
+  }
+
+  async prepareInboxRoot(): Promise<ManagedRoots> {
+    await this.wait(120);
+    if (this.roots.vault.state !== "ok") throw new BridgeError("blocked", "Сначала выберите хранилище Obsidian");
+    this.roots.inbox = { ...this.roots.inbox, state: "ok", message: null };
+    return clone(this.roots);
   }
 
   async classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>> {

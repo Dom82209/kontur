@@ -1,7 +1,8 @@
-import type { BridgeEventName, BridgeListener, DesktopBridge, Unsubscribe } from "../types";
+import { assertNativeSourcePaths, filesFromImportReport, newOperationId } from "../intake";
+import type { BridgeEventName, BridgeListener, DesktopBridge, DroppedItem, Unsubscribe } from "../types";
 import { BridgeError } from "../types";
-import { listenToBridgeEvent } from "./events";
-import { unsupportedBackend, unsupportedBackendSync } from "./errors";
+import { listenToBridgeEvent, listenToIntakeEvent } from "./events";
+import { unsupportedBackend } from "./errors";
 import * as ipc from "./ipc";
 
 export interface TauriIpcClient {
@@ -15,9 +16,19 @@ export interface TauriIpcClient {
   getActivityLog: typeof ipc.getActivityLog;
   updateAutomationRules: typeof ipc.updateAutomationRules;
   updateClassification: typeof ipc.updateClassification;
+  checkManagedRoots: typeof ipc.checkManagedRoots;
+  chooseManagedRoot: typeof ipc.chooseManagedRoot;
+  prepareInboxRoot: typeof ipc.prepareInboxRoot;
+  pickImportFiles: typeof ipc.pickImportFiles;
+  importInboxFiles: typeof ipc.importInboxFiles;
+  getOperationResult: typeof ipc.getOperationResult;
+  openInboxFile: typeof ipc.openInboxFile;
+  revealInboxFile: typeof ipc.revealInboxFile;
+  revealInFinder: typeof ipc.revealInFinder;
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
+type IntakeSubscriber = typeof listenToIntakeEvent;
 
 async function nullWhenNotFound<T>(read: () => Promise<T>): Promise<T | null> {
   try {
@@ -34,6 +45,7 @@ export class TauriDesktopBridge implements DesktopBridge {
   constructor(
     private readonly ipcClient: TauriIpcClient = ipc,
     private readonly subscribe: EventSubscriber = listenToBridgeEvent,
+    private readonly subscribeIntake: IntakeSubscriber = listenToIntakeEvent,
   ) {}
 
   getSubjects: DesktopBridge["getSubjects"] = () => this.ipcClient.getSubjects();
@@ -55,11 +67,43 @@ export class TauriDesktopBridge implements DesktopBridge {
     return this.subscribe(event, listener);
   }
 
+  // ── Native intake и импорт во «Входящие» ──
+
+  pickFiles: DesktopBridge["pickFiles"] = async () => {
+    const items = await this.ipcClient.pickImportFiles();
+    return items.map((item): DroppedItem => ({ ...item, origin: "picker" }));
+  };
+
+  onNativeFileDrop: DesktopBridge["onNativeFileDrop"] = (listener) =>
+    this.subscribeIntake("intake:native-drop", ({ items }) => {
+      if (items.length > 0) listener(items.map((item): DroppedItem => ({ ...item, origin: "drop" })));
+    });
+
+  onNativeDragState: DesktopBridge["onNativeDragState"] = (listener) =>
+    this.subscribeIntake("intake:drag-state", ({ state }) => listener(state === "enter"));
+
+  importFiles: DesktopBridge["importFiles"] = async (items, operationId = newOperationId()) => {
+    assertNativeSourcePaths(items);
+    return this.ipcClient.importInboxFiles(operationId, ipc.toImportItems(items));
+  };
+
+  importDroppedFiles: DesktopBridge["importDroppedFiles"] = async (items) => {
+    const result = await this.importFiles(items);
+    return filesFromImportReport(result.value);
+  };
+
+  getOperationResult: DesktopBridge["getOperationResult"] = (operationId) =>
+    nullWhenNotFound(() => this.ipcClient.getOperationResult(operationId));
+  openInboxFile: DesktopBridge["openInboxFile"] = (fileId) => this.ipcClient.openInboxFile(fileId);
+  revealInboxFile: DesktopBridge["revealInboxFile"] = (fileId) => this.ipcClient.revealInboxFile(fileId);
+  revealInFinder: DesktopBridge["revealInFinder"] = (relativePath) => this.ipcClient.revealInFinder(relativePath);
+
+  getManagedRoots: DesktopBridge["getManagedRoots"] = () => this.ipcClient.checkManagedRoots();
+  chooseManagedRoot: DesktopBridge["chooseManagedRoot"] = (kind) => this.ipcClient.chooseManagedRoot(kind);
+  prepareInboxRoot: DesktopBridge["prepareInboxRoot"] = () => this.ipcClient.prepareInboxRoot();
+
   getDashboard: DesktopBridge["getDashboard"] = () => unsupportedBackend("Главная");
   createWeek: DesktopBridge["createWeek"] = () => unsupportedBackend("Создание недели");
-  pickFiles: DesktopBridge["pickFiles"] = () => unsupportedBackend("Выбор файлов");
-  onNativeFileDrop: DesktopBridge["onNativeFileDrop"] = () => unsupportedBackendSync("Native drag-and-drop");
-  importDroppedFiles: DesktopBridge["importDroppedFiles"] = () => unsupportedBackend("Импорт файлов");
   classifyFiles: DesktopBridge["classifyFiles"] = () => unsupportedBackend("Классификация файлов");
   previewRoute: DesktopBridge["previewRoute"] = () => unsupportedBackend("Предпросмотр раскладки");
   routeFiles: DesktopBridge["routeFiles"] = () => unsupportedBackend("Раскладка файлов");
@@ -95,7 +139,6 @@ export class TauriDesktopBridge implements DesktopBridge {
   setPackageCheck: DesktopBridge["setPackageCheck"] = () => unsupportedBackend("Чек-лист комплекта");
   confirmSubmission: DesktopBridge["confirmSubmission"] = () => unsupportedBackend("Подтверждение отправки");
   getSubmissionReceipt: DesktopBridge["getSubmissionReceipt"] = () => unsupportedBackend("Снимок отправленной работы");
-  revealInFinder: DesktopBridge["revealInFinder"] = () => unsupportedBackend("Показ в Finder");
   openProviderApp: DesktopBridge["openProviderApp"] = () => unsupportedBackend("Открытие приложения провайдера");
   connectProvider: DesktopBridge["connectProvider"] = () => unsupportedBackend("Подключение провайдера");
   disconnectProvider: DesktopBridge["disconnectProvider"] = () => unsupportedBackend("Отключение провайдера");

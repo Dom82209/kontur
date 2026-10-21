@@ -496,8 +496,8 @@ fn persistent_path_deserialization_revalidates_input() {
 }
 
 #[test]
-fn schema_version_remains_two() {
-    assert_eq!(CURRENT_SCHEMA_VERSION, 2);
+fn schema_version_is_three_after_inbox_import_stage() {
+    assert_eq!(CURRENT_SCHEMA_VERSION, 3);
 }
 
 fn undo_context() -> UndoContext {
