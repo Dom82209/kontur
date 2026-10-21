@@ -6,7 +6,9 @@ import type {
   Subject,
   Week,
 } from "../types";
-import { BridgeError, type BridgeErrorCode } from "../types";
+import { BridgeError } from "../types";
+import { toBridgeError } from "./errors";
+import { requireTauriRuntime } from "./runtime";
 
 export interface BackendHealth {
   ready: boolean;
@@ -20,27 +22,6 @@ type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unkno
 
 let testInvoke: Invoke | null | undefined;
 
-const ERROR_CODES = new Set<BridgeErrorCode>([
-  "not_found",
-  "conflict",
-  "duplicate",
-  "provider_unavailable",
-  "reauth_required",
-  "confirmation_required",
-  "io_error",
-  "not_undoable",
-  "immutable",
-  "blocked",
-  "cancelled",
-  "database",
-  "backend_unavailable",
-  "unknown",
-]);
-
-function hasTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in globalThis;
-}
-
 async function resolveInvoke(): Promise<Invoke> {
   if (testInvoke !== undefined) {
     if (testInvoke === null) {
@@ -49,9 +30,7 @@ async function resolveInvoke(): Promise<Invoke> {
     return testInvoke;
   }
 
-  if (!hasTauriRuntime()) {
-    throw new BridgeError("backend_unavailable", "Tauri backend недоступен вне нативного приложения");
-  }
+  requireTauriRuntime();
 
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -59,20 +38,6 @@ async function resolveInvoke(): Promise<Invoke> {
   } catch {
     throw new BridgeError("backend_unavailable", "Не удалось загрузить Tauri IPC runtime");
   }
-}
-
-function toBridgeError(error: unknown): BridgeError {
-  if (error instanceof BridgeError) return error;
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as { code?: unknown; message?: unknown };
-    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
-      const code = ERROR_CODES.has(candidate.code as BridgeErrorCode)
-        ? (candidate.code as BridgeErrorCode)
-        : "unknown";
-      return new BridgeError(code, candidate.message);
-    }
-  }
-  return new BridgeError("unknown", error instanceof Error ? error.message : "Неизвестная ошибка backend");
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {

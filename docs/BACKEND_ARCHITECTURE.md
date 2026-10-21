@@ -1,6 +1,6 @@
 # Архитектура Rust backend
 
-Статус документа: этап 4C.1. Read-only путь SQLite → Rust → Tauri IPC → TypeScript реализован; UI по-прежнему использует `MockDesktopBridge`.
+Статус документа: этап 4C.2A. Read-only путь SQLite → Rust → Tauri IPC → `TauriDesktopBridge` реализован; UI по-прежнему использует `MockDesktopBridge`.
 
 ## Модули
 
@@ -11,7 +11,7 @@
 - `domain` — доменные enum и входные структуры persistence.
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
-- `events` — пустая типизированная граница для последующего подключения Tauri events; mock-события frontend сюда не перенесены.
+- `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; production write-события пока не вызываются.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
 
@@ -52,7 +52,11 @@ Foreign keys задают владение и политику удаления,
 
 Зарегистрированы команды `backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log`. Запросы по идентификатору возвращают `{ code: "not_found", message }`, если запись отсутствует. Повреждённые JSON, неизвестные enum и небезопасные persistent paths дают структурированную ошибку `database`, без panic.
 
-Низкоуровневый TypeScript-клиент находится в `src/lib/bridge/tauri/ipc.ts`. Он лениво загружает официальный `@tauri-apps/api/core`, проверяет Tauri runtime, преобразует Rust-ошибки в `BridgeError` и вне native runtime возвращает `backend_unavailable`. Клиент не подменяет backend mock-данными и пока не является `TauriDesktopBridge`.
+Низкоуровневый TypeScript-клиент находится в `src/lib/bridge/tauri/ipc.ts`. Он лениво загружает официальный `@tauri-apps/api/core`, проверяет Tauri runtime, преобразует Rust-ошибки в `BridgeError` и вне native runtime возвращает `backend_unavailable`.
+
+`TauriDesktopBridge` использует эти функции для восьми методов чтения. `getWeek` и `getHomework` преобразуют только `not_found` в `null`; остальные ошибки сохраняются. Все отсутствующие возможности возвращают `backend_unavailable`, без mock fallback. Отдельная `createTauriBridge()` не используется основным UI.
+
+`tauri/runtime.ts` является общей runtime boundary для invoke/listen. `tauri/events.ts` согласует асинхронный Tauri `listen()` с синхронным `DesktopBridge.on()`: ранняя отписка запоминается и вызывает настоящий unlisten сразу после регистрации; callbacks после отмены блокируются, ошибки регистрации контролируемо нормализуются.
 
 ## Health check
 
@@ -66,6 +70,6 @@ Tauri-команда `backend_health` проверяет доступность 
 
 ## Граница следующего этапа
 
-React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; низкоуровневый IPC-клиент ещё не подключён к UI.
+React не обращается к SQLite напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` намеренно продолжает создавать `MockDesktopBridge`; Tauri-адаптер не подключён к UI до появления write-команд. Hybrid bridge запрещён, чтобы реальные чтения не смешивались с несохраняемыми mock-мутациями.
 
-Для этапа 4C.2 остаются write-команды и полноценный `TauriDesktopBridge`, события, native picker/drop, файловые сервисы с проверкой путей, backup/undo и watcher. Provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot на диске также не входят в 4C.1.
+Для этапа 4C.2B остаются write-команды, фактические вызовы event helper и безопасные мутации. Native picker/drop, файловые сервисы с проверкой путей, backup/undo, watcher, provider adapters, AI/LMS-интеграции и неизменяемый submission snapshot также не входят в 4C.2A.

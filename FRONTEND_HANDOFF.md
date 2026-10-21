@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и read-only IPC этапа 4C.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust read-only backend готов, полный `TauriDesktopBridge` ещё не реализован.
+Документ фиксирует frontend-контракт и границу этапа 4C.2A. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust read-only backend и `TauriDesktopBridge` для готовых чтений реализованы, но адаптер ещё не подключён к UI.
 
 ## 1. Граница архитектуры
 
@@ -15,7 +15,8 @@ React pages/components
 
 - React не обращается к файловой системе, shell, cookies или Tauri API напрямую.
 - Единственная системная граница — типизированный `DesktopBridge` из `src/lib/bridge`.
-- `createBridge()` сейчас всегда создаёт `MockDesktopBridge`. Модуль `src/lib/bridge/tauri/ipc.ts` предоставляет низкоуровневые read-only вызовы, но намеренно не подключён к UI и не делает fallback на mock.
+- `createBridge()` сейчас всегда создаёт `MockDesktopBridge`. Явная фабрика `createTauriBridge()` существует отдельно и будет подключена только после согласованного набора write-команд.
+- Hybrid bridge запрещён: реальный адаптер не смешивает SQLite-чтения с mock-записями, поскольку это создаёт несогласованное состояние и ложный успешный результат операций.
 - Пути в моделях — относительные пути внутри выбранного хранилища. Абсолютный путь пользователя не хардкодится.
 - Все даты — ISO 8601, размеры — байты, идентификаторы непрозрачны для frontend.
 
@@ -161,7 +162,25 @@ start operation
 
 `backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log` зарегистрированы в Rust и доступны через типизированные функции одноимённого уровня в `tauri/ipc.ts`. Аргументы IPC передаются в camelCase, DTO возвращаются в точной форме frontend-контракта. Ошибки Rust `{ code, message }` преобразуются в `BridgeError`; отсутствие native runtime даёт `backend_unavailable`.
 
-Это только низкоуровневая граница: `TauriDesktopBridge`, write-команды и Tauri events не реализованы. UI продолжает использовать `MockDesktopBridge`.
+`TauriDesktopBridge` подключает к этим командам `getSubjects`, `getWeeks`, `getWeek`, `getInboxFiles`, `getHomeworkList`, `getHomework`, `getAutomationRules`, `getActivityLog`. Только `getWeek` и `getHomework` переводят backend `not_found` в контрактный `null`; остальные ошибки пробрасываются. Все прочие методы интерфейса явно отклоняются с `backend_unavailable` и не используют mock.
+
+Пока unsupported:
+
+- dashboard/week writes: `getDashboard`, `createWeek`;
+- intake/routing: `pickFiles`, `onNativeFileDrop`, `importDroppedFiles`, `classifyFiles`, `updateClassification`, `previewRoute`, `routeFiles`;
+- версии: `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`;
+- AI/workflow: `getStyleProfile`, `prepareSourceBundle`, `setSourceIncluded`, `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `createRevisionPrompt`, `sendPromptToAuthor`, `updatePromptText`, `getPrompts`, `cancelRun`, `getReviewRuns`, `saveRunAsIteration`, `getIterations`, `compareVersions`;
+- преподаватель: `getTeacherComments`, `saveTeacherComments`, `importTeacherTranscript`, `removeTeacherComment`, `runTeacherReview`, `getTeacherRequirements`, `resolveRequirement`;
+- сдача: `getReadiness`, `markReadyToSubmit`, `buildSubmissionPackage`, `getSubmissionPackage`, `setPackageCheck`, `confirmSubmission`, `getSubmissionReceipt`;
+- system/provider/write: `revealInFinder`, `openProviderApp`, `connectProvider`, `disconnectProvider`, `getProviderStatus`, `updateAutomationRules`, `undoOperation`.
+
+UI продолжает использовать `MockDesktopBridge`: импорт Tauri-фабрики в основной `createBridge()` отсутствует.
+
+### Tauri event adapter
+
+`tauri/events.ts` лениво импортирует `@tauri-apps/api/event` и предоставляет типизированный `listenToBridgeEvent`. Синхронный `Unsubscribe` помечает подписку неактивной немедленно. Если настоящий `unlisten` приходит позже, он вызывается сразу; повторная отписка безопасна, а callback после неё игнорируется. Ошибка регистрации нормализуется в `BridgeError` и передаётся контролируемому error handler, поэтому rejected registration promise не становится unhandled rejection.
+
+Runtime detection едина для IPC и events. В browser/mock окружении Tauri globals и модули не требуются. Rust хранит точные имена событий и camelCase payload DTO, но до появления write-операций в 4C.2B production events не эмитятся.
 
 ## 8. Native и browser/mock file intake
 
@@ -218,4 +237,4 @@ start operation
 
 ## 12. Что остаётся backend-этапу
 
-На этапе 4C.2 реализовать `TauriDesktopBridge`, write-команды/events и безопасные файловые операции. Далее остаются системный picker/native drop, watcher, классификация, атомарные копирования/backup/undo, открытие Finder и официальных приложений, provider adapters, хэши, пакеты и immutable snapshot. Read-only SQLite/IPC уже готов; frontend-контракт зафиксирован выше.
+На этапе 4C.2B реализовать согласованный набор write-команд и места фактического emit, затем отдельно принять решение о подключении `createTauriBridge()` к UI. Далее остаются системный picker/native drop, watcher, классификация, атомарные копирования/backup/undo, открытие Finder и официальных приложений, provider adapters, хэши, пакеты и immutable snapshot.

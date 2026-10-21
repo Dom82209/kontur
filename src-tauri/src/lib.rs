@@ -4,7 +4,7 @@ pub mod db;
 pub mod domain;
 pub mod dto;
 pub mod error;
-mod events;
+pub mod events;
 pub mod query_service;
 pub mod repositories;
 

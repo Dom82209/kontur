@@ -74,6 +74,12 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
     expect(error).toMatchObject({ code: "not_found", message: "week not found" });
   });
 
+  it("преобразует неизвестный Rust-код в unknown, сохраняя сообщение", async () => {
+    __setInvokeForTests(vi.fn(async () => Promise.reject({ code: "future_code", message: "future failure" })));
+
+    await expect(getSubjects()).rejects.toMatchObject({ code: "unknown", message: "future failure" });
+  });
+
   it("вне Tauri возвращает backend_unavailable", async () => {
     __setInvokeForTests(null);
 
