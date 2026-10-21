@@ -1,17 +1,17 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
+    ffi::{OsStr, OsString},
+    fs::File,
 };
 
-use rustix::fs::{renameat_with, RenameFlags, CWD};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{AppError, BackendError};
 
 use super::{
-    hashing::{sha256_file, Sha256Digest},
+    fd::{self, DirFd, Identity},
+    hashing::Sha256Digest,
+    hooks::{self, HookPoint},
     paths::{blocked, io_error},
     SourceFile, VerifiedDestination,
 };
@@ -24,38 +24,52 @@ pub struct CopyReceipt {
     pub size_bytes: u64,
 }
 
-struct TempGuard {
-    path: PathBuf,
-    published: bool,
+/// Файл, созданный этой операцией внутри подтверждённого каталога.
+///
+/// Guard удерживает fd каталога и identity созданного inode. Cleanup выполняется
+/// `unlinkat(dir_fd, name)` и только если имя всё ещё указывает на тот же regular inode;
+/// абсолютный путь повторно не разрешается.
+struct CreatedEntry {
+    dir: DirFd,
+    name: OsString,
+    identity: Identity,
+    keep: bool,
 }
 
-struct FinalGuard {
-    path: PathBuf,
-    verified: bool,
-}
-
-impl Drop for FinalGuard {
-    fn drop(&mut self) {
-        if !self.verified {
-            let _cleanup_result = fs::remove_file(&self.path);
+impl CreatedEntry {
+    fn new(dir: &DirFd, name: OsString, identity: Identity) -> Self {
+        Self {
+            dir: DirFd::clone(dir),
+            name,
+            identity,
+            keep: false,
         }
     }
 }
 
-impl Drop for TempGuard {
+impl Drop for CreatedEntry {
     fn drop(&mut self) {
-        if !self.published {
-            let _cleanup_result = fs::remove_file(&self.path);
+        if self.keep {
+            return;
         }
+        hooks::fire(|| HookPoint::BeforeCleanup {
+            file_name: self.name.clone(),
+        });
+        let _removed = fd::unlink_if_same(&self.dir, &self.name, self.identity);
     }
 }
+
+/// Temp-файл до публикации.
+struct TempGuard(CreatedEntry);
+
+/// Опубликованный файл до успешной финальной проверки.
+struct FinalGuard(CreatedEntry);
 
 pub fn atomic_copy(
     source: &SourceFile,
     destination: &VerifiedDestination,
 ) -> Result<CopyReceipt, AppError> {
-    let expected_hash = sha256_file(source.path())?;
-    atomic_copy_expected(source, destination, &expected_hash)
+    copy_inner(source, destination, None)
 }
 
 pub(crate) fn atomic_copy_expected(
@@ -63,81 +77,60 @@ pub(crate) fn atomic_copy_expected(
     destination: &VerifiedDestination,
     expected_hash: &Sha256Digest,
 ) -> Result<CopyReceipt, AppError> {
-    let expected_size = source.revalidate()?;
-    destination.revalidate_parents()?;
-    reject_existing_destination(&destination.absolute())?;
+    copy_inner(source, destination, Some(expected_hash))
+}
+
+fn copy_inner(
+    source: &SourceFile,
+    destination: &VerifiedDestination,
+    expected_hash: Option<&Sha256Digest>,
+) -> Result<CopyReceipt, AppError> {
+    let size_before = source.revalidate()?;
     let parent = destination.ensure_parent()?;
-    destination.revalidate_parents()?;
-    reject_existing_destination(&destination.absolute())?;
+    let final_name = destination.file_name().to_owned();
+    hooks::fire(|| HookPoint::BeforeTempCreate);
 
-    let mut source_file = File::open(source.path())
-        .map_err(|_| io_error("Не удалось открыть исходный файл для чтения"))?;
-    if !source_file
-        .metadata()
-        .map_err(|_| io_error("Не удалось проверить открытый исходный файл"))?
-        .is_file()
-    {
-        return Err(blocked("Источник больше не является обычным файлом"));
-    }
+    destination.verify_parent(&parent)?;
+    reject_existing(&parent, &final_name)?;
 
-    let temp_path = parent.join(format!(".kontur-{}.tmp", Uuid::new_v4()));
-    let mut guard = TempGuard {
-        path: temp_path.clone(),
-        published: false,
-    };
-    let mut temp = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-        .map_err(|_| io_error("Не удалось создать временный файл"))?;
+    let temp_name = OsString::from(format!(".kontur-{}.tmp", Uuid::new_v4()));
+    let mut temp = fd::create_exclusive(&parent, &temp_name)?;
+    let temp_identity = fd::fd_identity(&temp)?;
+    let mut temp_guard = TempGuard(CreatedEntry::new(&parent, temp_name.clone(), temp_identity));
 
-    let copied = copy_stream(&mut source_file, &mut temp)?;
-    temp.flush()
-        .map_err(|_| io_error("Не удалось записать временный файл"))?;
+    let (copied_hash, copied) = fd::copy_and_hash(source.file(), &mut temp)?;
     temp.sync_all()
         .map_err(|_| io_error("Не удалось синхронизировать временный файл"))?;
-    drop(temp);
 
-    if copied != expected_size {
+    let size_after = source.revalidate()?;
+    if copied != size_before || copied != size_after {
         return Err(io_error("Размер временной копии не совпадает с источником"));
     }
-    let copied_hash = sha256_file(&temp_path)?;
-    if &copied_hash != expected_hash {
+    if expected_hash.is_some_and(|expected| expected != &copied_hash) {
         return Err(io_error(
             "SHA-256 временной копии не совпадает с источником",
         ));
     }
+    verify_open_file(&temp, &copied_hash, copied)?;
 
-    destination.revalidate_parents()?;
-    reject_existing_destination(&destination.absolute())?;
-    let final_path = destination.absolute();
-    renameat_with(CWD, &temp_path, CWD, &final_path, RenameFlags::NOREPLACE).map_err(|_| {
-        if fs::symlink_metadata(&final_path).is_ok() {
-            BackendError::conflict("Целевой файл уже существует")
-        } else {
-            io_error("Не удалось атомарно опубликовать целевой файл")
-        }
-    })?;
-    let mut final_guard = FinalGuard {
-        path: final_path.clone(),
-        verified: false,
-    };
-    guard.published = true;
+    hooks::fire(|| HookPoint::BeforeRename);
+    destination.verify_parent(&parent)?;
+    reject_existing(&parent, &final_name)?;
+    fd::rename_noreplace(&parent, &temp_name, &final_name)?;
+    temp_guard.0.keep = true;
+    let mut final_guard = FinalGuard(CreatedEntry::new(
+        &parent,
+        final_name.clone(),
+        temp_identity,
+    ));
 
-    destination.revalidate_parents()?;
-    let final_metadata = fs::symlink_metadata(&final_path)
-        .map_err(|_| io_error("Не удалось проверить созданный файл"))?;
-    if final_metadata.file_type().is_symlink()
-        || !final_metadata.is_file()
-        || final_metadata.len() != expected_size
-        || sha256_file(&final_path)? != copied_hash
-    {
-        return Err(io_error("Проверка созданного файла не пройдена"));
-    }
-    File::open(&parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| io_error("Не удалось синхронизировать целевой каталог"))?;
-    final_guard.verified = true;
+    hooks::fire(|| HookPoint::BeforeFinalVerify);
+    destination.verify_parent(&parent)?;
+    verify_published(&parent, &final_name, temp_identity, copied)?;
+    verify_open_file(&temp, &copied_hash, copied)?;
+    fd::sync_directory(&parent)?;
+    final_guard.0.keep = true;
+
     Ok(CopyReceipt {
         destination: destination.relative().clone(),
         sha256: copied_hash,
@@ -145,27 +138,36 @@ pub(crate) fn atomic_copy_expected(
     })
 }
 
-fn copy_stream(source: &mut File, destination: &mut File) -> Result<u64, AppError> {
-    let mut total = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = source
-            .read(&mut buffer)
-            .map_err(|_| io_error("Ошибка чтения исходного файла"))?;
-        if read == 0 {
-            return Ok(total);
-        }
-        destination
-            .write_all(&buffer[..read])
-            .map_err(|_| io_error("Ошибка записи временного файла"))?;
-        total += read as u64;
+fn reject_existing(parent: &DirFd, name: &OsStr) -> Result<(), AppError> {
+    if fd::entry_exists(parent, name)? {
+        return Err(BackendError::conflict("Целевой файл уже существует"));
     }
+    Ok(())
 }
 
-fn reject_existing_destination(path: &Path) -> Result<(), AppError> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(BackendError::conflict("Целевой файл уже существует")),
-        Err(_) => Err(io_error("Не удалось проверить целевой файл")),
+/// Повторно хэширует содержимое через уже открытый дескриптор созданного inode.
+fn verify_open_file(file: &File, expected: &Sha256Digest, size: u64) -> Result<(), AppError> {
+    let (hash, read) = fd::hash_open_file(file)?;
+    if &hash != expected || read != size {
+        return Err(io_error("Проверка созданного файла не пройдена"));
     }
+    Ok(())
+}
+
+/// Проверяет, что опубликованное имя в подтверждённом каталоге — тот же regular inode.
+fn verify_published(
+    parent: &DirFd,
+    name: &OsStr,
+    identity: Identity,
+    size: u64,
+) -> Result<(), AppError> {
+    let stat = fd::stat_leaf(parent, name)?.ok_or_else(|| io_error("Опубликованный файл исчез"))?;
+    if fd::file_type(&stat) != rustix::fs::FileType::RegularFile || Identity::of(&stat) != identity
+    {
+        return Err(blocked("Опубликованный файл был подменён"));
+    }
+    if fd::stat_size(&stat) != size {
+        return Err(io_error("Проверка созданного файла не пройдена"));
+    }
+    Ok(())
 }

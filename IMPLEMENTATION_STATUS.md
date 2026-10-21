@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 4D.1 завершён: создан изолированный безопасный Rust file service с типизированными roots/paths, потоковым SHA-256, планированием дедупликации, no-clobber atomic copy, backup manifest и валидацией undo. Он не подключён к Tauri commands или UI; все filesystem-тесты используют `TempDir`. Schema version остаётся 2.
+Этап 4D.1.1 завершён: безопасный Rust file service переведён на fd-relative операции. Корни и source открываются один раз, обход и все мутации внутри корней выполняются через `openat`/`mkdirat`/`statat`/`renameat_with`/`unlinkat` относительно открытых directory fd с `O_DIRECTORY`, `O_NOFOLLOW` и `CLOEXEC`. Сервис по-прежнему не подключён к Tauri commands или UI; все filesystem-тесты используют `TempDir`. Schema version остаётся 2.
 
 ## Что уже реализовано
 
@@ -38,7 +38,7 @@
 ## Что не закончено
 
 - `TauriDesktopBridge` создан, но пока не подключён к `createBridge()`; основной UI всегда получает mock-адаптер.
-- Read-only Rust-команды и две DB-only write-команды готовы. Фундамент файловых операций/backup/undo реализован изолированно, но не подключён к production-командам; watcher и автоматический классификатор отсутствуют.
+- Read-only Rust-команды и две DB-only write-команды готовы. Фундамент файловых операций/backup/undo реализован изолированно и fd-relative (4D.1.1), но не подключён к production-командам; watcher и автоматический классификатор отсутствуют.
 - Нет реального создания структуры Obsidian, заметок, ссылок и метаданных Finder.
 - Нет реальных адаптеров локальных клиентов Codex и Claude; анализ, проверка и создание версий сейчас симулируются mock-слоем.
 - Нет реального выбора папок через системный диалог и открытия Finder/официальных приложений провайдеров.
@@ -95,6 +95,20 @@
 - Низкоуровневый IPC и `TauriDesktopBridge` делегируют обе команды без HTTP, mock fallback и скрытой подмены backend. `createBridge()` не изменён.
 - Секретоподобные и неизвестные поля AutomationRules отклоняются; пороги и инварианты подтверждений проверяются до записи.
 - Всего проходит 66 Rust- и 43 frontend-теста. Frontend-дизайн, CSS, миграции и schema version не изменялись.
+
+## fd-relative file service — этап 4D.1.1
+
+- Устранён TOCTOU/symlink-race: прежняя реализация проверяла родителей по canonical path, но temp, rename, финальную проверку и cleanup выполняла по абсолютным строковым путям.
+- Новый модуль `file_service/fd.rs`: корень открывается один раз `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`; каждый компонент относительного пути открывается отдельным `openat` с `O_NOFOLLOW`, отсутствующие каталоги создаются `mkdirat` с повторным `openat`. Symlink или файл в любом промежуточном компоненте даёт `blocked`.
+- `ControlledRoot`, `InboxRoot` и `VerifiedDestination` хранят directory fd (`Arc<OwnedFd>`); метод получения абсолютного пути удалён.
+- `SourceFile` открывается один раз (`O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`) и хранит `File` + identity; хэш, размер и копирование читают тот же inode через `pread`. Копирование и SHA-256 выполняются одним проходом; размер до/после и число байт обязаны совпасть.
+- Temp создаётся `openat(O_CREAT | O_EXCL | O_NOFOLLOW)` в fd родителя, публикуется `renameat_with(dir_fd, …, RENAME_NOREPLACE)`, финальная проверка сравнивает `(st_dev, st_ino)` опубликованного имени с temp и повторно хэширует через fd.
+- `verify_parent_identity` перед rename, после rename и в конце planning/undo повторно обходит путь от root fd и сравнивает inode родителя; подмена каталога → `blocked`.
+- TempGuard/FinalGuard удаляют только созданный этой операцией inode: `statat(AT_SYMLINK_NOFOLLOW)` + сравнение identity + `unlinkat(dir_fd)`; абсолютный путь не разрешается.
+- Planning, deduplication (`statat` в том же dir fd), backup (`SourceFile::open_in` + `atomic_copy_expected`) и undo-validation стали fd-relative. Семантика сохранена: overwrite невозможен, `SameContent` не создаёт копию, `NameConflict` предлагает `(2)`, `(3)`…, кириллица и расширение сохраняются.
+- Добавлены test-only hooks (`file_service/hooks.rs`; в production — пустая inline-функция) и 22 детерминированных race-теста без sleep, включая вариант с `Barrier` между потоками: подмена родителя на symlink до temp, перед rename, перед финальной проверкой, перед cleanup, при planning и при undo; каждый тест проверяет неизменность внешнего каталога. Mutation-проверка: удаление identity-проверок ломает соответствующие race-тесты.
+- Всего проходит 124 Rust- и 43 frontend-теста. Новых Tauri commands, events, capabilities, UI, миграций и зависимостей нет; schema version 2.
+- Rust-проверки этого этапа выполнены в Linux x86_64 (cargo 1.97.0, rustix 1.1.5 из `Cargo.lock`), а не на Mac пользователя: на macOS-окружение в этой сессии не было доступа к терминалу. Код использует только API rustix, доступные для `apple` (`RENAME_NOREPLACE` → `renameatx_np(RENAME_EXCL)`), но `cargo test` на `aarch64-apple-darwin` нужно повторить локально. `tauri:build` не запускался: этап не затрагивает runtime.
 
 ## Безопасный файловый сервис — этап 4D.1
 
@@ -187,9 +201,9 @@
 | `cargo fmt --check` | Успешно; форматирование соответствует rustfmt |
 | `cargo check` | Успешно; существующая Tauri-оболочка компилируется |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Успешно; предупреждений нет |
-| `cargo test` | Успешно; 102 Rust-теста пройдено на этапе 4D.1 |
+| `cargo test` | Успешно; 124 Rust-теста пройдено на этапе 4D.1.1 (Linux x86_64) |
 | `npm run tauri:dev` | Успешно; нативное окно открыто и корректно закрыто |
-| `npm run tauri:build -- --debug --bundles app` | Успешно; debug `Контур.app` собран |
+| `npm run tauri:build -- --debug --bundles app` | Успешно на этапе 4D.1; на 4D.1.1 не запускался (runtime не затронут) |
 
 ## Git
 

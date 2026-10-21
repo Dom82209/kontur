@@ -1,16 +1,24 @@
 use std::{
     ffi::OsStr,
-    fs,
-    path::{Component, Path, PathBuf},
+    fs::{self, File},
+    path::{Component, Path},
+    sync::Arc,
 };
 
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 use crate::error::{AppError, BackendError, ErrorCode};
 
+use super::fd::{self, DirFd, Identity};
+
+/// Контролируемый корень, привязанный к открытому directory fd.
+///
+/// Канонический путь используется только при создании для проверок политики
+/// (не `/`, не home, не широкий системный каталог). После открытия все операции
+/// выполняются относительно `fd`, а не через повторное разрешение строки пути.
 #[derive(Debug, Clone)]
 pub(crate) struct ControlledRoot {
-    canonical: PathBuf,
+    fd: DirFd,
 }
 
 impl ControlledRoot {
@@ -42,67 +50,35 @@ impl ControlledRoot {
                 }
             }
         }
-        Ok(Self { canonical })
+        let fd = fd::open_root_directory(&canonical)
+            .map_err(|_| blocked(format!("{label} должен быть обычным каталогом")))?;
+        Ok(Self { fd })
     }
 
-    fn validate_existing_parents(&self, relative: &PersistentPath) -> Result<(), AppError> {
-        let mut current = self.canonical.clone();
-        let components: Vec<_> = relative.as_path().components().collect();
-        for component in components.iter().take(components.len().saturating_sub(1)) {
-            let Component::Normal(component) = component else {
-                return Err(blocked("небезопасный компонент целевого пути"));
-            };
-            current.push(component);
-            match fs::symlink_metadata(&current) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                        return Err(blocked("целевая папка небезопасна"));
-                    }
-                    let canonical = fs::canonicalize(&current)
-                        .map_err(|_| blocked("не удалось проверить целевую папку"))?;
-                    if !canonical.starts_with(&self.canonical) {
-                        return Err(blocked("целевая папка выходит за разрешённый корень"));
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-                Err(_) => return Err(io_error("не удалось проверить целевую папку")),
-            }
-        }
-        Ok(())
+    pub(crate) fn fd(&self) -> &DirFd {
+        &self.fd
     }
 
-    pub(crate) fn ensure_parent(&self, relative: &PersistentPath) -> Result<PathBuf, AppError> {
-        let mut current = self.canonical.clone();
-        let components: Vec<_> = relative.as_path().components().collect();
-        for component in components.iter().take(components.len().saturating_sub(1)) {
-            let Component::Normal(component) = component else {
-                return Err(blocked("небезопасный компонент целевого пути"));
-            };
-            current.push(component);
-            match fs::symlink_metadata(&current) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                        return Err(blocked("целевая папка небезопасна"));
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    fs::create_dir(&current)
-                        .map_err(|_| io_error("не удалось создать целевую папку"))?;
-                }
-                Err(_) => return Err(io_error("не удалось проверить целевую папку")),
-            }
-            let canonical = fs::canonicalize(&current)
-                .map_err(|_| blocked("не удалось проверить целевую папку"))?;
-            if !canonical.starts_with(&self.canonical) {
-                return Err(blocked("целевая папка выходит за разрешённый корень"));
-            }
-        }
-        self.validate_existing_parents(relative)?;
-        Ok(current)
+    /// Обходит существующих родителей без создания. `None` — родитель ещё не создан.
+    pub(crate) fn open_existing_parent(
+        &self,
+        relative: &PersistentPath,
+    ) -> Result<Option<DirFd>, AppError> {
+        fd::walk_parent(&self.fd, relative, false)
     }
 
-    pub(crate) fn absolute(&self, relative: &PersistentPath) -> PathBuf {
-        self.canonical.join(relative.as_path())
+    /// Обходит и создаёт родителей по одному через `mkdirat` внутри корня.
+    pub(crate) fn ensure_parent(&self, relative: &PersistentPath) -> Result<DirFd, AppError> {
+        fd::walk_parent(&self.fd, relative, true)?
+            .ok_or_else(|| io_error("не удалось создать целевую папку"))
+    }
+
+    pub(crate) fn verify_parent(
+        &self,
+        relative: &PersistentPath,
+        parent: &DirFd,
+    ) -> Result<(), AppError> {
+        fd::verify_parent_identity(&self.fd, relative, parent)
     }
 }
 
@@ -138,21 +114,13 @@ pub struct InboxRoot {
 }
 
 impl InboxRoot {
+    /// Открывает папку входящих покомпонентно от fd vault; symlink в любом компоненте отклоняется.
     pub fn new(vault: &VaultRoot, path: PersistentPath) -> Result<Self, AppError> {
-        let absolute = vault.0.absolute(&path);
-        vault.0.validate_existing_parents(&path)?;
-        let metadata = fs::symlink_metadata(&absolute)
-            .map_err(|_| blocked("Контролируемая папка входящих не существует"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(blocked("Контролируемая папка входящих небезопасна"));
-        }
-        let canonical = fs::canonicalize(&absolute)
-            .map_err(|_| blocked("Не удалось проверить папку входящих"))?;
-        if canonical == vault.0.canonical || !canonical.starts_with(&vault.0.canonical) {
-            return Err(blocked("Папка входящих должна находиться внутри vault"));
-        }
+        let fd = fd::walk_directory(vault.0.fd(), &path)
+            .map_err(|_| blocked("Контролируемая папка входящих небезопасна"))?
+            .ok_or_else(|| blocked("Контролируемая папка входящих не существует"))?;
         Ok(Self {
-            root: ControlledRoot { canonical },
+            root: ControlledRoot { fd },
         })
     }
 
@@ -161,9 +129,14 @@ impl InboxRoot {
     }
 }
 
+/// Недоверенный source, открытый ровно один раз.
+///
+/// Хэш, размер и копирование читают один и тот же открытый inode через `pread`;
+/// повторного разрешения строкового пути нет.
 #[derive(Debug, Clone)]
 pub struct SourceFile {
-    canonical: PathBuf,
+    file: Arc<File>,
+    identity: Identity,
 }
 
 impl SourceFile {
@@ -171,37 +144,45 @@ impl SourceFile {
         if !path.is_absolute() {
             return Err(blocked("Исходный файл должен иметь абсолютный путь"));
         }
-        let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => BackendError::not_found("Исходный файл не найден"),
-            _ => io_error("Не удалось проверить исходный файл"),
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(blocked(
-                "Символические ссылки нельзя использовать как источник",
-            ));
-        }
-        if !metadata.is_file() {
-            return Err(blocked("Источник должен быть обычным файлом"));
-        }
-        let canonical =
-            fs::canonicalize(path).map_err(|_| io_error("Не удалось проверить исходный файл"))?;
-        Ok(Self { canonical })
+        let (file, stat) = fd::open_source_path(path)?;
+        Ok(Self {
+            file: Arc::new(file),
+            identity: Identity::of(&stat),
+        })
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        &self.canonical
+    /// Открывает файл внутри контролируемого корня покомпонентно (для backup).
+    pub(crate) fn open_in(destination: &VerifiedDestination) -> Result<Self, AppError> {
+        let parent = destination
+            .open_existing_parent()?
+            .ok_or_else(|| BackendError::not_found("Исходный файл не найден"))?;
+        match fd::open_leaf(&parent, destination.file_name())? {
+            fd::Leaf::Missing => Err(BackendError::not_found("Исходный файл не найден")),
+            fd::Leaf::NotRegular => Err(blocked("Источник должен быть обычным файлом")),
+            fd::Leaf::File(file, stat) => {
+                destination.verify_parent(&parent)?;
+                Ok(Self {
+                    file: Arc::new(file),
+                    identity: Identity::of(&stat),
+                })
+            }
+        }
     }
 
+    pub(crate) fn file(&self) -> &File {
+        &self.file
+    }
+
+    /// Проверяет через `fstat` открытого дескриптора, что это всё ещё тот же regular inode.
     pub(crate) fn revalidate(&self) -> Result<u64, AppError> {
-        let metadata =
-            fs::symlink_metadata(&self.canonical).map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => BackendError::not_found("Исходный файл не найден"),
-                _ => io_error("Не удалось повторно проверить исходный файл"),
-            })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        let stat = rustix::fs::fstat(self.file.as_ref())
+            .map_err(|_| io_error("Не удалось повторно проверить исходный файл"))?;
+        if fd::file_type(&stat) != rustix::fs::FileType::RegularFile
+            || Identity::of(&stat) != self.identity
+        {
             return Err(blocked("Исходный путь больше не является обычным файлом"));
         }
-        Ok(metadata.len())
+        Ok(fd::stat_size(&stat))
     }
 }
 
@@ -282,6 +263,7 @@ impl<'de> Deserialize<'de> for PersistentPath {
     }
 }
 
+/// Проверенный root + относительный путь. Абсолютный `PathBuf` наружу не выдаётся.
 #[derive(Debug, Clone)]
 pub struct VerifiedDestination {
     root: ControlledRoot,
@@ -302,7 +284,7 @@ impl VerifiedDestination {
     }
 
     fn new(root: &ControlledRoot, relative: PersistentPath) -> Result<Self, AppError> {
-        root.validate_existing_parents(&relative)?;
+        root.open_existing_parent(&relative)?;
         Ok(Self {
             root: root.clone(),
             relative,
@@ -313,16 +295,20 @@ impl VerifiedDestination {
         &self.relative
     }
 
-    pub(crate) fn absolute(&self) -> PathBuf {
-        self.root.absolute(&self.relative)
+    pub(crate) fn file_name(&self) -> &OsStr {
+        self.relative.file_name()
     }
 
-    pub(crate) fn ensure_parent(&self) -> Result<PathBuf, AppError> {
+    pub(crate) fn open_existing_parent(&self) -> Result<Option<DirFd>, AppError> {
+        self.root.open_existing_parent(&self.relative)
+    }
+
+    pub(crate) fn ensure_parent(&self) -> Result<DirFd, AppError> {
         self.root.ensure_parent(&self.relative)
     }
 
-    pub(crate) fn revalidate_parents(&self) -> Result<(), AppError> {
-        self.root.validate_existing_parents(&self.relative)
+    pub(crate) fn verify_parent(&self, parent: &DirFd) -> Result<(), AppError> {
+        self.root.verify_parent(&self.relative, parent)
     }
 }
 

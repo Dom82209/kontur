@@ -1,6 +1,6 @@
 # Архитектура Rust backend
 
-Статус документа: этап 4D.1. Read-only путь и две DB-only мутации реализованы; изолированный file-service foundation пока не имеет production entry point. UI по-прежнему использует `MockDesktopBridge`.
+Статус документа: этап 4D.1.1. Read-only путь и две DB-only мутации реализованы; изолированный fd-relative file-service foundation пока не имеет production entry point. UI по-прежнему использует `MockDesktopBridge`.
 
 ## Модули
 
@@ -12,7 +12,7 @@
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
 - `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
-- `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy, backup и undo validation; не зависит от GUI и не зарегистрирована в IPC.
+- `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI и не зарегистрирована в IPC.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
@@ -70,13 +70,13 @@ Foreign keys задают владение и политику удаления,
 
 События эмитятся только после успешного commit: классификация — `inbox:classification-updated`, затем `operation:completed`; правила — `operation:completed`. После сохранённой failed-операции отправляется `operation:failed`. Если доставка события не удалась, БД не откатывается; команда возвращает контролируемую ошибку и предлагает перечитать состояние.
 
-## File service foundation этапа 4D.1
+## File service foundation этапов 4D.1 и 4D.1.1
 
-Публичная Rust-граница использует `VaultRoot`, `InboxRoot`, `BackupRoot`, `SourceFile`, `PersistentPath` и `VerifiedDestination`. Root canonicalized, существует и не является `/`, домашним или широким системным каталогом. Persistent path валидируется по компонентам и сериализуется только с `/`; absolute source остаётся runtime-only.
+Публичная Rust-граница использует `VaultRoot`, `InboxRoot`, `BackupRoot`, `SourceFile`, `PersistentPath` и `VerifiedDestination`. Root проходит проверку политики (абсолютный, не `/`, не home, не широкий системный каталог), после чего один раз открывается как directory fd с `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`. Дальше корни, inbox и destination представлены только открытыми fd; абсолютный `PathBuf` наружу не выдаётся.
 
-Planner сравнивает streaming SHA-256 и возвращает `Copy`, `SameContent` либо `NameConflict`. Atomic copy создаёт same-directory temp через `create_new`, потоково копирует, синхронизирует, проверяет size/hash и публикует через `rustix` `RENAME_NOREPLACE`. Backup использует тот же primitive. Undo пока только валидируется по operation state, submitted guard, roots и hashes.
+Обход относительного пути выполняется покомпонентно через `openat(O_NOFOLLOW)`, создание — через `mkdirat`, проверка имён — `statat(AT_SYMLINK_NOFOLLOW)`, публикация — `renameat_with(RENAME_NOREPLACE)` в одном dir fd, cleanup — `unlinkat` только при совпадении identity созданного inode. Source открывается один раз; SHA-256, размер и копирование читают один inode через `pread`. Перед публикацией, после неё и в конце planning/undo повторный обход сравнивает inode родителя с открытым fd, подмена каталога даёт `blocked`. Undo пока только валидируется.
 
-Модуль не вызывается из `run()`, commands, AppState или bridge. Capabilities остаются минимальными и не открывают frontend доступ к filesystem. Все тестовые операции выполняются в `tempfile::TempDir`. Полная политика находится в `FILE_SERVICE_SECURITY.md`.
+Модуль не вызывается из `run()`, commands, AppState или bridge. Capabilities остаются минимальными и не открывают frontend доступ к filesystem. Все тестовые операции выполняются в `tempfile::TempDir`; race-тесты используют синхронные test hooks и `Barrier`, без sleep. Полная политика находится в `FILE_SERVICE_SECURITY.md`.
 
 ## Health check
 

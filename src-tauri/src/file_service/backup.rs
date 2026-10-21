@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, BackendError};
 
 use super::{
-    atomic_copy, plan_copy, BackupRoot, CopyDecision, PersistentPath, SourceFile, VaultRoot,
-    VerifiedDestination,
+    atomic_copy::atomic_copy_expected, hash_source, plan_copy, BackupRoot, CopyDecision,
+    PersistentPath, SourceFile, VaultRoot, VerifiedDestination,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,7 +28,7 @@ pub fn create_backup(
 ) -> Result<BackupManifest, AppError> {
     validate_operation_id(operation_id)?;
     let source_destination = VerifiedDestination::in_vault(vault, source_path.clone())?;
-    let source = SourceFile::new(&source_destination.absolute())?;
+    let source = SourceFile::open_in(&source_destination)?;
     let backup_path = PersistentPath::new(format!("{operation_id}/{}", source_path.as_str()))?;
     let backup_destination = VerifiedDestination::in_backup(backup_root, backup_path.clone())?;
     match plan_copy(&source, &backup_destination)? {
@@ -39,7 +39,10 @@ pub fn create_backup(
             ))
         }
     }
-    let receipt = atomic_copy(&source, &backup_destination)?;
+    // Хэш и копия относятся к одному открытому inode; изменение содержимого между
+    // ними обнаруживается сравнением с ожидаемым SHA-256.
+    let expected = hash_source(&source)?;
+    let receipt = atomic_copy_expected(&source, &backup_destination, &expected)?;
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| super::paths::io_error("Не удалось сформировать время резервной копии"))?;

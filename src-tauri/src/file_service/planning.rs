@@ -1,12 +1,13 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
 use super::{
-    hashing::sha256_file,
-    paths::{blocked, io_error},
+    fd::{self, DirFd, Leaf},
+    hooks::{self, HookPoint},
+    paths::blocked,
     SourceFile, VerifiedDestination,
 };
 
@@ -20,35 +21,46 @@ pub enum CopyDecision {
     NameConflict { suggested_name: String },
 }
 
+/// Read-only planning: открывает родителя назначения fd-relative, сравнивает
+/// SHA-256 открытого source и открытого destination, подбирает свободное имя
+/// через `statat` в том же каталоге и в конце подтверждает, что каталог не подменён.
 pub fn plan_copy(
     source: &SourceFile,
     destination: &VerifiedDestination,
 ) -> Result<CopyDecision, AppError> {
     source.revalidate()?;
-    destination.revalidate_parents()?;
-    let destination_path = destination.absolute();
-    let metadata = match fs::symlink_metadata(&destination_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(CopyDecision::Copy)
-        }
-        Err(_) => return Err(io_error("Не удалось проверить целевой файл")),
+    let Some(parent) = destination.open_existing_parent()? else {
+        return Ok(CopyDecision::Copy);
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(blocked(
-            "Целевой путь не является безопасным обычным файлом",
-        ));
-    }
-    if sha256_file(source.path())? == sha256_file(&destination_path)? {
-        return Ok(CopyDecision::SameContent);
-    }
-    Ok(CopyDecision::NameConflict {
-        suggested_name: next_available_name(destination)?,
-    })
+    hooks::fire(|| HookPoint::PlanningParentOpened);
+    let decision = match fd::open_leaf(&parent, destination.file_name())? {
+        Leaf::Missing => CopyDecision::Copy,
+        Leaf::NotRegular => {
+            return Err(blocked(
+                "Целевой путь не является безопасным обычным файлом",
+            ))
+        }
+        Leaf::File(existing, _) => {
+            let (source_hash, _) = fd::hash_open_file(source.file())?;
+            let (existing_hash, _) = fd::hash_open_file(&existing)?;
+            if source_hash == existing_hash {
+                CopyDecision::SameContent
+            } else {
+                CopyDecision::NameConflict {
+                    suggested_name: next_available_name(&parent, destination)?,
+                }
+            }
+        }
+    };
+    destination.verify_parent(&parent)?;
+    Ok(decision)
 }
 
-fn next_available_name(destination: &VerifiedDestination) -> Result<String, AppError> {
-    let file_name = destination.relative().file_name().to_string_lossy();
+fn next_available_name(
+    parent: &DirFd,
+    destination: &VerifiedDestination,
+) -> Result<String, AppError> {
+    let file_name = destination.file_name().to_string_lossy();
     let file_path = Path::new(file_name.as_ref());
     let stem = file_path
         .file_stem()
@@ -67,15 +79,8 @@ fn next_available_name(destination: &VerifiedDestination) -> Result<String, AppE
             None => format!("{truncated}{suffix}"),
         };
         let relative = destination.relative().with_file_name(&candidate)?;
-        let candidate_path = destination
-            .absolute()
-            .parent()
-            .expect("validated destination has parent")
-            .join(relative.file_name());
-        match fs::symlink_metadata(candidate_path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
-            Ok(_) => continue,
-            Err(_) => return Err(io_error("Не удалось подобрать безопасное имя файла")),
+        if !fd::entry_exists(parent, relative.file_name())? {
+            return Ok(candidate);
         }
     }
     Err(blocked("Не удалось подобрать свободное имя файла"))

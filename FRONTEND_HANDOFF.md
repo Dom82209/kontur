@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 4D.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust file service существует только как backend foundation и не меняет bridge-контракт.
+Документ фиксирует frontend-контракт и границу этапа 4D.1.1. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI. Rust file service существует только как backend foundation и не меняет bridge-контракт.
 
 ## 1. Граница архитектуры
 
@@ -192,7 +192,7 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - Для native intake `sourcePath` обязателен. `assertNativeSourcePaths` выявляет отсутствие пути и останавливает импорт с `io_error`, а не создаёт имитацию.
 - Размер, тип и существование native файла уточняет Rust backend; frontend не читает файл.
 - Реальный диалог выбора и native event listener требуют Tauri adapter/plugin/backend и на текущем этапе отсутствуют.
-- Этап 4D.1 добавил внутренние Rust primitives для безопасных roots, persistent paths, hashing, planning, atomic copy, backup и undo validation. Они не являются Tauri-командами и не вызываются frontend. Политика описана в `docs/FILE_SERVICE_SECURITY.md`.
+- Этап 4D.1 добавил внутренние Rust primitives для безопасных roots, persistent paths, hashing, planning, atomic copy, backup и undo validation; этап 4D.1.1 перевёл их на fd-relative операции без TOCTOU/symlink-race. Они не являются Tauri-командами и не вызываются frontend; контракт `DesktopBridge` не изменился. Политика описана в `docs/FILE_SERVICE_SECURITY.md`.
 
 ## 9. Инварианты workflow и сдачи
 

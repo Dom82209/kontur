@@ -1,11 +1,11 @@
-use std::fs;
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, BackendError, ErrorCode};
 
 use super::{
-    sha256_file, BackupRoot, PersistentPath, Sha256Digest, VaultRoot, VerifiedDestination,
+    fd::{self, Leaf},
+    hooks::{self, HookPoint},
+    BackupRoot, PersistentPath, Sha256Digest, VaultRoot, VerifiedDestination,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,52 +56,63 @@ pub fn validate_undo(
     backup_root: &BackupRoot,
 ) -> Result<ValidatedUndo, AppError> {
     if !context.undoable || context.already_undone || context.submitted_homework {
-        return Err(BackendError::new(
-            ErrorCode::NotUndoable,
-            "Операцию нельзя отменить",
-        ));
+        return Err(not_undoable("Операцию нельзя отменить"));
     }
     if manifest.operation_id.is_empty() {
-        return Err(BackendError::new(
-            ErrorCode::NotUndoable,
+        return Err(not_undoable(
             "Undo manifest не содержит идентификатор операции",
         ));
     }
     for entry in &manifest.created_files {
         let destination = VerifiedDestination::in_vault(vault, entry.path.clone())?;
-        validate_regular_file(&destination)?;
-        if sha256_file(&destination.absolute())? != entry.expected_sha256 {
-            return Err(BackendError::new(
-                ErrorCode::NotUndoable,
-                "Созданный операцией файл был изменён",
-            ));
-        }
+        verify_file_hash(
+            &destination,
+            &entry.expected_sha256,
+            "Созданный операцией файл был изменён",
+        )?;
     }
     for entry in &manifest.backups {
         let original = VerifiedDestination::in_vault(vault, entry.original_path.clone())?;
-        original.revalidate_parents()?;
-        let backup = VerifiedDestination::in_backup(backup_root, entry.backup_path.clone())?;
-        validate_regular_file(&backup)?;
-        if sha256_file(&backup.absolute())? != entry.expected_backup_sha256 {
-            return Err(BackendError::new(
-                ErrorCode::NotUndoable,
-                "Резервная копия отсутствует или была изменена",
-            ));
+        if let Some(parent) = original.open_existing_parent()? {
+            hooks::fire(|| HookPoint::UndoParentOpened);
+            original.verify_parent(&parent)?;
         }
+        let backup = VerifiedDestination::in_backup(backup_root, entry.backup_path.clone())?;
+        verify_file_hash(
+            &backup,
+            &entry.expected_backup_sha256,
+            "Резервная копия отсутствует или была изменена",
+        )?;
     }
     Ok(ValidatedUndo {
         manifest: manifest.clone(),
     })
 }
 
-fn validate_regular_file(destination: &VerifiedDestination) -> Result<(), AppError> {
-    let metadata = fs::symlink_metadata(destination.absolute())
-        .map_err(|_| BackendError::new(ErrorCode::NotUndoable, "Файл для undo не найден"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(BackendError::new(
-            ErrorCode::NotUndoable,
-            "Путь undo не является обычным файлом",
-        ));
+/// Открывает файл fd-relative (O_NOFOLLOW в каждом компоненте), хэширует открытый inode
+/// и подтверждает, что родительский каталог не был подменён во время проверки.
+fn verify_file_hash(
+    destination: &VerifiedDestination,
+    expected: &Sha256Digest,
+    changed_message: &str,
+) -> Result<(), AppError> {
+    let parent = destination
+        .open_existing_parent()?
+        .ok_or_else(|| not_undoable("Файл для undo не найден"))?;
+    hooks::fire(|| HookPoint::UndoParentOpened);
+    let file = match fd::open_leaf(&parent, destination.file_name())? {
+        Leaf::Missing => return Err(not_undoable("Файл для undo не найден")),
+        Leaf::NotRegular => return Err(not_undoable("Путь undo не является обычным файлом")),
+        Leaf::File(file, _) => file,
+    };
+    let (hash, _) = fd::hash_open_file(&file)?;
+    destination.verify_parent(&parent)?;
+    if &hash != expected {
+        return Err(not_undoable(changed_message));
     }
     Ok(())
+}
+
+fn not_undoable(message: &str) -> AppError {
+    BackendError::new(ErrorCode::NotUndoable, message)
 }
