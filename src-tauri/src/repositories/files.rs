@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::params;
+use rusqlite::{params, Connection};
 
 use crate::{
     dto::{FileKind, FileRefDto},
@@ -58,50 +58,50 @@ impl ReadRepository<'_> {
             Ok(output)
         })
     }
-
-    pub(super) fn task_files(
-        &self,
-        homework_id: Option<&str>,
-    ) -> Result<HashMap<String, Vec<FileRefDto>>, BackendError> {
-        self.database.with_connection(|connection| {
-            let sql = if homework_id.is_some() {
-                "SELECT homework_id, id, name, kind, size_bytes,
-                        coalesce(modified_at, updated_at, created_at), relative_path
-                 FROM files
-                 WHERE homework_id = ?1 AND category IN ('homework_task', 'homework_data')
-                 ORDER BY relative_path, id"
-            } else {
-                "SELECT homework_id, id, name, kind, size_bytes,
-                        coalesce(modified_at, updated_at, created_at), relative_path
-                 FROM files
-                 WHERE homework_id IS NOT NULL AND category IN ('homework_task', 'homework_data')
-                 ORDER BY homework_id, relative_path, id"
-            };
-            let mut statement = connection.prepare(sql)?;
-            let mut rows = if let Some(id) = homework_id {
-                statement.query(params![id])?
-            } else {
-                statement.query([])?
-            };
-            let mut output: HashMap<String, Vec<FileRefDto>> = HashMap::new();
-            while let Some(row) = rows.next()? {
-                let homework_id: String = row.get(0)?;
-                let file = hydrate_file(
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                )?;
-                output.entry(homework_id).or_default().push(file);
-            }
-            Ok(output)
-        })
-    }
 }
 
-pub(super) fn hydrate_file(
+/// Файлы условия и данных ДЗ (одного или всех), сгруппированные по homework id.
+pub(super) fn task_files(
+    connection: &Connection,
+    homework_id: Option<&str>,
+) -> Result<HashMap<String, Vec<FileRefDto>>, BackendError> {
+    let base = "SELECT homework_id, id, name, kind, size_bytes,
+                       coalesce(modified_at, updated_at, created_at), relative_path
+                FROM files";
+    let sql = if homework_id.is_some() {
+        format!(
+            "{base} WHERE homework_id = ?1 AND category IN ('homework_task', 'homework_data')
+             ORDER BY relative_path, id"
+        )
+    } else {
+        format!(
+            "{base} WHERE homework_id IS NOT NULL AND category IN ('homework_task', 'homework_data')
+             ORDER BY homework_id, relative_path, id"
+        )
+    };
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = if let Some(id) = homework_id {
+        statement.query(params![id])?
+    } else {
+        statement.query([])?
+    };
+    let mut output: HashMap<String, Vec<FileRefDto>> = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let homework_id: String = row.get(0)?;
+        let file = hydrate_file(
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        )?;
+        output.entry(homework_id).or_default().push(file);
+    }
+    Ok(output)
+}
+
+pub(crate) fn hydrate_file(
     id: String,
     name: String,
     raw_kind: String,

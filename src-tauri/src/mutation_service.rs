@@ -629,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_five_after_extraction_stage() {
+    fn schema_version_is_six_after_workflow_stage() {
         let database = database();
-        assert_eq!(CURRENT_SCHEMA_VERSION, 5);
-        assert_eq!(database.schema_version().unwrap(), 5);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 6);
+        assert_eq!(database.schema_version().unwrap(), 6);
     }
 
     #[test]

@@ -6,7 +6,7 @@
  * (аналитик, автор, проверяющий), а сопоставление роль → провайдер задаётся в
  * AutomationRules.workflow и может быть изменено пользователем.
  */
-import type { FileRef, ISODate, ProviderId } from "./types";
+import type { FileRef, ISODate, MaterialRef, ProviderId } from "./types";
 
 // ───────────── Этапы ─────────────
 
@@ -55,10 +55,27 @@ export type SourceKind =
 export interface SourceItem {
   id: string;
   kind: SourceKind;
+  /** Снимок файла на момент создания набора (имя, путь, размер). */
   file: FileRef;
   required: boolean;
   /** Пользователь может исключить любой необязательный источник. */
   included: boolean;
+  /** Материал подборки этапа 7, из которого сделан снимок. */
+  material: MaterialRef;
+  /** SHA-256 содержимого в момент снимка; null только у legacy-наборов. */
+  sha256: string | null;
+  extractionId: string | null;
+  /** Версия правил извлечения текста, по которым получен корпус. */
+  extractorVersion: number | null;
+  textChars: number;
+  /** Коды предупреждений извлечения. */
+  warnings: string[];
+}
+
+export interface BundleWarning {
+  code: string;
+  message: string;
+  materialId: string | null;
 }
 
 export interface MissingSource {
@@ -70,6 +87,10 @@ export interface MissingSource {
 
 export type RunKind = "analyze_materials" | "review_version" | "revision_prompt" | "review_teacher";
 
+/**
+ * Неизменяемый снимок подтверждённой подборки материалов для конкретного запуска.
+ * Изменение подборки после создания набора не меняет уже созданный набор.
+ */
 export interface SourceBundle {
   id: string;
   homeworkId: string;
@@ -80,6 +101,14 @@ export interface SourceBundle {
   /** false, если не хватает обязательных материалов — запуск заблокирован. */
   complete: boolean;
   createdAt: ISODate;
+  /** corpus_selection — снимок подборки; legacy — набор схемы до этапа 8. */
+  origin: "legacy" | "corpus_selection";
+  selectionId: string | null;
+  extractorVersion: number | null;
+  /** Предупреждения корпуса: частичное извлечение, обрезанный текст, превышение лимита. */
+  warnings: BundleWarning[];
+  totalChars: number;
+  limitChars: number;
 }
 
 export interface StyleProfile {
@@ -148,6 +177,13 @@ export type ReviewVerdict = "pass" | "needs_fixes" | "needs_teacher_review" | "b
 
 export type RecommendedActionKind = "send_prompt_to_author" | "create_revision_prompt" | "add_teacher_comments" | "mark_ready" | "complete_materials";
 
+/** Отсутствующий файл или ссылка, найденные проверкой. */
+export interface ReviewMissingItem {
+  kind: "file" | "link";
+  label: string;
+  required: boolean;
+}
+
 export interface ReviewResult {
   verdict: ReviewVerdict;
   summary: string;
@@ -158,11 +194,33 @@ export interface ReviewResult {
   style: StyleDivergence | null;
   teacherRequirements: TeacherRequirement[];
   recommendedAction: { kind: RecommendedActionKind; label: string };
+  /** Обязательные файлы и ссылки, которых не хватает. */
+  missing: ReviewMissingItem[];
   /** Готовый промт: для анализа — первичный, для проверки — промт исправлений. */
   prompt: RevisionPrompt | null;
 }
 
-export type ReviewRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+/**
+ * Состояние запуска. waiting_for_provider — роль назначена провайдеру, но AI-адаптера
+ * ещё нет; manual_handoff — шаг выполняется вручную, результат сохраняет пользователь.
+ */
+export type ReviewRunStatus = "queued" | "waiting_for_provider" | "manual_handoff" | "running" | "completed" | "failed" | "cancelled";
+
+/** Происхождение результата: manual — сохранён пользователем, provider — AI-адаптер, legacy — до этапа 8. */
+export type Provenance = "legacy" | "manual" | "provider";
+
+/** Отдельно сохранённые критерии завершённой проверки — по ним считается готовность. */
+export interface ReviewAssessment {
+  verdict: ReviewVerdict;
+  correctness: CriterionStatus;
+  taskFit: CriterionStatus;
+  courseGrounding: CriterionStatus;
+  teacher: CriterionStatus;
+  styleScore: number | null;
+  criticalCount: number;
+  unsupportedCount: number;
+  missingRequired: number;
+}
 
 export interface ReviewRun {
   id: string;
@@ -171,7 +229,8 @@ export interface ReviewRun {
   role: WorkflowRole;
   provider: ProviderId;
   versionId: string | null;
-  sourceBundleId: string;
+  /** null только у запусков схемы v1. */
+  sourceBundleId: string | null;
   /** Полный список переданных источников — сохраняется всегда. */
   sourcesUsed: EvidenceReference[];
   status: ReviewRunStatus;
@@ -183,6 +242,10 @@ export interface ReviewRun {
   savedAsIteration: boolean;
   result: ReviewResult | null;
   errorMessage: string | null;
+  provenance: Provenance;
+  /** Порог стиля, применённый в момент запуска; не меняется вместе с настройкой. */
+  styleThreshold: number;
+  assessment: ReviewAssessment | null;
 }
 
 export type PromptKind = "initial" | "revision" | "teacher";
@@ -200,9 +263,16 @@ export interface RevisionPrompt {
   /** Какие замечания/требования промт должен закрыть. */
   addresses: string[];
   sources: EvidenceReference[];
-  /** Передан автору (backend отдал промт адаптеру). */
+  /** Передан автору (вручную или адаптером). */
   sentAt: ISODate | null;
+  /** draft — можно редактировать; committed — зафиксирован и неизменяем. */
+  status: PromptStatus;
+  committedAt: ISODate | null;
+  provenance: Provenance;
+  updatedAt: ISODate;
 }
+
+export type PromptStatus = "draft" | "committed";
 
 // ───────────── Преподаватель ─────────────
 
@@ -227,12 +297,21 @@ export type RequirementStatus = "done" | "not_done" | "manual" | "na";
 export interface TeacherRequirement {
   id: string;
   text: string;
-  commentId: string;
+  /** null — legacy-требование без комментария. */
+  commentId: string | null;
   /** Короткий фрагмент вопроса/ответа, из которого выведено требование. */
   origin: string;
   status: RequirementStatus;
   note: string;
-  checkedVersionId: string;
+  checkedVersionId: string | null;
+}
+
+export interface TeacherRequirementInput {
+  commentId: string;
+  text: string;
+  origin: string;
+  status: RequirementStatus;
+  note?: string;
 }
 
 // ───────────── Итерации ─────────────
@@ -270,8 +349,20 @@ export interface VersionComparison {
 
 // ───────────── Готовность и сдача ─────────────
 
+export type ReadinessCheckId =
+  | "materials"
+  | "review_current"
+  | "review_passed"
+  | "no_critical"
+  | "task_coverage"
+  | "teacher"
+  | "attachments"
+  | "style"
+  | "sources_fresh"
+  | "final_version";
+
 export interface ReadinessCheck {
-  id: "materials" | "review_passed" | "no_critical" | "style" | "teacher" | "final_version";
+  id: ReadinessCheckId;
   label: string;
   ok: boolean;
   detail: string;
@@ -282,6 +373,23 @@ export interface Readiness {
   homeworkId: string;
   ready: boolean;
   checks: ReadinessCheck[];
+  /** Проверяемая версия и проверка, по которым посчитана готовность. */
+  versionId: string | null;
+  reviewRunId: string | null;
+  /** Ревизия ДЗ, на которой посчитан ответ. */
+  revision: number;
+}
+
+/** Явное подтверждение пользователем расхождения со стилем выше порога. */
+export interface StyleConfirmation {
+  id: string;
+  homeworkId: string;
+  versionId: string;
+  reviewRunId: string;
+  score: number;
+  threshold: number;
+  confirmedBy: "user";
+  confirmedAt: ISODate;
 }
 
 export type PackageCheckId = "final_selected" | "name_checked" | "attachments" | "links" | "teacher" | "manual_review";

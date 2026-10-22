@@ -5,7 +5,7 @@ import { bridge, type ProviderStatus } from "../../lib/bridge";
 import { useOps } from "../../app/operations";
 import { formatRelative, providerName, ROLE_LABEL } from "../../lib/format";
 
-const ADAPTER: Record<ProviderStatus["adapter"], string> = { cli: "CLI", desktop_app: "приложение", mock: "демо (mock)" };
+const ADAPTER: Record<ProviderStatus["adapter"], string> = { cli: "CLI", desktop_app: "приложение", mock: "демо (mock)", unavailable: "не подключён — ручной режим" };
 import { ProviderStateLabel } from "../ui/StatusBadges";
 
 interface Props {

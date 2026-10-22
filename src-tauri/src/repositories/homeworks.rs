@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use rusqlite::params;
+use rusqlite::{params, Connection};
 
 use crate::{
     domain::{HomeworkStage, HomeworkWorkflowStage, VersionAuthor},
@@ -8,7 +8,7 @@ use crate::{
     error::BackendError,
 };
 
-use super::{invalid_enum, parse_json, require_relative_path, ReadRepository};
+use super::{files::task_files, invalid_enum, parse_json, require_relative_path, ReadRepository};
 
 #[derive(Debug)]
 struct HomeworkRow {
@@ -24,6 +24,7 @@ struct HomeworkRow {
     submitted_at: Option<String>,
     folder_path: String,
     assignment_url: Option<String>,
+    revision: i64,
 }
 
 #[derive(Debug)]
@@ -48,152 +49,164 @@ struct VersionRow {
 
 impl ReadRepository<'_> {
     pub fn homework_list(&self) -> Result<Vec<HomeworkDto>, BackendError> {
-        self.hydrate_homeworks(None)
+        self.database
+            .with_connection(|connection| load_homeworks(connection, None))
     }
 
     pub fn homework(&self, homework_id: &str) -> Result<HomeworkDto, BackendError> {
-        self.hydrate_homeworks(Some(homework_id))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| BackendError::not_found("homework not found"))
+        self.database
+            .with_connection(|connection| load_homework(connection, homework_id))
     }
+}
 
-    fn hydrate_homeworks(
-        &self,
-        homework_id: Option<&str>,
-    ) -> Result<Vec<HomeworkDto>, BackendError> {
-        let rows = self.homework_rows(homework_id)?;
-        let mut task_files = self.task_files(homework_id)?;
-        let mut versions = self.homework_versions(homework_id)?;
-        let mut output = Vec::with_capacity(rows.len());
-        for row in rows {
-            let deadline = row.deadline.ok_or_else(|| {
-                BackendError::database(format!("homework {} has no deadline", row.id))
-            })?;
-            require_relative_path(&row.folder_path, "homeworks.folder_path")?;
-            let stage = HomeworkStage::try_from_db(&row.stage)
-                .map_err(|message| invalid_enum("homeworks.stage", message))?;
-            let workflow_stage = HomeworkWorkflowStage::try_from_db(&row.workflow_stage)
-                .map_err(|message| invalid_enum("homeworks.workflow_stage", message))?;
-            output.push(HomeworkDto {
-                task_files: task_files.remove(&row.id).unwrap_or_default(),
-                versions: versions.remove(&row.id).unwrap_or_default(),
-                id: row.id,
-                subject_id: row.subject_id,
-                week_number: row.week_number,
-                title: row.title,
-                deadline,
-                stage,
-                final_version_id: row.final_version_id,
-                final_file_name: row.final_file_name,
-                submitted_at: row.submitted_at,
-                folder_path: row.folder_path,
-                workflow_stage,
-                assignment_url: row.assignment_url,
-            });
-        }
-        Ok(output)
-    }
+/// Один Homework: фиксированные три запроса (строка, файлы условия, версии).
+pub(crate) fn load_homework(
+    connection: &Connection,
+    homework_id: &str,
+) -> Result<HomeworkDto, BackendError> {
+    load_homeworks(connection, Some(homework_id))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| BackendError::not_found("homework not found"))
+}
 
-    fn homework_rows(&self, homework_id: Option<&str>) -> Result<Vec<HomeworkRow>, BackendError> {
-        self.database.with_connection(|connection| {
-            let sql = if homework_id.is_some() {
-                "SELECT h.id, w.subject_id, w.number, h.title, h.deadline, h.stage,
-                        h.workflow_stage, h.final_version_id, h.final_file_name, h.submitted_at,
-                        h.folder_path, h.assignment_url
-                 FROM homeworks h JOIN weeks w ON w.id = h.week_id
-                 WHERE h.id = ?1"
-            } else {
-                "SELECT h.id, w.subject_id, w.number, h.title, h.deadline, h.stage,
-                        h.workflow_stage, h.final_version_id, h.final_file_name, h.submitted_at,
-                        h.folder_path, h.assignment_url
-                 FROM homeworks h JOIN weeks w ON w.id = h.week_id
-                 ORDER BY h.deadline, h.id"
-            };
-            let mut statement = connection.prepare(sql)?;
-            let mut rows = if let Some(id) = homework_id {
-                statement.query(params![id])?
-            } else {
-                statement.query([])?
-            };
-            let mut output = Vec::new();
-            while let Some(row) = rows.next()? {
-                output.push(HomeworkRow {
-                    id: row.get(0)?,
-                    subject_id: row.get(1)?,
-                    week_number: row.get(2)?,
-                    title: row.get(3)?,
-                    deadline: row.get(4)?,
-                    stage: row.get(5)?,
-                    workflow_stage: row.get(6)?,
-                    final_version_id: row.get(7)?,
-                    final_file_name: row.get(8)?,
-                    submitted_at: row.get(9)?,
-                    folder_path: row.get(10)?,
-                    assignment_url: row.get(11)?,
-                });
-            }
-            Ok(output)
-        })
+/// Список Homework без N+1: строки, все файлы условия и все версии — по одному запросу.
+pub(crate) fn load_homeworks(
+    connection: &Connection,
+    homework_id: Option<&str>,
+) -> Result<Vec<HomeworkDto>, BackendError> {
+    let rows = homework_rows(connection, homework_id)?;
+    let mut task_files = task_files(connection, homework_id)?;
+    let mut versions = load_versions(connection, homework_id)?;
+    let mut output = Vec::with_capacity(rows.len());
+    for row in rows {
+        let deadline = row.deadline.ok_or_else(|| {
+            BackendError::database(format!("homework {} has no deadline", row.id))
+        })?;
+        require_relative_path(&row.folder_path, "homeworks.folder_path")?;
+        let stage = HomeworkStage::try_from_db(&row.stage)
+            .map_err(|message| invalid_enum("homeworks.stage", message))?;
+        let workflow_stage = HomeworkWorkflowStage::try_from_db(&row.workflow_stage)
+            .map_err(|message| invalid_enum("homeworks.workflow_stage", message))?;
+        output.push(HomeworkDto {
+            task_files: task_files.remove(&row.id).unwrap_or_default(),
+            versions: versions.remove(&row.id).unwrap_or_default(),
+            id: row.id,
+            subject_id: row.subject_id,
+            week_number: row.week_number,
+            title: row.title,
+            deadline,
+            stage,
+            final_version_id: row.final_version_id,
+            final_file_name: row.final_file_name,
+            submitted_at: row.submitted_at,
+            folder_path: row.folder_path,
+            workflow_stage,
+            assignment_url: row.assignment_url,
+            revision: row.revision,
+        });
     }
+    Ok(output)
+}
 
-    fn homework_versions(
-        &self,
-        homework_id: Option<&str>,
-    ) -> Result<HashMap<String, Vec<HomeworkVersionDto>>, BackendError> {
-        let rows = self.version_rows(homework_id)?;
-        let mut output: HashMap<String, Vec<HomeworkVersionDto>> = HashMap::new();
-        for row in rows {
-            let version = hydrate_version(row)?;
-            output
-                .entry(version.homework_id.clone())
-                .or_default()
-                .push(version);
-        }
-        Ok(output)
+fn homework_rows(
+    connection: &Connection,
+    homework_id: Option<&str>,
+) -> Result<Vec<HomeworkRow>, BackendError> {
+    let base = "SELECT h.id, w.subject_id, w.number, h.title, h.deadline, h.stage,
+                       h.workflow_stage, h.final_version_id, h.final_file_name, h.submitted_at,
+                       h.folder_path, h.assignment_url, h.revision
+                FROM homeworks h JOIN weeks w ON w.id = h.week_id";
+    let sql = if homework_id.is_some() {
+        format!("{base} WHERE h.id = ?1")
+    } else {
+        format!("{base} ORDER BY h.deadline, h.id")
+    };
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = if let Some(id) = homework_id {
+        statement.query(params![id])?
+    } else {
+        statement.query([])?
+    };
+    let mut output = Vec::new();
+    while let Some(row) = rows.next()? {
+        output.push(HomeworkRow {
+            id: row.get(0)?,
+            subject_id: row.get(1)?,
+            week_number: row.get(2)?,
+            title: row.get(3)?,
+            deadline: row.get(4)?,
+            stage: row.get(5)?,
+            workflow_stage: row.get(6)?,
+            final_version_id: row.get(7)?,
+            final_file_name: row.get(8)?,
+            submitted_at: row.get(9)?,
+            folder_path: row.get(10)?,
+            assignment_url: row.get(11)?,
+            revision: row.get(12)?,
+        });
     }
+    Ok(output)
+}
 
-    fn version_rows(&self, homework_id: Option<&str>) -> Result<Vec<VersionRow>, BackendError> {
-        self.database.with_connection(|connection| {
-            let base = "SELECT id, homework_id, number, label, file_name, file_path, size_bytes,
-                               created_at, source_file_id, note, sections_json, author, prompt_id,
-                               source_bundle_id, files_json, frozen
-                        FROM homework_versions";
-            let sql = if homework_id.is_some() {
-                format!("{base} WHERE homework_id = ?1 ORDER BY number, id")
-            } else {
-                format!("{base} ORDER BY homework_id, number, id")
-            };
-            let mut statement = connection.prepare(&sql)?;
-            let mut rows = if let Some(id) = homework_id {
-                statement.query(params![id])?
-            } else {
-                statement.query([])?
-            };
-            let mut output = Vec::new();
-            while let Some(row) = rows.next()? {
-                output.push(VersionRow {
-                    id: row.get(0)?,
-                    homework_id: row.get(1)?,
-                    number: row.get(2)?,
-                    label: row.get(3)?,
-                    file_name: row.get(4)?,
-                    file_path: row.get(5)?,
-                    size_bytes: row.get(6)?,
-                    created_at: row.get(7)?,
-                    source_file_id: row.get(8)?,
-                    note: row.get(9)?,
-                    sections_json: row.get(10)?,
-                    author: row.get(11)?,
-                    prompt_id: row.get(12)?,
-                    source_bundle_id: row.get(13)?,
-                    files_json: row.get(14)?,
-                    frozen: row.get::<_, i64>(15)? == 1,
-                });
-            }
-            Ok(output)
-        })
+/// Версии одного или всех Homework, сгруппированные по homework id и упорядоченные по номеру.
+pub(crate) fn load_versions(
+    connection: &Connection,
+    homework_id: Option<&str>,
+) -> Result<HashMap<String, Vec<HomeworkVersionDto>>, BackendError> {
+    let rows = version_rows(connection, homework_id)?;
+    let mut output: HashMap<String, Vec<HomeworkVersionDto>> = HashMap::new();
+    for row in rows {
+        let version = hydrate_version(row)?;
+        output
+            .entry(version.homework_id.clone())
+            .or_default()
+            .push(version);
     }
+    Ok(output)
+}
+
+fn version_rows(
+    connection: &Connection,
+    homework_id: Option<&str>,
+) -> Result<Vec<VersionRow>, BackendError> {
+    let base = "SELECT id, homework_id, number, label, file_name, file_path, size_bytes,
+                       created_at, source_file_id, note, sections_json, author, prompt_id,
+                       source_bundle_id, files_json, frozen
+                FROM homework_versions";
+    let sql = if homework_id.is_some() {
+        format!("{base} WHERE homework_id = ?1 ORDER BY number, id")
+    } else {
+        format!("{base} ORDER BY homework_id, number, id")
+    };
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = if let Some(id) = homework_id {
+        statement.query(params![id])?
+    } else {
+        statement.query([])?
+    };
+    let mut output = Vec::new();
+    while let Some(row) = rows.next()? {
+        output.push(VersionRow {
+            id: row.get(0)?,
+            homework_id: row.get(1)?,
+            number: row.get(2)?,
+            label: row.get(3)?,
+            file_name: row.get(4)?,
+            file_path: row.get(5)?,
+            size_bytes: row.get(6)?,
+            created_at: row.get(7)?,
+            source_file_id: row.get(8)?,
+            note: row.get(9)?,
+            sections_json: row.get(10)?,
+            author: row.get(11)?,
+            prompt_id: row.get(12)?,
+            source_bundle_id: row.get(13)?,
+            files_json: row.get(14)?,
+            frozen: row.get::<_, i64>(15)? == 1,
+        });
+    }
+    Ok(output)
 }
 
 fn hydrate_version(row: VersionRow) -> Result<HomeworkVersionDto, BackendError> {
@@ -252,7 +265,7 @@ fn hydrate_version(row: VersionRow) -> Result<HomeworkVersionDto, BackendError> 
     })
 }
 
-fn infer_file_kind(file_name: &str) -> FileKind {
+pub(crate) fn infer_file_kind(file_name: &str) -> FileKind {
     let extension = Path::new(file_name)
         .extension()
         .and_then(|value| value.to_str())

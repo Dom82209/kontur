@@ -902,6 +902,7 @@ export class MockDesktopBridge implements DesktopBridge {
       folderPath: `${weekFolder(week.subjectId, week.number)}/03 ДЗ`,
       workflowStage: "materials_collected",
       assignmentUrl: null,
+      revision: 0,
     };
     this.homework.push(homework);
     week.homeworkId = id;

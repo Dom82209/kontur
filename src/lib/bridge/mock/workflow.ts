@@ -3,6 +3,7 @@ import {
   BridgeError,
   type AutomationRules,
   type BridgeErrorPayload,
+  type CriterionId,
   type CriterionStatus,
   type DroppedItem,
   type EvidenceReference,
@@ -21,6 +22,7 @@ import {
   type ProviderStatus,
   type Readiness,
   type ReadinessCheck,
+  type ReviewAssessment,
   type ReviewCriterion,
   type ReviewFinding,
   type ReviewResult,
@@ -321,8 +323,9 @@ export class MockWorkflow {
     await this.ctx.wait(80);
     const p = this.mustPrompt(promptId);
     this.assertMutable(this.hw(p.homeworkId));
-    if (p.sentAt) throw new BridgeError("immutable", "Промт уже передан автору — создайте новый");
+    if (p.sentAt || p.status === "committed") throw new BridgeError("immutable", "Промт уже зафиксирован — создайте новый");
     p.text = text;
+    p.updatedAt = new Date().toISOString();
     return clone(p);
   }
 
@@ -354,6 +357,8 @@ export class MockWorkflow {
       throw e;
     }
     p.sentAt = new Date().toISOString();
+    p.status = "committed";
+    p.committedAt = p.committedAt ?? p.sentAt;
     this.ctx.finishOp(op);
     const [file] = await this.ctx.candidates(h.id);
     await this.ctx.createVersion(h.id, file?.id ?? uid("file"), { author: provider, promptId: p.id });
@@ -873,6 +878,7 @@ export class MockWorkflow {
     const from = h.workflowStage;
     if (from === to) return;
     h.workflowStage = to;
+    h.revision += 1;
     this.ctx.emitter.emit("workflow:stage-changed", { homeworkId: h.id, from, to, reason });
   }
 
@@ -881,7 +887,8 @@ export class MockWorkflow {
     const kinds = KINDS_FOR[purpose];
     const items: SourceItem[] = [];
     const add = (kind: SourceKind, file: FileRef, required: boolean) => {
-      if (kinds.includes(kind)) items.push({ id: `${kind}:${file.id}`, kind, file, required, included: true });
+      if (kinds.includes(kind))
+        items.push({ id: `${kind}:${file.id}`, kind, file, required, included: true, material: { kind: "file", id: file.id }, sha256: null, extractionId: null, extractorVersion: null, textChars: 0, warnings: [] });
     };
     week?.lectures.forEach((f) => add("lecture", f, false));
     week?.seminars.forEach((f) => add("seminar", f, false));
@@ -897,7 +904,22 @@ export class MockWorkflow {
     }
     const comments = this.comments.filter((c) => c.homeworkId === h.id);
     if (comments.length) add("teacher_comments", { id: `tc-${h.id}`, name: `Комментарии преподавателя (${comments.length}).md`, kind: "text", sizeBytes: 900 * comments.length, modifiedAt: comments[comments.length - 1]!.addedAt, relativePath: `${h.folderPath}/.kontur/teacher.md` }, true);
-    const bundle: SourceBundle = { id: uid("bnd"), homeworkId: h.id, purpose, versionId: target?.id ?? null, items, missing: [], complete: true, createdAt: new Date().toISOString() };
+    const bundle: SourceBundle = {
+      id: uid("bnd"),
+      homeworkId: h.id,
+      purpose,
+      versionId: target?.id ?? null,
+      items,
+      missing: [],
+      complete: true,
+      createdAt: new Date().toISOString(),
+      origin: "corpus_selection",
+      selectionId: `sel-${h.id}`,
+      extractorVersion: 1,
+      warnings: [],
+      totalChars: 0,
+      limitChars: 600_000,
+    };
     this.recomputeMissing(bundle);
     return bundle;
   }
@@ -964,8 +986,9 @@ export class MockWorkflow {
       this.ctx.emitter.emit("review:progress", { runId: run.id, homeworkId: h.id, progress: run.progress, step: run.step });
       this.ctx.emitter.emit("operation:progress", { operationId: op.id, kind: "ai_run", progress: run.progress, message: run.step });
     }
-    const bundle = this.bundles.get(run.sourceBundleId)!;
+    const bundle = this.bundles.get(run.sourceBundleId ?? "")!;
     run.result = this.computeResult(h, run, bundle);
+    run.assessment = assessmentOf(run.result);
     run.status = "completed";
     run.finishedAt = new Date().toISOString();
     this.applyStageAfter(h, run);
@@ -982,7 +1005,11 @@ export class MockWorkflow {
     run.finishedAt = startedAt;
     run.savedAsIteration = true;
     run.result = this.computeResult(h, run, bundle);
-    if (run.result.prompt) run.result.prompt.createdAt = startedAt;
+    run.assessment = assessmentOf(run.result);
+    if (run.result.prompt) {
+      run.result.prompt.createdAt = startedAt;
+      run.result.prompt.updatedAt = startedAt;
+    }
     if (push) this.runs.push(run);
     return run;
   }
@@ -1005,6 +1032,9 @@ export class MockWorkflow {
       savedAsIteration: false,
       result: null,
       errorMessage: null,
+      provenance: "provider",
+      styleThreshold: this.ctx.rules().workflow.styleThreshold,
+      assessment: null,
     };
   }
 
@@ -1044,6 +1074,10 @@ export class MockWorkflow {
         addresses: [],
         sources,
         sentAt: null,
+        status: "draft",
+        committedAt: null,
+        provenance: "provider",
+        updatedAt: new Date().toISOString(),
       };
       return {
         verdict: "pass",
@@ -1057,6 +1091,7 @@ export class MockWorkflow {
         style: null,
         teacherRequirements: [],
         recommendedAction: { kind: "send_prompt_to_author", label: `Передать промт ${this.authorName()}` },
+        missing: [],
         prompt,
       };
     }
@@ -1092,6 +1127,7 @@ export class MockWorkflow {
         style: null,
         teacherRequirements: reqs,
         recommendedAction: notDone.length ? { kind: "create_revision_prompt", label: "Создать промт исправлений по комментариям" } : { kind: "mark_ready", label: "Перейти к комплекту на сдачу" },
+        missing: [],
         prompt: notDone.length ? this.revisionPrompt(h, v, run, [], [], null, notDone, sources) : null,
       };
     }
@@ -1149,6 +1185,7 @@ export class MockWorkflow {
         : verdict === "needs_teacher_review"
           ? { kind: "add_teacher_comments", label: "Добавить комментарии преподавателя и сверить" }
           : { kind: "mark_ready", label: "Перейти к комплекту на сдачу" },
+      missing: v.files.length >= 1 ? [] : [{ kind: "file", label: "Файл решения", required: true }],
       prompt: wantPrompt ? this.revisionPrompt(h, v, run, critical, unsupported, style, run.kind === "revision_prompt" ? teacherNotDone : [], sources, remarks) : null,
     };
   }
@@ -1219,6 +1256,10 @@ export class MockWorkflow {
       addresses: [...critical.map((f) => f.id), ...remarks.map((f) => f.id), ...unsupported.map((u) => u.id), ...reqs.map((r) => r.id)],
       sources,
       sentAt: null,
+      status: "draft",
+      committedAt: null,
+      provenance: "provider",
+      updatedAt: new Date().toISOString(),
     };
   }
 
@@ -1263,8 +1304,24 @@ export class MockWorkflow {
       },
       { id: "final_version", label: "Итоговой назначена проверенная версия", ok: !!target && h.finalVersionId === target.id, detail: !target ? "Версий нет" : h.finalVersionId === target.id ? `${target.label} — итоговая` : `Сделайте ${target.label} итоговой` },
     ];
-    return { homeworkId: h.id, ready: checks.every((c) => c.ok), checks };
+    return { homeworkId: h.id, ready: checks.every((c) => c.ok), checks, versionId: target?.id ?? null, reviewRunId: saved?.id ?? null, revision: h.revision };
   }
+}
+
+/** Отдельные критерии результата — так же, как их хранит backend. */
+function assessmentOf(result: ReviewResult): ReviewAssessment {
+  const status = (id: CriterionId): CriterionStatus => result.criteria.find((c) => c.id === id)?.status ?? "na";
+  return {
+    verdict: result.verdict,
+    correctness: status("correctness"),
+    taskFit: status("task_fit"),
+    courseGrounding: status("course_grounding"),
+    teacher: status("teacher"),
+    styleScore: result.style?.score ?? null,
+    criticalCount: result.critical.length,
+    unsupportedCount: result.unsupportedClaims.length,
+    missingRequired: result.missing.filter((m) => m.required).length,
+  };
 }
 
 const RUN_TITLE: Record<RunKind, string> = {

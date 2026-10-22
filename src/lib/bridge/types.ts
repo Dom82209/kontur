@@ -607,6 +607,8 @@ export interface Homework {
   workflowStage: HomeworkWorkflowStage;
   /** Ссылка на страницу задания в системе вуза. */
   assignmentUrl: string | null;
+  /** Optimistic revision: меняется при каждой мутации рабочего цикла. */
+  revision: number;
 }
 
 // ───────────────────────── Провайдеры ─────────────────────────
@@ -618,8 +620,8 @@ export interface ProviderStatus {
   accountLabel: string | null;
   lastCheckedAt: ISODate;
   errorMessage: string | null;
-  /** Через что backend работает с провайдером. «mock» — демонстрационный адаптер. */
-  adapter: "cli" | "desktop_app" | "mock";
+  /** Через что backend работает с провайдером. «mock» — демонстрационный адаптер; «unavailable» — адаптера ещё нет, только ручная передача. */
+  adapter: "cli" | "desktop_app" | "mock" | "unavailable";
   /** Роли, назначенные провайдеру в настройках рабочего цикла. */
   roles: WorkflowRole[];
 }

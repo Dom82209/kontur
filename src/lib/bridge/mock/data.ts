@@ -207,6 +207,7 @@ function hw(
     folderPath: folder,
     workflowStage: stage === "submitted" ? "submitted" : stage === "task" ? "materials_collected" : stage === "ready" ? "teacher_review" : "codex_review",
     assignmentUrl: null,
+    revision: 0,
   };
 }
 

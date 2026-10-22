@@ -246,6 +246,8 @@ pub struct HomeworkDto {
     pub folder_path: String,
     pub workflow_stage: HomeworkWorkflowStage,
     pub assignment_url: Option<String>,
+    /// Optimistic revision агрегата: меняется при каждой мутации рабочего цикла.
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

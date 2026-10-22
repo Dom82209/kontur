@@ -43,6 +43,7 @@ const homework: Homework = {
   folderPath: "Предметы/ОБА/Неделя 07/03 ДЗ",
   workflowStage: "materials_collected",
   assignmentUrl: null,
+  revision: 0,
 };
 
 const rules: AutomationRules = {

@@ -1,6 +1,6 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 5. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 6. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
@@ -13,15 +13,16 @@
 | `InboxFile` | `InboxFileDto` | `inbox_files` (+ v3 `sha256`, `mime_type`, `import_operation_id`; v4 `provenance_json`) | `classification`, `duplicate`, `provenance`; v3/v4-колонки NULL у legacy | typed `classification_json`, `duplicate_json`, `provenance_json` | persistent `relative_path`, SHA-256 и MIME не выдаются | `inbox_files` |
 | `ManagedRoots` | `ManagedRootsDto` (вычисляется) | `app_settings.managed_roots`: `vaultPath`, `backupPath`, `downloadsPath` | все три nullable | весь тип в `value_json` | состояние и `displayPath` вычисляются при каждом запросе | `app_settings` + файловая система |
 | `InboxImportReport`, `OperationRecord` | `InboxImportReport` | `operation_results`: `operation_id`, `kind = inbox_import`, `result_json` | `importReport` null для операций без итога | весь отчёт в `result_json` | `replayed` выставляется при повторе | immutable row `operation_results` |
-| `Homework` | `HomeworkDto` | `homeworks` + связи с `weeks`, `files`, `homework_versions` | `final_version_id`, `final_file_name`, `submitted_at`, `assignment_url`; legacy `deadline` | — | `subjectId`, `weekNumber`, `taskFiles`, `versions` через связи | `homeworks` и дочерние таблицы |
+| `Homework` | `HomeworkDto` | `homeworks` + связи с `weeks`, `files`, `homework_versions`; v6 `revision` | `final_version_id`, `final_file_name`, `submitted_at`, `assignment_url`; legacy `deadline` | — | `subjectId`, `weekNumber`, `taskFiles`, `versions` через связи | `homeworks` и дочерние таблицы |
 | `HomeworkVersion` | `HomeworkVersionDto` | `homework_versions` | `note`, `prompt_id`, `source_bundle_id` | typed `sections_json`, `files_json`, legacy `metadata_json` | legacy file fallback | immutable row `homework_versions` |
-| `SourceBundle` | `SourceBundle`, `SourceBundleItem` | `source_bundles`, `source_bundle_items` | `version_id` | `missing_json`; FileRef элемента восстанавливается join с `files` | `items` через join | обе таблицы |
-| `ReviewRun` | `ReviewRun` | `review_runs` | `version_id`, `source_bundle_id`, `finished_at`, `result_json`, `error_message`, `style_score` | `sources_used_json`, `result_json` | — | `review_runs` |
-| `RevisionPrompt` | `RevisionPrompt` | `revision_prompts` | `based_on_version_id`, `review_run_id`, `sent_at` | `addresses_json`, `sources_json` | — | `revision_prompts` |
-| `TeacherComment` | `TeacherComment` | `teacher_comments` | `attachment_file_id`; legacy `source`/`date` | — | `attachment` через join с `files` | `teacher_comments`, `files` |
-| `TeacherRequirement` | `TeacherRequirement` | `teacher_requirements` | только legacy `comment_id`, `checked_version_id`; новые записи обязаны иметь оба | — | — | `teacher_requirements` |
-| `SubmissionPackage` | `SubmissionPackage` | `submission_packages` | нет для новых записей | `items_json`, `links_json`, `warnings_json`, `checklist_json`, `upload_list_json` | — | `submission_packages` |
-| `SubmissionReceipt` | `SubmissionReceipt` | `submission_receipts` | `proof_json` | `proof_json`, `files_json` | — | immutable row `submission_receipts` |
+| `SourceBundle` | `workflow::SourceBundleDto`, `SourceItemDto` | `source_bundles` (+ v6 `origin`, `selection_id`, `extractor_version`, `warnings_json`, `total_chars`, `limit_chars`), `source_bundle_items` (v6: снимок материала) | `version_id`; у legacy — `selection_id`, `extractor_version`, `sha256` | `missing_json`, `warnings_json`, `warnings_json` элемента | признак «материал изменился после снимка» | обе таблицы (снимок неизменяем) |
+| `ReviewRun` | `workflow::ReviewRunDto` (+ `ReviewAssessmentDto`) | `review_runs` (v6: `provenance`, `verdict`, `correctness`, `task_fit`, `course_grounding`, `teacher_status`, `missing_json`, `critical_json`, `unsupported_json`) | `version_id`, legacy `source_bundle_id`, `finished_at`, `result_json`, `error_message`, `style_score` | typed `sources_used_json`, `result_json` (`StoredReviewResult`) | `result.prompt` из `revision_prompts` | `review_runs` |
+| `RevisionPrompt` | `workflow::RevisionPromptDto` | `revision_prompts` (v6: `status` draft/committed, `committed_at`, `provenance`) | `based_on_version_id`, `review_run_id`, `sent_at`, `committed_at` | typed `addresses_json`, `sources_json` | — | `revision_prompts` |
+| `TeacherComment` | `workflow::TeacherCommentDto` | `teacher_comments` | `attachment_file_id`; legacy `source`/`date` | — | `attachment` через join с `files` | `teacher_comments`, `files` |
+| `TeacherRequirement` | `workflow::TeacherRequirementDto` | `teacher_requirements` | только legacy `comment_id`, `checked_version_id` (TS `string \| null`); новые записи обязаны иметь оба | — | — | `teacher_requirements` |
+| `SubmissionPackage` | `workflow::SubmissionPackageDto` | `submission_packages` | нет для новых записей | typed `items_json`, `links_json`, `warnings_json`, `checklist_json`, `upload_list_json` | — | `submission_packages` (этап 8 — только чтение) |
+| `StyleConfirmation` | `workflow::StyleConfirmationDto` | v6 `style_confirmations` | — | — | — | immutable row `style_confirmations` |
+| `SubmissionReceipt` | `workflow::SubmissionReceiptDto` | `submission_receipts` | `proof_json` | typed `proof_json`, `files_json` | — | immutable row `submission_receipts` |
 | `Operation` | `OperationDto` | `operations` | `detail`, `finished_at`, `backup_path`, `homework_id`, `error_json`, `undo_payload_json` | typed `paths_json`; internal error/undo payload не выдаётся | status normalization | `operations` |
 | `MaterialExtraction`, `ExtractionSummary` | `MaterialExtractionDto`, `ExtractionSummaryDto` | v5 `extractions` + `material_extractions` | `statusMessage`, все поля `metadata` | `metadata_json`, `structure_json` (блоки), `warnings_json` | `stale`, `cached`, `context` | `extractions` (cache по SHA-256) |
 | `ExtractionBatchReport` | `ExtractionBatchReport` | v5 `extraction_batches.report_json` | — | весь отчёт | `replayed` при повторе | immutable row `extraction_batches` |
@@ -103,7 +104,7 @@ File service 4D.1 уточняет будущий typed undo payload: `UndoManif
 
 ## Не сохраняемые представления
 
-`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation`, `ExportPreview`, `DownloadCandidate`, `DownloadsWatcher`, `MaterialExtractionItem`, `CorpusPreview` — входные/предварительные/вычисляемые DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
+`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями (`workflow::projections`). Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation`, `ExportPreview`, `DownloadCandidate`, `DownloadsWatcher`, `MaterialExtractionItem`, `CorpusPreview` — входные/предварительные/вычисляемые DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
 
 ## AutomationRules defaults
 
@@ -124,3 +125,32 @@ IPC-поле каждого из `subjectId`, `weekNumber`, `category` пере�
 v1 уже неизменяема. v2 добавляет недостающие колонки, перестраивает только таблицы, где нужны nullable FK или новые enum constraints, и копирует старые строки транзакционно. Поля, которых в v1 не существовало, получают безопасные детерминированные legacy-значения (`short_name = name`, даты недели из `created_at`, пустые валидные JSON-массивы).
 
 При read hydration nullable `topic`, `finalVersionId`, `finalFileName`, `submittedAt`, `assignmentUrl`, `promptId` и `sourceBundleId` сохраняются как `null`. Пустые legacy `HomeworkVersion.fileName` и `sourceFileId` восстанавливаются из basename относительного `file_path` и стабильного `legacy:<versionId>`; пустой `files_json` даёт один FileRef той же frozen-версии. Отсутствующий обязательный deadline, неизвестный enum, повреждённый JSON или небезопасный путь не маскируются пустой строкой: возвращается структурированная ошибка `database` без panic.
+
+## Рабочий цикл ДЗ (schema v6, этап 8A)
+
+- v6 — одна транзакционная миграция; v1–v5 не изменялись. Новых таблиц с назначением существующих нет: `source_bundles` дополнена, `source_bundle_items`, `review_runs`, `revision_prompts` и `operation_results` перестроены с переносом всех строк. Единственная новая таблица — `style_confirmations` (ручное подтверждение расхождения со стилем), аналога в старой схеме нет.
+- `homeworks.revision` — optimistic revision агрегата (legacy-строки получают `0`).
+- **SourceBundle = неизменяемый снимок подборки этапа 7.** Новый набор обязан иметь `origin = corpus_selection`, `selection_id`, `extractor_version`; версия, если указана, принадлежит тому же ДЗ (триггер). Элемент снимка хранит материал (`material_kind`/`material_id` без FK — материал можно удалить, снимок остаётся), вид источника, порядок (`position`, уникален в наборе), имя, тип, размер, относительный путь, SHA-256, id результата извлечения, версию правил, статус, число символов и коды предупреждений. `UPDATE` наборов и элементов запрещён; добавлять элементы в набор, уже использованный запуском, нельзя. Legacy-элементы v2 переносятся как `material_kind = file` с данными из `files`; SHA-256 берётся только из корректного `files.content_hash`, иначе `NULL` (не выдумывается).
+- Создание снимка: план из подборки → сверка содержимого с диском (`ContentVerifier`, production — fd-relative чтение хранилища) → в транзакции план перечитывается и обязан совпасть, иначе `conflict`. Блокируют набор: удалённый материал, изменённый файл «Входящих», ссылка на результат другой версии файла, удалённый из cache результат, статус без текста, устаревшая версия правил извлечения, повреждённый JSON предупреждений, расхождение SHA-256 на диске, недоступное хранилище, пустая подборка. Предупреждения корпуса (`partial_extraction`, `text_truncated`, `corpus_truncated`) и пропуски (`missing`: нет условия — обязательно, нет лекций/семинаров — рекомендовано) сохраняются в наборе.
+- **ReviewRun**: статусы `queued`, `waiting_for_provider`, `manual_handoff`, `running`, `completed`, `failed`, `cancelled`; `provenance` — `legacy` (строки v1–v5), `manual`, `provider` (этап 9). Отдельными колонками хранятся итоговое решение, корректность, соответствие условию, опора на материалы, требования преподавателя, расхождение со стилем 0–10, применённый порог, отсутствующие файлы/ссылки, критические ошибки и неподтверждённые утверждения; полный `StoredReviewResult` — в `result_json`. Новый запуск ссылается на набор и версию того же ДЗ. Завершённый запуск неизменяем (разрешено только закрепить итерацию, открепить нельзя); порог и ссылки не меняются никогда. Legacy-оценки не выдумываются: у legacy-запуска `assessment = null`.
+- **RevisionPrompt**: новый промт создаётся только как `draft` с `provenance = manual`; черновик один на ДЗ (частичный уникальный индекс). Промт исправлений обязан ссылаться на завершённую проверку той же версии. После `committed` текст, ссылки и адресаты неизменяемы, удаление запрещено; передача (`sent_at`) отмечается один раз. Legacy-промты переносятся как `committed` (`committed_at = created_at`).
+- **style_confirmations**: `confirmed_by = user`, время, версия, проверка, исходный балл и применённый порог; строка обязана совпадать с завершённой проверкой той же версии и существует только если балл выше порога. Неизменяема.
+- **operation_results**: `kind ∈ {inbox_import, workflow}`, для `workflow` обязателен `request_hash` (SHA-256 канонического запроса) — основа идемпотентного повтора команд этапа 8B.
+- Индексы реальных запросов: запуски по ДЗ/версии/набору, промты по ДЗ и запуску, элементы набора по позиции, операции по ДЗ, требования по комментарию, файлы ДЗ по категории.
+- Hydration агрегата одного ДЗ — фиксированная серия из 13 запросов (`workflow::repository::load_snapshot`), независимая от числа версий, наборов и запусков. Все JSON-колонки читаются в typed DTO; повреждённый JSON, неизвестный enum, небезопасный путь — ошибка `database` с именем поля, без panic. Записи повторно проверяют, что ни одна строка вложенного JSON не является абсолютным, home, `file:` или выходящим за корень путём.
+
+### Соответствие TypeScript → Rust → SQLite → repository
+
+| TypeScript | Rust DTO | Таблица/колонки | Repository (`workflow::repository`) |
+|---|---|---|---|
+| `Homework` (+`revision`) | `HomeworkDto` | `homeworks`, `homework_versions`, `files` | `homework_dto`, `homework_core`, `bump_revision`, `set_workflow_stage`, `set_current_version` |
+| `HomeworkVersion` | `HomeworkVersionDto` | `homework_versions` (append-only) | `versions`, `insert_version`, `version_candidates`, `homework_file` |
+| `SourceBundle`, `SourceItem`, `BundleWarning` | `SourceBundleDto`, `SourceItemDto`, `BundleWarningDto` | `source_bundles`, `source_bundle_items` | `bundles`, `bundle`, `insert_bundle`; план — `workflow::bundle` |
+| `ReviewRun`, `ReviewResult`, `ReviewAssessment` | `ReviewRunDto`, `StoredReviewResult`/`ReviewResultDto`, `ReviewAssessmentDto` | `review_runs` | `runs`, `run`, `insert_run`, `complete_run_manually`, `cancel_run`, `pin_run` |
+| `RevisionPrompt` | `RevisionPromptDto` | `revision_prompts` | `prompts`, `prompt`, `insert_draft_prompt`, `update_draft_text`, `commit_prompt`, `mark_prompt_handed_off` |
+| `TeacherComment` | `TeacherCommentDto` | `teacher_comments` + `files` | `teacher_comments`, `insert_teacher_comment` |
+| `TeacherRequirement` | `TeacherRequirementDto` | `teacher_requirements` | `teacher_requirements`, `insert_requirement`, `resolve_requirement` |
+| `StyleConfirmation` | `StyleConfirmationDto` | `style_confirmations` | `style_confirmations`, `insert_style_confirmation` |
+| `SubmissionPackage` | `SubmissionPackageDto` | `submission_packages` | `submission_package` (чтение) |
+| `SubmissionReceipt` | `SubmissionReceiptDto` | `submission_receipts` | `submission_receipt` (чтение) |
+| `Readiness`, `HomeworkIteration`, `VersionComparison`, `Dashboard` | `ReadinessDto`, `HomeworkIterationDto`, `VersionComparisonDto`, `DashboardDto` | проекции | `workflow::projections` |

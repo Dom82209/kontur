@@ -14,6 +14,8 @@ use serde::de::DeserializeOwned;
 
 use crate::{db::Database, error::BackendError};
 
+pub(crate) use files::hydrate_file;
+pub(crate) use homeworks::{load_homework, load_homeworks, load_versions};
 pub use mutations::Repositories;
 
 pub struct ReadRepository<'a> {
@@ -35,7 +37,7 @@ fn parse_json<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T, BackendE
         .map_err(|error| BackendError::database(format!("invalid JSON in {field}: {error}")))
 }
 
-fn require_relative_path(value: &str, field: &str) -> Result<(), BackendError> {
+pub(crate) fn require_relative_path(value: &str, field: &str) -> Result<(), BackendError> {
     let path = Path::new(value);
     let valid = !value.trim().is_empty()
         && !path.is_absolute()

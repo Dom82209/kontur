@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+pub const CURRENT_SCHEMA_VERSION: u32 = 6;
 
 struct Migration {
     version: u32,
@@ -29,6 +29,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 5,
         sql: include_str!("v5.sql"),
+    },
+    Migration {
+        version: 6,
+        sql: include_str!("v6.sql"),
     },
 ];
 
@@ -84,6 +88,7 @@ mod tests {
             "revision_prompts",
             "source_bundle_items",
             "source_bundles",
+            "style_confirmations",
             "subjects",
             "submission_packages",
             "submission_receipts",
@@ -370,7 +375,7 @@ mod tests {
     #[test]
     fn v5_keeps_earlier_rows_and_starts_with_empty_extraction_tables() {
         let mut connection = v2_database_with_inbox_row();
-        assert_eq!(migrate(&mut connection).unwrap(), 5);
+        assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
         let (inbox, extractions, links, selections): (i64, i64, i64, i64) = connection
             .query_row(
                 "SELECT (SELECT count(*) FROM inbox_files), (SELECT count(*) FROM extractions),

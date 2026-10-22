@@ -17,6 +17,7 @@ mod lms_commands;
 pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;
+pub mod workflow;
 
 use app_state::AppState;
 use db::Database;

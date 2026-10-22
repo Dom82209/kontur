@@ -1,6 +1,6 @@
 # Архитектура Rust backend
 
-Статус документа: этап 7. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 8A. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
 
@@ -22,6 +22,7 @@
 - `ipc_commands` — единый список IPC-команд, который `build.rs` передаёт в `AppManifest`; тест сверяет его с capability.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
+- `workflow` — этап 8: `dto` (точные DTO рабочего цикла и исчерпывающие enum), `repository` (SQL поверх `&Connection` — одинаково в чтении и в транзакции), `bundle` (неизменяемый SourceBundle из подборки этапа 7, `ContentVerifier`), `projections` (Readiness, IterationChain, сравнение версий, Главная).
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
 
 Списковые агрегаты собираются фиксированной серией запросов: Subject — одним агрегатным запросом, Week — базовые строки + файлы + связи Homework, Homework — базовые строки + task files + versions. N+1-запросов по элементам списков нет.
@@ -30,7 +31,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `5`. Неизменяемые v1–v4 и добавочная v5 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `6`. Неизменяемые v1–v5 и добавочная v6 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
 
 Схема содержит таблицы:
 
@@ -43,7 +44,8 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `submission_packages`, `submission_receipts`;
 - `operations`, `operation_results` (v3);
 - `download_seen` (v4);
-- `extractions`, `material_extractions`, `extraction_batches`, `corpus_selections`, `corpus_selection_items` (v5).
+- `extractions`, `material_extractions`, `extraction_batches`, `corpus_selections`, `corpus_selection_items` (v5);
+- `style_confirmations` (v6).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 

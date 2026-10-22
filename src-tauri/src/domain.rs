@@ -257,39 +257,6 @@ pub struct NewInboxFile<'a> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SourceBundle {
-    pub id: String,
-    pub homework_id: String,
-    pub purpose: String,
-    pub version_id: Option<String>,
-    pub items: Vec<SourceBundleItem>,
-    pub complete: bool,
-    pub missing: Value,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceBundleItem {
-    pub id: String,
-    pub file_id: String,
-    pub source_kind: String,
-    pub required: bool,
-    pub included: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewSourceBundle<'a> {
-    pub id: &'a str,
-    pub homework_id: &'a str,
-    pub purpose: &'a str,
-    pub version_id: Option<&'a str>,
-    pub complete: bool,
-    pub missing: &'a Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ReviewRun {
     pub id: String,
     pub homework_id: String,

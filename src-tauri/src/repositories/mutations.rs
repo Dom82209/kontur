@@ -7,8 +7,8 @@ use crate::{
     db::Database,
     domain::{
         Homework, HomeworkStage, HomeworkVersion, HomeworkWorkflowStage, InboxFile, NewHomework,
-        NewHomeworkVersion, NewInboxFile, NewOperation, NewSourceBundle, NewSubject, NewWeek,
-        OperationRecord, SourceBundle, Subject, VersionAuthor, Week,
+        NewHomeworkVersion, NewInboxFile, NewOperation, NewSubject, NewWeek, OperationRecord,
+        Subject, VersionAuthor, Week,
     },
     error::BackendError,
 };
@@ -377,45 +377,6 @@ impl<'a> Repositories<'a> {
                     },
                 )
                 .map_err(|error| map_read_error(error, "inbox file not found"))
-        })
-    }
-
-    pub fn create_source_bundle(
-        &self,
-        bundle: NewSourceBundle<'_>,
-    ) -> Result<SourceBundle, BackendError> {
-        let missing_json = json_text(bundle.missing)?;
-        self.database.with_transaction(|transaction| {
-            transaction
-                .execute(
-                    "INSERT INTO source_bundles(
-                        id, homework_id, purpose, version_id, complete, missing_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        bundle.id,
-                        bundle.homework_id,
-                        bundle.purpose,
-                        bundle.version_id,
-                        i64::from(bundle.complete),
-                        missing_json
-                    ],
-                )
-                .map_err(|error| map_write_error(error, "source bundle is invalid"))?;
-            let created_at = transaction.query_row(
-                "SELECT created_at FROM source_bundles WHERE id = ?1",
-                [bundle.id],
-                |row| row.get(0),
-            )?;
-            Ok(SourceBundle {
-                id: bundle.id.to_owned(),
-                homework_id: bundle.homework_id.to_owned(),
-                purpose: bundle.purpose.to_owned(),
-                version_id: bundle.version_id.map(str::to_owned),
-                items: Vec::new(),
-                complete: bundle.complete,
-                missing: bundle.missing.clone(),
-                created_at,
-            })
         })
     }
 }
@@ -850,75 +811,6 @@ mod tests {
         assert_eq!(restored.classification, Some(classification));
         assert_eq!(restored.duplicate, Some(duplicate));
         assert_eq!(restored.relative_path, "Предметы/00 Входящие/task.pdf");
-    }
-
-    #[test]
-    fn initial_source_bundle_and_review_need_no_version() {
-        let database = database();
-        seed_subject_week(&database);
-        let repositories = Repositories::new(&database);
-        repositories
-            .create_homework(homework("homework-1"))
-            .unwrap();
-        database
-            .with_connection(|connection| {
-                connection.execute(
-                    "INSERT INTO files(
-                        id, homework_id, category, name, kind, size_bytes, modified_at, relative_path
-                     ) VALUES ('task-file', 'homework-1', 'homework_task', 'task.pdf', 'pdf', 42,
-                               '2026-10-21T08:00:00Z',
-                               'Предметы/ОБА/Неделя 07/03 ДЗ/01 Условие и данные/task.pdf')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        let missing = json!([]);
-        let bundle = repositories
-            .create_source_bundle(NewSourceBundle {
-                id: "bundle-1",
-                homework_id: "homework-1",
-                purpose: "analyze_materials",
-                version_id: None,
-                complete: true,
-                missing: &missing,
-            })
-            .unwrap();
-        assert_eq!(bundle.version_id, None);
-
-        database
-            .with_transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO source_bundle_items(
-                        id, source_bundle_id, file_id, source_kind, required, included
-                     ) VALUES ('bundle-item-1', 'bundle-1', 'task-file', 'task', 1, 1)",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO review_runs(
-                        id, homework_id, kind, role, provider, version_id, source_bundle_id,
-                        status, progress, step, started_at, style_threshold
-                     ) VALUES (
-                        'review-1', 'homework-1', 'analyze_materials', 'analyst', 'codex', NULL,
-                        'bundle-1', 'queued', 0, 'Подготовка', '2026-10-21T08:00:00Z', 4
-                     )",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO revision_prompts(
-                        id, homework_id, kind, text, created_by, based_on_version_id, review_run_id
-                     ) VALUES ('prompt-1', 'homework-1', 'initial', 'Создать решение', 'codex', NULL, NULL)",
-                    [],
-                )?;
-                let item_count: i64 = transaction.query_row(
-                    "SELECT COUNT(*) FROM source_bundle_items WHERE source_bundle_id = 'bundle-1'",
-                    [],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(item_count, 1);
-                Ok(())
-            })
-            .unwrap();
     }
 
     #[test]
