@@ -206,8 +206,14 @@ pub fn xml_string(data: Vec<u8>) -> ExtractResult<String> {
     }
     for (bom, little) in [(&b"\xFF\xFE"[..], true), (&b"\xFE\xFF"[..], false)] {
         if let Some(rest) = data.strip_prefix(bom) {
-            let units: Vec<u16> = rest
-                .chunks_exact(2)
+            let (pairs, remainder) = rest.as_chunks::<2>();
+            if !remainder.is_empty() {
+                return Err(ExtractError::Corrupt(
+                    "XML-часть содержит неполную UTF-16 кодовую единицу".into(),
+                ));
+            }
+            let units: Vec<u16> = pairs
+                .iter()
                 .map(|pair| {
                     if little {
                         u16::from_le_bytes([pair[0], pair[1]])

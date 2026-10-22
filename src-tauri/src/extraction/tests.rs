@@ -21,12 +21,13 @@ use super::{
     fixtures::*,
     image::OcrMode,
     model::{
-        Block, Budget, Extracted, ExtractionLimits, ExtractionStatus, Interrupt, SourceFormat,
-        WarningCode,
+        Block, Budget, ExtractError, Extracted, ExtractionLimits, ExtractionStatus, Interrupt,
+        SourceFormat, WarningCode,
     },
     ocr::{OcrEngine, OcrError},
+    ooxml,
     service::ExtractionService,
-    store,
+    store, text,
 };
 use crate::{
     db::Database,
@@ -609,6 +610,58 @@ fn plain_text_utf8_utf16_and_binary() {
 
     let binary = run("data.txt", b"\x00\x01\x02binary\x00");
     assert_eq!(binary.status, ExtractionStatus::Unsupported);
+}
+
+#[test]
+fn plain_text_decodes_utf16_little_and_big_endian() {
+    for (bom, little, label) in [
+        (&b"\xFF\xFE"[..], true, "UTF-16LE"),
+        (&b"\xFE\xFF"[..], false, "UTF-16BE"),
+    ] {
+        let mut bytes = bom.to_vec();
+        for unit in "Привет".encode_utf16() {
+            let encoded = if little {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            };
+            bytes.extend_from_slice(&encoded);
+        }
+        let decoded = text::decode(&bytes).unwrap();
+        assert_eq!(decoded.text, "Привет");
+        assert_eq!(decoded.encoding, label);
+    }
+}
+
+#[test]
+fn plain_text_rejects_incomplete_utf16_code_unit() {
+    let error = match text::decode(b"\xFF\xFEA") {
+        Err(error) => error,
+        Ok(_) => panic!("неполная UTF-16 кодовая единица должна быть отклонена"),
+    };
+    assert!(matches!(error, ExtractError::Corrupt(_)));
+}
+
+#[test]
+fn ooxml_decodes_utf16_little_and_big_endian() {
+    for (bom, little) in [(&b"\xFF\xFE"[..], true), (&b"\xFE\xFF"[..], false)] {
+        let mut bytes = bom.to_vec();
+        for unit in "<root>Текст</root>".encode_utf16() {
+            let encoded = if little {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            };
+            bytes.extend_from_slice(&encoded);
+        }
+        assert_eq!(ooxml::xml_string(bytes).unwrap(), "<root>Текст</root>");
+    }
+}
+
+#[test]
+fn ooxml_rejects_incomplete_utf16_code_unit() {
+    let error = ooxml::xml_string(b"\xFE\xFFX".to_vec()).unwrap_err();
+    assert!(matches!(error, ExtractError::Corrupt(_)));
 }
 
 #[test]

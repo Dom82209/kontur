@@ -31,8 +31,14 @@ pub fn decode(bytes: &[u8]) -> ExtractResult<Decoded> {
         (&b"\xFE\xFF"[..], false, "UTF-16BE"),
     ] {
         if let Some(rest) = bytes.strip_prefix(bom) {
-            let units: Vec<u16> = rest
-                .chunks_exact(2)
+            let (pairs, remainder) = rest.as_chunks::<2>();
+            if !remainder.is_empty() {
+                return Err(ExtractError::Corrupt(
+                    "UTF-16 содержит неполную кодовую единицу".into(),
+                ));
+            }
+            let units: Vec<u16> = pairs
+                .iter()
                 .map(|pair| {
                     if little {
                         u16::from_le_bytes([pair[0], pair[1]])
