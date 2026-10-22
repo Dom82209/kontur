@@ -1,4 +1,5 @@
 import type { TypedEmitter } from "../emitter";
+import { isAllowedTransition, transitionsFrom } from "../workflow-transitions";
 import {
   BridgeError,
   type AutomationRules,
@@ -40,13 +41,21 @@ import {
   type TeacherComment,
   type TeacherCommentInput,
   type TeacherRequirement,
+  type TeacherRequirementInput,
   type UnsupportedClaim,
+  type HomeworkWorkflow,
+  type ManualAnalysisInput,
+  type ManualReviewInput,
+  type RunMode,
+  type StyleConfirmation,
+  type TransitionOption,
+  type WorkflowCommandOptions,
   type VersionComparison,
   type Week,
   type WorkflowRole,
 } from "../types";
 import { applyNamePattern } from "../../naming";
-import { kindFromName, pad2, providerName, SOURCE_KIND_LABEL, STYLE_REASON_LABEL } from "../../format";
+import { kindFromName, pad2, providerName, SOURCE_KIND_LABEL, STYLE_REASON_LABEL, WORKFLOW_STAGE_LABEL } from "../../format";
 import { at, buildSections, makeFile, previousWorks, STYLE_PROFILE_FILE, subjectName } from "./data";
 
 /**
@@ -73,6 +82,7 @@ export interface MockContext {
 const clone = <T,>(v: T): T => structuredClone(v);
 /** Статус может смениться из cancelRun во время await — читаем без сужения типа. */
 const isCancelled = (r: ReviewRun): boolean => r.status === "cancelled";
+const isOpen = (r: ReviewRun): boolean => r.status === "queued" || r.status === "running" || r.status === "waiting_for_provider" || r.status === "manual_handoff";
 let seq = 0;
 const uid = (p: string): string => `${p}-${Date.now().toString(36)}-${(seq += 1)}`;
 
@@ -185,6 +195,7 @@ export class MockWorkflow {
   private findings = new Map<string, ReviewFinding[]>();
   private packages = new Map<string, SubmissionPackage>();
   private receipts = new Map<string, SubmissionReceipt>();
+  private confirmations: StyleConfirmation[] = [];
   private runOps = new Map<string, { op: Operation; prevStage: HomeworkWorkflowStage }>();
   private readonly profile: StyleProfile;
 
@@ -211,11 +222,13 @@ export class MockWorkflow {
     return clone({ ...this.profile, relativePath: this.ctx.rules().workflow.styleProfilePath });
   }
 
-  async prepareSourceBundle(homeworkId: string, purpose: RunKind, versionId: string | null = null): Promise<SourceBundle> {
+  async prepareSourceBundle(homeworkId: string, purpose: RunKind, versionId: string | null = null, options?: WorkflowCommandOptions): Promise<SourceBundle> {
     await this.ctx.wait(260);
     const h = this.hw(homeworkId);
+    this.checkRevision(h, options);
     const bundle = this.buildBundle(h, purpose, versionId);
     this.bundles.set(bundle.id, bundle);
+    this.touch(h, "create_source_bundle");
     return clone(bundle);
   }
 
@@ -232,26 +245,27 @@ export class MockWorkflow {
 
   // ───────────── Запуски ─────────────
 
-  async runMaterialAnalysis(homeworkId: string, bundleId: string): Promise<ReviewRun> {
-    return this.startRun(homeworkId, "analyze_materials", bundleId, null);
+  async runMaterialAnalysis(homeworkId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun> {
+    return this.startRun(homeworkId, "analyze_materials", bundleId, null, options);
   }
 
-  async runVersionReview(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun> {
-    return this.startRun(homeworkId, "review_version", bundleId, versionId);
+  async runVersionReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun> {
+    return this.startRun(homeworkId, "review_version", bundleId, versionId, options);
   }
 
-  async runRevisionPrompt(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun> {
-    return this.startRun(homeworkId, "revision_prompt", bundleId, versionId);
+  async runRevisionPrompt(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun> {
+    return this.startRun(homeworkId, "revision_prompt", bundleId, versionId, options);
   }
 
-  async runTeacherReview(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun> {
+  async runTeacherReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun> {
     if (this.comments.filter((c) => c.homeworkId === homeworkId).length === 0) throw new BridgeError("blocked", "Сначала добавьте комментарии преподавателя");
-    return this.startRun(homeworkId, "review_teacher", bundleId, versionId);
+    return this.startRun(homeworkId, "review_teacher", bundleId, versionId, options);
   }
 
-  async cancelRun(runId: string): Promise<ReviewRun> {
+  async cancelRun(runId: string, options?: WorkflowCommandOptions): Promise<ReviewRun> {
     const run = this.mustRun(runId);
-    if (run.status !== "queued" && run.status !== "running") throw new BridgeError("conflict", "Запуск уже завершён");
+    this.checkRevision(this.hw(run.homeworkId), options);
+    if (!isOpen(run)) throw new BridgeError("conflict", "Запуск уже завершён");
     run.status = "cancelled";
     run.finishedAt = new Date().toISOString();
     const meta = this.runOps.get(run.id);
@@ -269,10 +283,11 @@ export class MockWorkflow {
     return clone(this.runs.filter((r) => r.homeworkId === homeworkId).sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
   }
 
-  async saveRunAsIteration(runId: string): Promise<ReviewRun> {
+  async saveRunAsIteration(runId: string, options?: WorkflowCommandOptions): Promise<ReviewRun> {
     await this.ctx.wait(120);
     const run = this.mustRun(runId);
     this.assertMutable(this.hw(run.homeworkId));
+    this.checkRevision(this.hw(run.homeworkId), options);
     if (run.status !== "completed") throw new BridgeError("conflict", "Сохранить можно только завершённый запуск");
     run.savedAsIteration = true;
     return clone(run);
@@ -280,10 +295,12 @@ export class MockWorkflow {
 
   // ───────────── Промты ─────────────
 
-  async createRevisionPrompt(reviewRunId: string, editedText?: string): Promise<OperationResult<RevisionPrompt>> {
+  async createRevisionPrompt(reviewRunId: string, editedText?: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>> {
     const run = this.mustRun(reviewRunId);
     const h = this.hw(run.homeworkId);
     this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (run.provenance === "manual" && run.kind !== "analyze_materials" && run.status === "completed" && run.result && !run.result.prompt) return this.manualRevisionDraft(run, h, editedText);
     const draft = run.result?.prompt;
     if (run.status !== "completed" || !draft) throw new BridgeError("conflict", "У этого запуска нет промта исправлений");
     const existing = this.prompts.find((p) => p.reviewRunId === run.id);
@@ -319,10 +336,11 @@ export class MockWorkflow {
     return { operation: op, value: clone(prompt) };
   }
 
-  async updatePromptText(promptId: string, text: string): Promise<RevisionPrompt> {
+  async updatePromptText(promptId: string, text: string, options?: WorkflowCommandOptions): Promise<RevisionPrompt> {
     await this.ctx.wait(80);
     const p = this.mustPrompt(promptId);
     this.assertMutable(this.hw(p.homeworkId));
+    this.checkRevision(this.hw(p.homeworkId), options);
     if (p.sentAt || p.status === "committed") throw new BridgeError("immutable", "Промт уже зафиксирован — создайте новый");
     p.text = text;
     p.updatedAt = new Date().toISOString();
@@ -334,12 +352,15 @@ export class MockWorkflow {
     return clone(this.prompts.filter((p) => p.homeworkId === homeworkId).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
   }
 
-  async sendPromptToAuthor(promptId: string): Promise<OperationResult<RevisionPrompt>> {
+  async sendPromptToAuthor(promptId: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>> {
     const p = this.mustPrompt(promptId);
     const h = this.hw(p.homeworkId);
     this.assertMutable(h);
+    this.checkRevision(h, options);
     if (p.sentAt) throw new BridgeError("conflict", "Этот промт уже передан — по нему создана версия");
     const provider = this.ctx.rules().workflow.roles.author;
+    const author = this.ctx.providers().find((x) => x.provider === provider);
+    if (author?.state !== "connected") return this.handOffManually(p, h);
     this.ensureConnected(provider);
     const prev = h.workflowStage;
     this.setStage(h, "claude_solving", `Промт передан: ${providerName(provider)} создаёт решение`);
@@ -371,7 +392,8 @@ export class MockWorkflow {
       const p = this.prompts.find((x) => x.id === v.promptId);
       v.sourceBundleId = p?.reviewRunId ? (this.runs.find((r) => r.id === p.reviewRunId)?.sourceBundleId ?? null) : null;
     }
-    this.setStage(h, "codex_review", `${v.label} создана — ожидает проверки`);
+    if (h.workflowStage === "codex_review") this.touch(h, "create_homework_version");
+    else this.setStage(h, "codex_review", `${v.label} создана — ожидает проверки`);
     this.packages.delete(h.id);
   }
 
@@ -453,9 +475,10 @@ export class MockWorkflow {
     return clone(this.comments.filter((c) => c.homeworkId === homeworkId));
   }
 
-  async saveTeacherComments(homeworkId: string, inputs: TeacherCommentInput[]): Promise<OperationResult<TeacherComment[]>> {
+  async saveTeacherComments(homeworkId: string, inputs: TeacherCommentInput[], options?: WorkflowCommandOptions): Promise<OperationResult<TeacherComment[]>> {
     const h = this.hw(homeworkId);
     this.assertMutable(h);
+    this.checkRevision(h, options);
     const valid = inputs.filter((c) => c.question.trim() || c.answer.trim());
     if (valid.length === 0) throw new BridgeError("conflict", "Нет текста комментария");
     const now = new Date().toISOString();
@@ -533,12 +556,17 @@ export class MockWorkflow {
     return clone(this.requirements.filter((r) => r.checkedVersionId === vid && this.comments.some((c) => c.id === r.commentId && c.homeworkId === h.id)));
   }
 
-  async resolveRequirement(requirementId: string, status: "done" | "not_done" | "na", note: string): Promise<TeacherRequirement> {
+  async resolveRequirement(requirementId: string, status: "done" | "not_done" | "na", note: string, options?: WorkflowCommandOptions): Promise<TeacherRequirement> {
     await this.ctx.wait(80);
     const r = this.requirements.find((x) => x.id === requirementId);
     if (!r) throw new BridgeError("not_found", "Требование не найдено");
     const c = this.comments.find((x) => x.id === r.commentId);
-    if (c) this.assertMutable(this.hw(c.homeworkId));
+    if (c) {
+      const h = this.hw(c.homeworkId);
+      this.assertMutable(h);
+      this.checkRevision(h, options);
+      this.touch(h, "resolve_teacher_requirement");
+    }
     r.status = status;
     r.note = note || "Проверено вручную";
     return clone(r);
@@ -551,14 +579,16 @@ export class MockWorkflow {
     return clone(this.readiness(this.hw(homeworkId)));
   }
 
-  async markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean }): Promise<OperationResult<Homework>> {
+  async markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean } & WorkflowCommandOptions): Promise<OperationResult<Homework>> {
     const h = this.hw(homeworkId);
     this.assertMutable(h);
+    this.checkRevision(h, options);
     const r = this.readiness(h);
     if (!r.ready) throw new BridgeError("blocked", `Не выполнено: ${r.checks.filter((c) => !c.ok).map((c) => c.label.toLowerCase()).join("; ")}`);
     const noComments = this.comments.every((c) => c.homeworkId !== h.id);
     if (noComments && this.ctx.rules().workflow.requireTeacherReview && !options.noTeacherComments)
       throw new BridgeError("confirmation_required", "Подтвердите, что комментариев преподавателя по этой работе нет");
+    if (!isAllowedTransition(h.workflowStage, "ready_to_submit")) throw new BridgeError("conflict", "Обязательные этапы нельзя пропускать");
     const prev = h.workflowStage;
     const op = await this.ctx.runOp(
       "mark_ready",
@@ -707,6 +737,365 @@ export class MockWorkflow {
   async getSubmissionReceipt(homeworkId: string): Promise<SubmissionReceipt | null> {
     await this.ctx.wait(80);
     return clone(this.receipts.get(homeworkId) ?? null);
+  }
+
+  // ───────────── Агрегат и ручной режим (контракт этапа 8) ─────────────
+
+  async getWorkflow(homeworkId: string): Promise<HomeworkWorkflow | null> {
+    const h = this.ctx.homework().find((x) => x.id === homeworkId);
+    if (!h) return null;
+    const iterations = await this.getIterations(h.id);
+    const readiness = this.readiness(h);
+    return clone({
+      homework: h,
+      revision: h.revision,
+      stage: h.workflowStage,
+      transitions: this.transitionOptions(h, readiness),
+      bundles: [...this.bundles.values()].filter((b) => b.homeworkId === h.id),
+      runs: this.runs.filter((r) => r.homeworkId === h.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+      prompts: this.prompts.filter((p) => p.homeworkId === h.id),
+      teacherComments: this.comments.filter((c) => c.homeworkId === h.id),
+      teacherRequirements: this.requirements.filter((r) => this.comments.some((c) => c.id === r.commentId && c.homeworkId === h.id)),
+      styleConfirmations: this.confirmations.filter((c) => c.homeworkId === h.id),
+      readiness,
+      iterations,
+      submissionPackage: this.packages.get(h.id) ?? null,
+      submissionReceipt: this.receipts.get(h.id) ?? null,
+      providerMode: "mock",
+    });
+  }
+
+  async saveManualAnalysis(runId: string, input: ManualAnalysisInput, options?: WorkflowCommandOptions): Promise<OperationResult<ReviewRun>> {
+    const run = this.mustRun(runId);
+    const h = this.hw(run.homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (run.kind !== "analyze_materials") throw new BridgeError("conflict", "Этот запуск — не анализ материалов");
+    if (!isOpen(run)) throw new BridgeError("conflict", "Запуск уже завершён или отменён");
+    if (!input.summary.trim() || !input.promptText.trim()) throw new BridgeError("blocked", "Заполните итог анализа и текст промта");
+    if (this.prompts.some((p) => p.homeworkId === h.id && p.status === "draft")) throw new BridgeError("conflict", "Черновик промта уже есть — зафиксируйте или измените его");
+    const now = new Date().toISOString();
+    const prompt: RevisionPrompt = {
+      id: uid("prm"),
+      homeworkId: h.id,
+      kind: "initial",
+      text: input.promptText.trim(),
+      createdAt: now,
+      createdBy: "user",
+      basedOnVersionId: null,
+      reviewRunId: run.id,
+      addresses: [],
+      sources: run.sourcesUsed,
+      sentAt: null,
+      status: "draft",
+      committedAt: null,
+      provenance: "manual",
+      updatedAt: now,
+    };
+    const op = await this.ctx.runOp(
+      "ai_run",
+      "Результат анализа сохранён вручную",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        run.result = {
+          verdict: "pass",
+          summary: input.summary.trim(),
+          criteria: [{ id: "completeness", label: "Комплектность материалов", status: "pass", note: "Материалы разобраны вручную" }],
+          critical: [],
+          remarks: [],
+          unsupportedClaims: [],
+          style: null,
+          teacherRequirements: [],
+          recommendedAction: { kind: "send_prompt_to_author", label: "Зафиксировать промт и передать автору" },
+          missing: [],
+          prompt,
+        };
+        this.completeManually(run);
+        this.prompts.push(clone(prompt));
+        this.touch(h, "save_manual_analysis");
+        this.ctx.emitter.emit("homework:revision-prompt-created", { homeworkId: h.id, promptId: prompt.id, kind: prompt.kind, status: prompt.status, reviewRunId: run.id, basedOnVersionId: null });
+        this.ctx.emitter.emit("review:completed", { run: clone(run) });
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(run) };
+  }
+
+  async saveManualReviewResult(runId: string, input: ManualReviewInput, options?: WorkflowCommandOptions): Promise<OperationResult<ReviewRun>> {
+    const run = this.mustRun(runId);
+    const h = this.hw(run.homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (run.kind === "analyze_materials") throw new BridgeError("conflict", "Для анализа материалов сохраните итог анализа");
+    if (!isOpen(run)) throw new BridgeError("conflict", "Запуск уже завершён или отменён");
+    if (!input.summary.trim()) throw new BridgeError("blocked", "Поле «Итог проверки» не заполнено");
+    const critical = input.critical ?? [];
+    const missing = input.missing ?? [];
+    const passes = input.verdict === "pass" || input.verdict === "needs_teacher_review";
+    if (passes && critical.length) throw new BridgeError("blocked", "Есть критические ошибки — итоговое решение не может быть «пройдено»");
+    if (passes && missing.some((m) => m.required)) throw new BridgeError("blocked", "Не хватает обязательных файлов или ссылок — итоговое решение не может быть «пройдено»");
+    const v = h.versions.find((x) => x.id === run.versionId);
+    const threshold = run.styleThreshold;
+    const toFinding = (f: NonNullable<ManualReviewInput["critical"]>[number], severity: ReviewFinding["severity"]): ReviewFinding => ({
+      id: uid("f"),
+      severity,
+      criterion: f.criterion,
+      text: f.text.trim(),
+      location: f.location,
+      evidence: f.evidence ?? [],
+      introducedIn: v?.id ?? "",
+      fixedIn: null,
+    });
+    const style = input.styleScore === null ? null : { score: input.styleScore, threshold, reasons: input.styleReasons ?? [] };
+    const result: ReviewResult = {
+      verdict: input.verdict,
+      summary: input.summary.trim(),
+      criteria: [
+        { id: "correctness", label: "Корректность решения", status: input.correctness, note: `Критических ошибок: ${critical.length}` },
+        { id: "task_fit", label: "Соответствие условию", status: input.taskFit, note: "" },
+        { id: "course_grounding", label: "Опора на материалы курса", status: input.courseGrounding, note: `Неподтверждённых утверждений: ${input.unsupportedClaims?.length ?? 0}` },
+        { id: "style", label: "Расхождение с личным стилем", status: style === null ? "na" : style.score <= threshold ? "pass" : "fail", note: style ? `Расхождение ${style.score}/10 при применённом пороге ${threshold}` : "Не оценивалось" },
+        { id: "teacher", label: "Требования преподавателя", status: input.teacher, note: "" },
+        { id: "completeness", label: "Файлы и ссылки", status: missing.some((m) => m.required) ? "fail" : "pass", note: "" },
+      ],
+      critical: critical.map((f) => toFinding(f, "critical")),
+      remarks: (input.remarks ?? []).map((f) => toFinding(f, "normal")),
+      unsupportedClaims: (input.unsupportedClaims ?? []).map((c) => ({ id: uid("u"), text: c.text.trim(), location: c.location })),
+      style,
+      teacherRequirements: this.requirements.filter((r) => r.checkedVersionId === run.versionId),
+      recommendedAction: passes ? { kind: "mark_ready", label: "Проверить готовность к сдаче" } : { kind: "create_revision_prompt", label: "Создать промт исправлений" },
+      missing,
+      prompt: null,
+    };
+    const op = await this.ctx.runOp(
+      "ai_run",
+      "Результат проверки сохранён вручную",
+      `${subjectName(h.subjectId)} · ${this.versionLabel(h, run.versionId)}`,
+      [],
+      1,
+      () => {
+        run.result = result;
+        this.completeManually(run);
+        const current = h.finalVersionId === run.versionId || h.versions[h.versions.length - 1]?.id === run.versionId;
+        if (current && run.kind === "review_version" && !passes) this.setStage(h, "needs_fixes", `Проверка ${this.versionLabel(h, run.versionId)}: нужны исправления`);
+        else if (current && run.kind === "review_version" && this.ctx.rules().workflow.requireTeacherReview) this.setStage(h, "teacher_review", `Проверка ${this.versionLabel(h, run.versionId)} пройдена — сверьте с комментариями преподавателя`);
+        else if (current && run.kind === "review_teacher" && !passes) this.setStage(h, "needs_fixes", "Требования преподавателя выполнены не полностью");
+        else this.touch(h, "save_manual_review");
+        this.ctx.emitter.emit("review:completed", { run: clone(run) });
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(run) };
+  }
+
+  async commitPrompt(promptId: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>> {
+    const p = this.mustPrompt(promptId);
+    const h = this.hw(p.homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (p.status === "committed") throw new BridgeError("immutable", "Промт уже зафиксирован");
+    const op = await this.ctx.runOp(
+      "revision_prompt",
+      "Промт зафиксирован",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        const now = new Date().toISOString();
+        p.status = "committed";
+        p.committedAt = now;
+        p.updatedAt = now;
+        if (p.kind === "initial" && h.workflowStage === "codex_analysis") this.setStage(h, "prompt_ready", "Первичный промт для автора зафиксирован");
+        else this.touch(h, "commit_prompt");
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(p) };
+  }
+
+  async addTeacherRequirement(homeworkId: string, input: TeacherRequirementInput, options?: WorkflowCommandOptions): Promise<OperationResult<TeacherRequirement>> {
+    const h = this.hw(homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (!this.comments.some((c) => c.id === input.commentId && c.homeworkId === h.id)) throw new BridgeError("not_found", "Комментарий преподавателя не найден");
+    const versionId = h.finalVersionId ?? h.versions[h.versions.length - 1]?.id ?? null;
+    if (!versionId) throw new BridgeError("blocked", "Сначала добавьте и выберите версию решения");
+    if (!input.text.trim()) throw new BridgeError("blocked", "Поле «Требование» не заполнено");
+    const requirement: TeacherRequirement = { id: uid("req"), text: input.text.trim(), commentId: input.commentId, origin: input.origin.trim(), status: input.status, note: input.note?.trim() ?? "", checkedVersionId: versionId };
+    const op = await this.ctx.runOp(
+      "save_teacher_comments",
+      "Требование преподавателя добавлено вручную",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        this.requirements.push(requirement);
+        this.touch(h, "add_teacher_requirement");
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(requirement) };
+  }
+
+  async confirmStyleDivergence(reviewRunId: string, options?: WorkflowCommandOptions): Promise<OperationResult<StyleConfirmation>> {
+    const run = this.mustRun(reviewRunId);
+    const h = this.hw(run.homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    const score = run.result?.style?.score ?? null;
+    if (run.kind !== "review_version" || run.status !== "completed" || !run.versionId) throw new BridgeError("blocked", "Подтверждение относится к завершённой проверке версии");
+    if (score === null || score <= run.styleThreshold) throw new BridgeError("blocked", "Расхождение не выше порога — подтверждение не нужно");
+    if (this.confirmations.some((c) => c.reviewRunId === run.id)) throw new BridgeError("conflict", "Расхождение для этой проверки уже подтверждено");
+    const confirmation: StyleConfirmation = { id: uid("style"), homeworkId: h.id, versionId: run.versionId, reviewRunId: run.id, score, threshold: run.styleThreshold, confirmedBy: "user", confirmedAt: new Date().toISOString() };
+    const op = await this.ctx.runOp(
+      "confirm_style",
+      "Расхождение с личным стилем подтверждено пользователем",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        this.confirmations.push(confirmation);
+        this.touch(h, "confirm_style_divergence");
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(confirmation) };
+  }
+
+  async transitionWorkflow(homeworkId: string, to: HomeworkWorkflowStage, options?: WorkflowCommandOptions & { reason?: string }): Promise<OperationResult<Homework>> {
+    const h = this.hw(homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (to === "ready_to_submit") throw new BridgeError("blocked", "«Готово к сдаче» отмечается отдельным действием с проверкой готовности");
+    if (to === "submitted") throw new BridgeError("blocked", "Отметка «Отправлено» ставится только подтверждением отправки");
+    if (!isAllowedTransition(h.workflowStage, to)) throw new BridgeError("conflict", "Переход недопустим: обязательные этапы нельзя пропускать");
+    const op = await this.ctx.runOp("workflow_transition", "Этап изменён пользователем", subjectName(h.subjectId), [], 1, () => this.setStage(h, to, options?.reason ?? "Переход выполнен пользователем"), null, h.id);
+    return { operation: op, value: clone(h) };
+  }
+
+  /** Как backend hand_off_prompt: автор не подключён — промт передаётся вручную, версия добавляется пользователем. */
+  private async handOffManually(p: RevisionPrompt, h: Homework): Promise<OperationResult<RevisionPrompt>> {
+    if (p.status !== "committed") throw new BridgeError("blocked", "Сначала зафиксируйте промт");
+    const allowed = p.kind === "initial" ? h.workflowStage === "prompt_ready" : ["needs_fixes", "prompt_ready", "teacher_review"].includes(h.workflowStage);
+    if (!allowed) throw new BridgeError("blocked", `Передать промт на этапе «${WORKFLOW_STAGE_LABEL[h.workflowStage]}» нельзя`);
+    const op = await this.ctx.runOp(
+      "send_prompt",
+      "Промт передан автору вручную",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        p.sentAt = new Date().toISOString();
+        this.setStage(h, "claude_solving", "Промт передан автору вручную");
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(p) };
+  }
+
+  /** Как backend: черновик промта исправлений из замечаний ручной проверки. */
+  private async manualRevisionDraft(run: ReviewRun, h: Homework, editedText?: string): Promise<OperationResult<RevisionPrompt>> {
+    if (!["needs_fixes", "teacher_review"].includes(h.workflowStage)) throw new BridgeError("blocked", `Промт исправлений недоступен на этапе «${WORKFLOW_STAGE_LABEL[h.workflowStage]}»`);
+    if (h.finalVersionId !== run.versionId && h.versions[h.versions.length - 1]?.id !== run.versionId)
+      throw new BridgeError("conflict", "Проверка относится не к текущей версии — выберите версию или проверьте её заново");
+    const result = run.result!;
+    const describe = (f: ReviewFinding) => (f.location ? `${f.text} (${f.location})` : f.text);
+    const section = (title: string, items: string[]) => (items.length ? ["", title, ...items.map((t, i) => `${i + 1}. ${t}`)] : []);
+    const generated = [
+      `Исправь ${this.versionLabel(h, run.versionId)} и создай новую версию. Предыдущую версию не изменяй.`,
+      ...section("Критические ошибки:", result.critical.map(describe)),
+      ...section("Замечания:", result.remarks.map(describe)),
+      ...section("Неподтверждённые утверждения:", result.unsupportedClaims.map((c) => `${c.text} (${c.location})`)),
+    ].join("\n");
+    const text = editedText?.trim() || generated;
+    const now = new Date().toISOString();
+    const prompt: RevisionPrompt = {
+      id: uid("prm"),
+      homeworkId: h.id,
+      kind: run.kind === "review_teacher" ? "teacher" : "revision",
+      text,
+      createdAt: now,
+      createdBy: "user",
+      basedOnVersionId: run.versionId,
+      reviewRunId: run.id,
+      addresses: [...result.critical, ...result.remarks].map((f) => f.id),
+      sources: run.sourcesUsed,
+      sentAt: null,
+      status: "draft",
+      committedAt: null,
+      provenance: "manual",
+      updatedAt: now,
+    };
+    const op = await this.ctx.runOp(
+      "revision_prompt",
+      "Черновик промта исправлений",
+      `${subjectName(h.subjectId)} · по проверке ${this.versionLabel(h, run.versionId)}`,
+      [],
+      1,
+      () => {
+        this.prompts.push(prompt);
+        if (h.workflowStage === "teacher_review") this.setStage(h, "needs_fixes", "Создан промт исправлений по требованиям преподавателя");
+        else this.touch(h, "create_revision_prompt");
+        this.ctx.emitter.emit("homework:revision-prompt-created", { homeworkId: h.id, promptId: prompt.id, kind: prompt.kind, status: prompt.status, reviewRunId: run.id, basedOnVersionId: run.versionId });
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: clone(prompt) };
+  }
+
+  private transitionOptions(h: Homework, readiness: Readiness): TransitionOption[] {
+    return transitionsFrom(h.workflowStage).map((to) => {
+      if (to === "submitted") return { to, allowed: false, reason: "Отметка «Отправлено» ставится подтверждением отправки" };
+      if (to === "ready_to_submit") return { to, allowed: readiness.ready, reason: readiness.ready ? "Все проверки пройдены" : "Не пройдены проверки готовности" };
+      return { to, allowed: true, reason: "Переход доступен" };
+    });
+  }
+
+  private startManualRun(h: Homework, kind: RunKind, bundle: SourceBundle, versionId: string | null): ReviewRun {
+    const run = this.newRun(h, kind, bundle, versionId, new Date().toISOString());
+    run.status = "manual_handoff";
+    run.provenance = "manual";
+    run.step = "Выполните шаг вручную и сохраните результат";
+    this.runs.push(run);
+    if (kind === "analyze_materials") this.setStage(h, "codex_analysis", "Анализ материалов выполняется вручную");
+    else this.touch(h, "start_workflow_run");
+    return clone(run);
+  }
+
+  private completeManually(run: ReviewRun): void {
+    run.status = "completed";
+    run.provenance = "manual";
+    run.progress = 1;
+    run.step = "Результат сохранён вручную";
+    run.finishedAt = new Date().toISOString();
+    run.assessment = assessmentOf(run.result!);
+  }
+
+  /** Устаревшая ревизия — конфликт, как в backend. */
+  private checkRevision(h: Homework, options?: WorkflowCommandOptions): void {
+    if (options?.expectedRevision !== undefined && options.expectedRevision !== h.revision)
+      throw new BridgeError("conflict", "Данные ДЗ изменились — перечитайте состояние и повторите действие");
+  }
+
+  /** Новая ревизия агрегата и события homework:updated / readiness-updated. */
+  private touch(h: Homework, reason: string): void {
+    h.revision += 1;
+    this.emitUpdated(h, reason);
+  }
+
+  private emitUpdated(h: Homework, reason: string): void {
+    this.ctx.emitter.emit("homework:updated", { homeworkId: h.id, revision: h.revision, stage: h.workflowStage, reason, operationId: "" });
+    const r = this.readiness(h);
+    this.ctx.emitter.emit("homework:readiness-updated", { homeworkId: h.id, ready: r.ready, blockers: r.checks.filter((c) => !c.ok).map((c) => c.id), revision: h.revision });
   }
 
   // ───────────── Сид сценария ─────────────
@@ -880,6 +1269,7 @@ export class MockWorkflow {
     h.workflowStage = to;
     h.revision += 1;
     this.ctx.emitter.emit("workflow:stage-changed", { homeworkId: h.id, from, to, reason });
+    this.emitUpdated(h, reason);
   }
 
   private buildBundle(h: Homework, purpose: RunKind, versionId: string | null): SourceBundle {
@@ -939,15 +1329,17 @@ export class MockWorkflow {
     b.complete = missing.every((m) => !m.required);
   }
 
-  private async startRun(homeworkId: string, kind: RunKind, bundleId: string, versionId: string | null): Promise<ReviewRun> {
+  private async startRun(homeworkId: string, kind: RunKind, bundleId: string, versionId: string | null, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun> {
     const h = this.hw(homeworkId);
     this.assertMutable(h);
+    this.checkRevision(h, options);
     const bundle = this.bundles.get(bundleId);
     if (!bundle || bundle.homeworkId !== homeworkId) throw new BridgeError("not_found", "Набор источников не найден — подготовьте его заново");
     if (!bundle.complete) throw new BridgeError("blocked", `Не хватает обязательных материалов: ${bundle.missing.filter((m) => m.required).map((m) => m.label).join(", ")}`);
     if (kind !== "analyze_materials" && !h.versions.some((v) => v.id === versionId)) throw new BridgeError("not_found", "Версия не найдена");
-    if (this.runs.some((r) => r.homeworkId === homeworkId && (r.status === "running" || r.status === "queued"))) throw new BridgeError("conflict", "По этой работе уже идёт запуск — дождитесь или отмените его");
+    if (this.runs.some((r) => r.homeworkId === homeworkId && isOpen(r))) throw new BridgeError("conflict", "По этой работе уже идёт запуск — дождитесь или отмените его");
     const provider = this.ctx.rules().workflow.roles[ROLE_OF[kind]];
+    if (options?.mode === "manual") return this.startManualRun(h, kind, bundle, versionId);
     this.ensureConnected(provider);
     await this.ctx.wait(120);
     const run = this.newRun(h, kind, bundle, versionId, new Date().toISOString());
@@ -1295,7 +1687,7 @@ export class MockWorkflow {
       { id: "materials", label: "Обязательные материалы собраны", ok: materials.complete, detail: materials.complete ? "Условие, материалы курса и файл стиля на месте" : `Нет: ${materials.missing.filter((m) => m.required).map((m) => m.label).join(", ")}` },
       { id: "review_passed", label: "Проверка версии пройдена и сохранена", ok: !!res && res.verdict !== "needs_fixes" && res.verdict !== "blocked", detail: !target ? "Версий нет" : !saved ? `Проверка ${target.label} не сохранена в истории итераций` : res && res.verdict !== "needs_fixes" ? `${target.label} прошла проверку` : `${target.label} требует исправлений` },
       { id: "no_critical", label: "Нет критических ошибок", ok: !!res && res.critical.length === 0, detail: res ? `Критических: ${res.critical.length}, замечаний: ${res.remarks.length}` : "Нет результата проверки" },
-      { id: "style", label: `Расхождение со стилем не выше ${rules.workflow.styleThreshold}/10`, ok: score !== null && score <= rules.workflow.styleThreshold, detail: score === null ? "Нет оценки" : `Сейчас ${score}/10` },
+      { id: "style", label: `Расхождение со стилем не выше ${rules.workflow.styleThreshold}/10`, ok: score !== null && (score <= rules.workflow.styleThreshold || this.confirmations.some((c) => c.reviewRunId === saved?.id)), detail: score === null ? "Нет оценки" : `Сейчас ${score}/10` },
       {
         id: "teacher",
         label: "Комментарии преподавателя учтены",

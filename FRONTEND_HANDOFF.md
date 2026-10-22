@@ -121,15 +121,17 @@ React pages/components
 
 ### ДЗ и версии
 
-`getHomeworkList`, `getHomework`, `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`.
+`getHomeworkList`, `getHomework`, `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`, `getWorkflow` (весь агрегат рабочего цикла одним вызовом; `not_found` → `null`), `transitionWorkflow`.
 
 ### Источники, AI и итерации
 
-`getStyleProfile`, `prepareSourceBundle`, `setSourceIncluded`, `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `createRevisionPrompt`, `sendPromptToAuthor`, `updatePromptText`, `getPrompts`, `cancelRun`, `getReviewRuns`, `saveRunAsIteration`, `getIterations`, `compareVersions`.
+`getStyleProfile`, `prepareSourceBundle`, `setSourceIncluded`, `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `createRevisionPrompt`, `sendPromptToAuthor`, `updatePromptText`, `commitPrompt`, `getPrompts`, `cancelRun`, `getReviewRuns`, `saveRunAsIteration`, `saveManualAnalysis`, `saveManualReviewResult`, `confirmStyleDivergence`, `getIterations`, `compareVersions`.
+
+Мутации рабочего цикла принимают последним аргументом `WorkflowCommandOptions { operationId?, expectedRevision? }`. Без `operationId` Tauri bridge генерирует UUID v4; `expectedRevision` — ревизия агрегата, которую видит пользователь: устаревшая даёт `conflict`, после чего UI перечитывает `getWorkflow` и предлагает повторить действие (`isStaleConflict` в `src/lib/workflow-ui.ts`). Запуски принимают `mode: "provider" | "manual"`.
 
 ### Преподаватель
 
-`getTeacherComments`, `saveTeacherComments`, `importTeacherTranscript`, `removeTeacherComment`, `runTeacherReview`, `getTeacherRequirements`, `resolveRequirement`.
+`getTeacherComments`, `saveTeacherComments`, `importTeacherTranscript`, `removeTeacherComment`, `runTeacherReview`, `getTeacherRequirements`, `addTeacherRequirement`, `resolveRequirement`.
 
 ### Готовность и сдача
 
@@ -157,6 +159,9 @@ React pages/components
 | `review:completed` | завершённый `ReviewRun` |
 | `review:failed` | run и ошибка |
 | `submission:confirmed` | неизменяемый `SubmissionReceipt` |
+| `homework:updated` | `{ homeworkId, revision, stage, reason, operationId }` — агрегат ДЗ изменился, перечитать `getWorkflow` (этап 8) |
+| `homework:revision-prompt-created` | `{ homeworkId, promptId, kind, status, reviewRunId, basedOnVersionId }` — новый черновик промта |
+| `homework:readiness-updated` | `{ homeworkId, ready, blockers, revision }` — пересчитана готовность |
 | `inbox:updated` | `{ reason: "import", fileIds }` — список «Входящих» изменился, перечитать `getInboxFiles` |
 | `downloads:watcher-updated` | `{ watcher: DownloadsWatcher }` — состояние watcher и список кандидатов |
 | `cu-import:progress` | `{ operationId, phase: inspect \| extract \| import \| cleanup, completed, total, entryName }` — фазы импорта экспорта ЦУ |
@@ -192,15 +197,17 @@ start operation
 
 Команды этапа 7: `list_material_extractions`, `get_material_extraction { material }`, `analyze_material { material, force }`, `analyze_materials { operationId, materials, force }`, `cancel_extraction { operationId }`, `clear_extraction_cache`, `get_extraction_settings`, `set_extraction_settings { ocrEnabled }`, `get_corpus_selection { homeworkId }`, `set_corpus_selection { homeworkId, materials }`, `preview_corpus { homeworkId }`. `material` — ровно `{ kind: "inbox" | "file", id }` (лишние поля не передаются). `TauriDesktopBridge` подключает к ним одноимённые методы; `getMaterialExtraction` переводит `not_found` в `null`; `analyzeMaterials` без `operationId` генерирует UUID v4; `force` по умолчанию `false`. Mock fallback нет.
 
-Пока unsupported:
+Команды этапа 8 (рабочий цикл ДЗ): чтение — `get_workflow { homeworkId }`, `get_dashboard`, `get_iterations { homeworkId }`, `compare_versions { fromVersionId, toVersionId }`, `get_homework_candidates { homeworkId }`; мутации (все с `operationId` и `expectedRevision`, результат `OperationResult<T>`) — `create_source_bundle { homeworkId, purpose, versionId }`, `start_workflow_run { request: { homeworkId, kind, versionId, bundleId, mode } }`, `cancel_workflow_run { runId }`, `pin_workflow_run { runId }`, `save_manual_analysis { runId, input: { summary, promptText } }`, `save_manual_review { runId, input }`, `create_revision_prompt { reviewRunId, text }`, `update_prompt_draft { promptId, text }`, `commit_prompt { promptId }`, `hand_off_prompt { promptId }`, `create_homework_version { homeworkId, input: { fileId, attachmentFileIds, author, promptId, note } }`, `select_homework_version { versionId }`, `add_teacher_comments { homeworkId, comments }`, `add_teacher_requirement { homeworkId, input }`, `resolve_teacher_requirement { requirementId, status, note }`, `confirm_style_divergence { reviewRunId }`, `mark_ready_to_submit { homeworkId, noTeacherComments }`, `transition_workflow { homeworkId, to, reason }`.
 
-- dashboard/week writes: `getDashboard`, `createWeek`;
-- классификация и раскладка: `classifyFiles`, `previewRoute`, `routeFiles`;
-- версии: `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`;
-- AI/workflow: `getStyleProfile`, `prepareSourceBundle`, `setSourceIncluded`, `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `createRevisionPrompt`, `sendPromptToAuthor`, `updatePromptText`, `getPrompts`, `cancelRun`, `getReviewRuns`, `saveRunAsIteration`, `getIterations`, `compareVersions`;
-- преподаватель: `getTeacherComments`, `saveTeacherComments`, `importTeacherTranscript`, `removeTeacherComment`, `runTeacherReview`, `getTeacherRequirements`, `resolveRequirement`;
-- сдача: `getReadiness`, `markReadyToSubmit`, `buildSubmissionPackage`, `getSubmissionPackage`, `setPackageCheck`, `confirmSubmission`, `getSubmissionReceipt`;
-- system/provider/write: `openProviderApp`, `connectProvider`, `disconnectProvider`, `getProviderStatus`, `undoOperation`.
+`TauriDesktopBridge` подключает к ним методы рабочего цикла напрямую, без гибридного bridge и без mock fallback. Списочные геттеры (`getReviewRuns`, `getPrompts`, `getTeacherComments`, `getTeacherRequirements`, `getReadiness`, `getSubmissionPackage`, `getSubmissionReceipt`) читают части одного `get_workflow`; `not_found` → `null` только в `getWorkflow`. `setSourceIncluded` отвечает `immutable`: набор источников — неизменяемый снимок, состав меняется в подборке этапа 7 и новым снимком. AI-адаптеров нет (этап 9): `getProviderStatus` берётся из `get_dashboard` с `adapter: "unavailable"`, `connectProvider`/`disconnectProvider`/`openProviderApp` отвечают `provider_unavailable`, а UI в Tauri-режиме (`HomeworkWorkflow.providerMode = "manual_handoff"`) запускает шаги с `mode: "manual"` и предлагает ввести результат вручную — он сохраняется с provenance `manual`, ложного успеха AI нет.
+
+Пока unsupported (`backend_unavailable`):
+
+- недели и раскладка: `createWeek`, `classifyFiles`, `previewRoute`, `routeFiles`;
+- профиль стиля: `getStyleProfile`;
+- преподаватель: `importTeacherTranscript`, `removeTeacherComment` (комментарии добавляются `saveTeacherComments`, требования — `addTeacherRequirement`);
+- сдача (этап 10): `buildSubmissionPackage`, `setPackageCheck`, `confirmSubmission`;
+- `undoOperation`.
 
 UI по умолчанию продолжает использовать `MockDesktopBridge`; Tauri-фабрика выбирается только флагом `VITE_KONTUR_BRIDGE=tauri` при наличии Tauri runtime.
 
@@ -249,7 +256,9 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 - Роли `analyst`, `author`, `reviewer` независимо назначаются Codex или Claude. ProviderCard получает роли из `ProviderStatus.roles`; сохранение правил эмитит `provider:status-changed`.
 - Порог стиля 0–10 применяется к новым результатам проверки и к readiness. Сохранённый `ReviewRun` не переписывается при последующей смене порога.
-- Кнопка не активна без полного source bundle, нужной версии, подключённого назначенного провайдера либо при уже активном запуске.
+- Кнопка не активна без полного source bundle, нужной версии либо при уже активном запуске; без подключённого провайдера шаг выполняется вручную (`manual_handoff`). Переходы между этапами предлагаются только из `HomeworkWorkflow.transitions` (решение backend state machine), «Готово к сдаче» — только при пройденной readiness, «Отправлено» — только подтверждением отправки.
+- Промт: черновик правится (`updatePromptText`), затем фиксируется (`commitPrompt`) и после этого неизменяем; передать автору можно только зафиксированный промт.
+- Расхождение со стилем выше порога блокирует готовность до явного подтверждения пользователем (`confirmStyleDivergence`); это эвристика сравнения со стилем 0–10, не определение авторства.
 - `markReadyToSubmit` возможен только при всех readiness checks; отсутствие комментариев при обязательной teacher review требует явного подтверждения.
 - `confirmSubmission` ничего не отправляет в LMS. Пользователь сначала отправляет файлы вручную, затем ставит `userConfirmed: true` и при необходимости прикладывает proof.
 - После подтверждения создаётся `SubmissionReceipt`; submitted homework, versions, package и snapshot нельзя изменить или откатить.
@@ -291,4 +300,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов, этап 8 — persistence, state machine, команды и события рабочего цикла ДЗ с ручным режимом вместо AI. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

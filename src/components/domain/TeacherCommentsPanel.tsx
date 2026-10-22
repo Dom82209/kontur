@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from "motion/react";
-import { FileUp, MessagesSquare, Paperclip, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { FileUp, ListPlus, MessagesSquare, Paperclip, Plus, ScanSearch, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type TeacherComment, type TeacherCommentSource, type TeacherRequirement } from "../../lib/bridge";
-import { COMMENT_SOURCE_LABEL, formatDate, plural } from "../../lib/format";
+import { bridge, type RequirementStatus, type TeacherComment, type TeacherCommentSource, type TeacherRequirement, type TeacherRequirementInput, type WorkflowCommandOptions } from "../../lib/bridge";
+import { COMMENT_SOURCE_LABEL, formatDate, plural, REQUIREMENT_STATUS_LABEL } from "../../lib/format";
 import { Segmented } from "../ui/Segmented";
 import { EmptyState } from "../ui/States";
 import { RequirementList } from "./RequirementList";
@@ -21,14 +21,67 @@ interface Props {
   onReview: () => void;
   /** Перезагрузить данные после правок без события backend. */
   onChanged: () => void;
+  /** Ручной режим (этап 8): автоматический разбор переписки и удаление — на следующем этапе. */
+  manual?: boolean;
+  /** Опции команд (expectedRevision) для сохранения комментариев. */
+  commandOptions?: () => WorkflowCommandOptions;
+  /** Ручное добавление требования к комментарию; true — сохранено. */
+  onAddRequirement?: (input: TeacherRequirementInput) => Promise<boolean>;
+  /** Ручная проверка требования; без него — прямой вызов bridge. */
+  onResolve?: (requirementId: string, status: "done" | "not_done" | "na") => void;
+}
+
+function RequirementForm({ commentId, origin, onAdd }: { commentId: string; origin: string; onAdd: NonNullable<Props["onAddRequirement"]> }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState<RequirementStatus>("not_done");
+  const [busy, setBusy] = useState(false);
+  if (!open)
+    return (
+      <button className="btn btn--sm btn--ghost" onClick={() => setOpen(true)}>
+        <ListPlus /> Требование
+      </button>
+    );
+  return (
+    <div className="req__add">
+      <input className="input" aria-label="Текст требования" placeholder="Что нужно выполнить" value={text} onChange={(e) => setText(e.target.value)} />
+      <select className="select" aria-label="Статус требования" value={status} onChange={(e) => setStatus(e.target.value as RequirementStatus)}>
+        {(Object.keys(REQUIREMENT_STATUS_LABEL) as RequirementStatus[]).map((key) => (
+          <option key={key} value={key}>
+            {REQUIREMENT_STATUS_LABEL[key]}
+          </option>
+        ))}
+      </select>
+      <button
+        className="btn btn--sm btn--primary"
+        disabled={busy || !text.trim()}
+        onClick={() => {
+          setBusy(true);
+          void onAdd({ commentId, text, origin: origin.slice(0, 200), status }).then((ok) => {
+            setBusy(false);
+            if (ok) {
+              setText("");
+              setOpen(false);
+            }
+          });
+        }}
+      >
+        Добавить
+      </button>
+      <button className="btn btn--sm btn--ghost" onClick={() => setOpen(false)}>
+        Отмена
+      </button>
+    </div>
+  );
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-export function TeacherCommentsPanel({ homeworkId, comments, requirements, locked, running, canReview, onReview, onChanged }: Props) {
+export function TeacherCommentsPanel({ homeworkId, comments, requirements, locked, running, canReview, onReview, onChanged, manual = false, commandOptions, onAddRequirement, onResolve }: Props) {
   const toast = useToast();
   const { reportError } = useOps();
-  const [mode, setMode] = useState<Mode>("paste");
+  const [modeState, setMode] = useState<Mode>("paste");
+  const mode: Mode = manual ? "manual" : modeState;
   const [source, setSource] = useState<TeacherCommentSource>("chat");
   const [date, setDate] = useState(today);
   const [text, setText] = useState("");
@@ -63,16 +116,20 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
             <h2 className="panel__title">Добавить комментарии</h2>
           </div>
           <div className="panel__body teacher__form">
-            <Segmented
-              label="Способ добавления"
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: "paste", label: "Вставить переписку" },
-                { value: "file", label: "Загрузить файл" },
-                { value: "manual", label: "Вопрос и ответ" },
-              ]}
-            />
+            {manual ? (
+              <p className="faint">Добавьте вопрос и ответ вручную. Автоматический разбор переписки и файлов появится на следующем этапе.</p>
+            ) : (
+              <Segmented
+                label="Способ добавления"
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: "paste", label: "Вставить переписку" },
+                  { value: "file", label: "Загрузить файл" },
+                  { value: "manual", label: "Вопрос и ответ" },
+                ]}
+              />
+            )}
             <div className="teacher__meta">
               <label className="field">
                 <span className="field__label">Источник</span>
@@ -132,7 +189,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                       <span className="field__label">Ответ преподавателя</span>
                       <textarea className="textarea teacher__textarea" value={a} onChange={(e) => setA(e.target.value)} />
                     </label>
-                    <button className="btn btn--primary" disabled={busy || !a.trim()} onClick={() => void submit(() => bridge.saveTeacherComments(homeworkId, [{ source, date: iso, question: q, answer: a }]))}>
+                    <button className="btn btn--primary" disabled={busy || !a.trim()} onClick={() => void submit(() => bridge.saveTeacherComments(homeworkId, [{ source, date: iso, question: q, answer: a }], commandOptions?.()))}>
                       <Plus /> Добавить
                     </button>
                   </>
@@ -170,7 +227,8 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                     </div>
                     {c.question && <div className="tcomment__q">{c.question}</div>}
                     <div className="tcomment__a">{c.answer}</div>
-                    {!locked && (
+                    {!locked && onAddRequirement && <RequirementForm commentId={c.id} origin={c.answer || c.question} onAdd={onAddRequirement} />}
+                    {!locked && !manual && (
                       <button className="btn btn--sm btn--ghost btn--icon tcomment__del" aria-label="Удалить комментарий" onClick={() => void bridge.removeTeacherComment(c.id).then(onChanged, (e: unknown) => reportError(e))}>
                         <Trash2 />
                       </button>
@@ -196,7 +254,10 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
               requirements={requirements}
               comments={comments}
               locked={locked}
-              onResolve={(r, status) => void bridge.resolveRequirement(r.id, status, "Проверено вручную").then(onChanged, (e: unknown) => reportError(e))}
+              onResolve={(r, status) =>
+                onResolve ? onResolve(r.id, status) : void bridge.resolveRequirement(r.id, status, "Проверено вручную").then(onChanged, (e: unknown) => reportError(e))
+              }
+              resolvable={manual ? ["manual", "not_done"] : ["manual"]}
             />
           </div>
         </section>

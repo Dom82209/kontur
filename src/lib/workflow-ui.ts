@@ -32,3 +32,14 @@ export function getWorkflowPresentation(stage: HomeworkWorkflowStage, readinessR
       return { tab: "package", action: "Открыть неизменяемый снимок" };
   }
 }
+
+/**
+ * Конфликт устаревшего состояния: другая команда успела изменить ДЗ. UI в этом
+ * случае перечитывает агрегат и предлагает повторить действие, а не показывает
+ * его как обычную ошибку.
+ */
+export function isStaleConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return candidate.code === "conflict" && typeof candidate.message === "string" && /перечитайте|изменил/i.test(candidate.message);
+}

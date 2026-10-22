@@ -29,6 +29,7 @@ import {
   type Subject,
   type Unsubscribe,
   type Week,
+  type WorkflowCommandOptions,
 } from "../types";
 import {
   CATEGORY_FOLDER,
@@ -569,9 +570,14 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(generated);
   }
 
-  async createHomeworkVersion(homeworkId: string, fileId: string, meta: { author?: HomeworkVersion["author"]; promptId?: string | null } = {}): Promise<OperationResult<HomeworkVersion>> {
+  async createHomeworkVersion(
+    homeworkId: string,
+    fileId: string,
+    meta: { author?: HomeworkVersion["author"]; promptId?: string | null; attachmentFileIds?: string[]; note?: string | null } & WorkflowCommandOptions = {},
+  ): Promise<OperationResult<HomeworkVersion>> {
     const h = this.mustHw(homeworkId);
     if (h.stage === "submitted") throw new BridgeError("immutable", "ДЗ отправлено — снимок неизменяем, новые версии не создаются");
+    if (meta.expectedRevision !== undefined && meta.expectedRevision !== h.revision) throw new BridgeError("conflict", "Данные ДЗ изменились — перечитайте состояние и повторите действие");
     const prev = h.versions[h.versions.length - 1] ?? null;
     const number = (prev?.number ?? 0) + 1;
     const ext = prev?.fileName.split(".").pop() ?? (h.taskFiles.some((f) => f.kind === "sheet") ? "xlsx" : "pdf");
@@ -619,9 +625,10 @@ export class MockDesktopBridge implements DesktopBridge {
     return { operation: clone(op), value: clone(version) };
   }
 
-  async markVersionFinal(versionId: string): Promise<OperationResult<Homework>> {
+  async markVersionFinal(versionId: string, options?: WorkflowCommandOptions): Promise<OperationResult<Homework>> {
     const h = this.homework.find((x) => x.versions.some((v) => v.id === versionId));
     if (!h) throw new BridgeError("not_found", "Версия не найдена");
+    if (options?.expectedRevision !== undefined && options.expectedRevision !== h.revision) throw new BridgeError("conflict", "Данные ДЗ изменились — перечитайте состояние и повторите действие");
     if (h.stage === "submitted") throw new BridgeError("immutable", "ДЗ отправлено — итоговую версию менять нельзя");
     if (h.finalVersionId === versionId) throw new BridgeError("conflict", "Эта версия уже итоговая");
     const v = h.versions.find((x) => x.id === versionId)!;
@@ -737,6 +744,13 @@ export class MockDesktopBridge implements DesktopBridge {
 
   // ───────────── Рабочий цикл ДЗ (делегируется MockWorkflow) ─────────────
 
+  getWorkflow: DesktopBridge["getWorkflow"] = (...a) => this.workflow.getWorkflow(...a);
+  saveManualAnalysis: DesktopBridge["saveManualAnalysis"] = (...a) => this.workflow.saveManualAnalysis(...a);
+  saveManualReviewResult: DesktopBridge["saveManualReviewResult"] = (...a) => this.workflow.saveManualReviewResult(...a);
+  commitPrompt: DesktopBridge["commitPrompt"] = (...a) => this.workflow.commitPrompt(...a);
+  addTeacherRequirement: DesktopBridge["addTeacherRequirement"] = (...a) => this.workflow.addTeacherRequirement(...a);
+  confirmStyleDivergence: DesktopBridge["confirmStyleDivergence"] = (...a) => this.workflow.confirmStyleDivergence(...a);
+  transitionWorkflow: DesktopBridge["transitionWorkflow"] = (...a) => this.workflow.transitionWorkflow(...a);
   getStyleProfile: DesktopBridge["getStyleProfile"] = (...a) => this.workflow.getStyleProfile(...a);
   prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = (...a) => this.workflow.prepareSourceBundle(...a);
   setSourceIncluded: DesktopBridge["setSourceIncluded"] = (...a) => this.workflow.setSourceIncluded(...a);

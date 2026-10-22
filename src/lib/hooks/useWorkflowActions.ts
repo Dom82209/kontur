@@ -1,27 +1,53 @@
 import { useCallback, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type ReviewRun, type RunKind, type SourceBundle } from "../bridge";
-import { providerName, RUN_KIND_LABEL } from "../format";
+import {
+  bridge,
+  BridgeError,
+  type HomeworkWorkflowStage,
+  type ManualAnalysisInput,
+  type ManualReviewInput,
+  type ReviewRun,
+  type RunKind,
+  type RunMode,
+  type SourceBundle,
+  type TeacherRequirementInput,
+  type WorkflowCommandOptions,
+} from "../bridge";
+import { providerName, RUN_KIND_LABEL, WORKFLOW_STAGE_LABEL } from "../format";
+import { isStaleConflict } from "../workflow-ui";
 import { useBridgeEvent } from "./useBridgeEvent";
+
+interface WorkflowContext {
+  /** Ревизия агрегата ДЗ, которую видит пользователь: устаревшая → conflict. */
+  revision?: number;
+  /** Перечитать агрегат (после conflict и других ошибок состояния). */
+  reload?: () => Promise<void> | void;
+}
 
 /**
  * Действия рабочего цикла, общие для карточки ДЗ и AI Workspace.
  * Провайдер не выбирается в компонентах — его определяет роль в настройках (backend).
+ * Каждое действие передаёт expectedRevision; при conflict агрегат перечитывается,
+ * и пользователю предлагается повторить действие.
  */
-export function useWorkflowActions(homeworkId: string) {
+export function useWorkflowActions(homeworkId: string, context: WorkflowContext = {}) {
   const toast = useToast();
   const { reportError } = useOps();
   const [busy, setBusy] = useState<string | null>(null);
+  const { revision, reload } = context;
 
   useBridgeEvent("review:completed", ({ run }) => {
     if (run.homeworkId !== homeworkId) return;
-    toast.push({ tone: run.result?.verdict === "needs_fixes" ? "warn" : "ok", title: `${providerName(run.provider)}: ${RUN_KIND_LABEL[run.kind].toLowerCase()} — готово`, text: run.result?.summary });
+    const who = run.provenance === "manual" ? "Вручную" : providerName(run.provider);
+    toast.push({ tone: run.result?.verdict === "needs_fixes" ? "warn" : "ok", title: `${who}: ${RUN_KIND_LABEL[run.kind].toLowerCase()} — сохранено`, text: run.result?.summary });
   });
   useBridgeEvent("review:failed", ({ run, error }) => {
     if (run.homeworkId !== homeworkId || error.code === "cancelled") return;
     toast.push({ tone: "danger", title: "Запуск не завершён", text: error.message });
   });
+
+  const options = useCallback((): WorkflowCommandOptions => (revision === undefined ? {} : { expectedRevision: revision }), [revision]);
 
   const guard = useCallback(
     async <T,>(key: string, title: string, fn: () => Promise<T>): Promise<T | null> => {
@@ -29,55 +55,156 @@ export function useWorkflowActions(homeworkId: string) {
       try {
         return await fn();
       } catch (e) {
-        reportError(e, title);
+        if (isStaleConflict(e)) {
+          await reload?.();
+          toast.push({ tone: "warn", title: "Данные ДЗ изменились", text: "Состояние перечитано — проверьте его и повторите действие." });
+        } else {
+          reportError(e, title);
+          if (e instanceof BridgeError && (e.code === "conflict" || e.code === "immutable")) await reload?.();
+        }
         return null;
       } finally {
         setBusy(null);
       }
     },
-    [reportError],
+    [reportError, reload, toast],
   );
 
   const startRun = useCallback(
-    (kind: RunKind, versionId: string | null, bundle?: SourceBundle | null) =>
+    (kind: RunKind, versionId: string | null, bundle?: SourceBundle | null, mode: RunMode = "provider") =>
       guard<ReviewRun>("run", "Запуск невозможен", async () => {
-        const b = bundle ?? (await bridge.prepareSourceBundle(homeworkId, kind, versionId));
-        if (kind === "analyze_materials") return bridge.runMaterialAnalysis(homeworkId, b.id);
-        if (kind === "review_teacher") return bridge.runTeacherReview(homeworkId, versionId!, b.id);
-        if (kind === "revision_prompt") return bridge.runRevisionPrompt(homeworkId, versionId!, b.id);
-        return bridge.runVersionReview(homeworkId, versionId!, b.id);
+        let opts = { ...options(), mode };
+        let b = bundle ?? null;
+        if (!b) {
+          b = await bridge.prepareSourceBundle(homeworkId, kind, versionId, options());
+          // Набор источников — своя операция: следующая команда ожидает уже новую ревизию.
+          if (opts.expectedRevision !== undefined) opts = { ...opts, expectedRevision: opts.expectedRevision + 1 };
+        }
+        if (kind === "analyze_materials") return bridge.runMaterialAnalysis(homeworkId, b.id, opts);
+        if (kind === "review_teacher") return bridge.runTeacherReview(homeworkId, versionId!, b.id, opts);
+        if (kind === "revision_prompt") return bridge.runRevisionPrompt(homeworkId, versionId!, b.id, opts);
+        return bridge.runVersionReview(homeworkId, versionId!, b.id, opts);
       }),
-    [guard, homeworkId],
+    [guard, homeworkId, options],
+  );
+
+  const prepareBundle = useCallback(
+    (kind: RunKind, versionId: string | null) =>
+      guard("bundle", "Набор источников не создан", async () => {
+        const bundle = await bridge.prepareSourceBundle(homeworkId, kind, versionId, options());
+        toast.push({ tone: bundle.complete ? "ok" : "warn", title: "Снимок источников создан", text: bundle.complete ? `${bundle.items.length} материалов из подборки` : "Не хватает обязательных материалов" });
+        return bundle;
+      }),
+    [guard, homeworkId, options, toast],
+  );
+
+  const saveAnalysis = useCallback(
+    (runId: string, input: ManualAnalysisInput) =>
+      guard("manual", "Результат не сохранён", async () => {
+        const r = await bridge.saveManualAnalysis(runId, input, options());
+        toast.push({ tone: "ok", title: r.operation.title, text: "Черновик промта сохранён — проверьте и зафиксируйте его" });
+        return r.value;
+      }),
+    [guard, options, toast],
+  );
+
+  const saveReview = useCallback(
+    (runId: string, input: ManualReviewInput) =>
+      guard("manual", "Результат не сохранён", async () => {
+        const r = await bridge.saveManualReviewResult(runId, input, options());
+        return r.value;
+      }),
+    [guard, options],
+  );
+
+  const cancelRun = useCallback(
+    (runId: string) =>
+      guard("cancel", "Отмена не выполнена", async () => {
+        const run = await bridge.cancelRun(runId, options());
+        toast.push({ tone: "info", title: "Запуск отменён" });
+        return run;
+      }),
+    [guard, options, toast],
   );
 
   const createPrompt = useCallback(
     (runId: string, text?: string) =>
       guard("prompt", "Промт не создан", async () => {
-        const r = await bridge.createRevisionPrompt(runId, text);
-        toast.push({ tone: "ok", title: r.operation.title, text: "Промт сохранён в истории итераций" });
+        const r = await bridge.createRevisionPrompt(runId, text, options());
+        toast.push({ tone: "ok", title: r.operation.title, text: r.value.status === "draft" ? "Черновик сохранён — проверьте и зафиксируйте его" : "Промт сохранён в истории итераций" });
         return r.value;
       }),
-    [guard, toast],
+    [guard, options, toast],
+  );
+
+  const updatePrompt = useCallback(
+    (promptId: string, text: string) => guard("prompt-edit", "Черновик не сохранён", () => bridge.updatePromptText(promptId, text, options())),
+    [guard, options],
+  );
+
+  const commitPrompt = useCallback(
+    (promptId: string) =>
+      guard("commit", "Промт не зафиксирован", async () => {
+        const r = await bridge.commitPrompt(promptId, options());
+        toast.push({ tone: "ok", title: r.operation.title, text: "Теперь промт неизменяем — его можно передать автору" });
+        return r.value;
+      }),
+    [guard, options, toast],
   );
 
   const sendPrompt = useCallback(
-    (promptId: string) =>
+    (promptId: string, manual = false) =>
       guard("send", "Промт не передан", async () => {
-        const r = await bridge.sendPromptToAuthor(promptId);
-        toast.push({ tone: "ok", title: "Новая версия создана", text: "Версия появилась в рабочем цикле и ждёт проверки" });
+        const r = await bridge.sendPromptToAuthor(promptId, options());
+        toast.push(
+          manual
+            ? { tone: "ok", title: "Передача отмечена", text: "Когда автор пришлёт решение, добавьте его как новую версию" }
+            : { tone: "ok", title: "Новая версия создана", text: "Версия появилась в рабочем цикле и ждёт проверки" },
+        );
         return r.value;
       }),
-    [guard, toast],
+    [guard, options, toast],
   );
 
   const saveIteration = useCallback(
     (runId: string) =>
       guard("save", "Не сохранено", async () => {
-        const r = await bridge.saveRunAsIteration(runId);
+        const r = await bridge.saveRunAsIteration(runId, options());
         toast.push({ tone: "ok", title: "Результат сохранён как итерация" });
         return r;
       }),
-    [guard, toast],
+    [guard, options, toast],
+  );
+
+  const confirmStyle = useCallback(
+    (runId: string) =>
+      guard("style", "Подтверждение не сохранено", async () => {
+        const r = await bridge.confirmStyleDivergence(runId, options());
+        toast.push({ tone: "ok", title: r.operation.title, text: `Расхождение ${r.value.score}/10 при пороге ${r.value.threshold}` });
+        return r.value;
+      }),
+    [guard, options, toast],
+  );
+
+  const transition = useCallback(
+    (to: HomeworkWorkflowStage, reason?: string) =>
+      guard("transition", "Этап не изменён", async () => {
+        const r = await bridge.transitionWorkflow(homeworkId, to, { ...options(), reason });
+        toast.push({ tone: "ok", title: `Этап: ${WORKFLOW_STAGE_LABEL[to]}` });
+        return r.value;
+      }),
+    [guard, homeworkId, options, toast],
+  );
+
+  const addRequirement = useCallback(
+    (input: TeacherRequirementInput) => guard("requirement", "Требование не сохранено", async () => (await bridge.addTeacherRequirement(homeworkId, input, options())).value),
+    [guard, homeworkId, options],
+  );
+
+  const resolveRequirement = useCallback(
+    (requirementId: string, status: "done" | "not_done" | "na") =>
+      guard("requirement", "Требование не обновлено", () => bridge.resolveRequirement(requirementId, status, "Проверено вручную", options())),
+    [guard, options],
   );
 
   const openApp = useCallback(
@@ -89,5 +216,23 @@ export function useWorkflowActions(homeworkId: string) {
     [guard, toast],
   );
 
-  return { busy, startRun, createPrompt, sendPrompt, saveIteration, openApp };
+  return {
+    busy,
+    options,
+    startRun,
+    prepareBundle,
+    saveAnalysis,
+    saveReview,
+    cancelRun,
+    createPrompt,
+    updatePrompt,
+    commitPrompt,
+    sendPrompt,
+    saveIteration,
+    confirmStyle,
+    transition,
+    addRequirement,
+    resolveRequirement,
+    openApp,
+  };
 }

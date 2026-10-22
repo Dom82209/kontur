@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { bridge, type BridgeEventName } from "../bridge";
+import { bridge, BridgeError, type BridgeErrorCode, type BridgeEventName } from "../bridge";
 
 export interface QueryState<T> {
   data: T | null;
   error: string | null;
+  /** Код ошибки bridge: по нему UI различает conflict, cancelled, backend_unavailable и т. п. */
+  errorCode: BridgeErrorCode | null;
   loading: boolean;
   reload: () => Promise<void>;
   setData: (updater: (prev: T | null) => T | null) => void;
@@ -16,6 +18,7 @@ export interface QueryState<T> {
 export function useBridgeQuery<T>(load: () => Promise<T>, deps: readonly unknown[], refetchOn: readonly BridgeEventName[] = []): QueryState<T> {
   const [data, setDataState] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<BridgeErrorCode | null>(null);
   const [loading, setLoading] = useState(true);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -29,9 +32,13 @@ export function useBridgeQuery<T>(load: () => Promise<T>, deps: readonly unknown
       if (id === seq.current) {
         setDataState(v);
         setError(null);
+        setErrorCode(null);
       }
     } catch (e) {
-      if (id === seq.current) setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+      if (id === seq.current) {
+        setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+        setErrorCode(e instanceof BridgeError ? e.code : "unknown");
+      }
     } finally {
       if (id === seq.current) setLoading(false);
     }
@@ -58,5 +65,5 @@ export function useBridgeQuery<T>(load: () => Promise<T>, deps: readonly unknown
   }, [events, run]);
 
   const setData = useCallback((updater: (prev: T | null) => T | null) => setDataState((p) => updater(p)), []);
-  return { data, error, loading, reload: () => run(true), setData };
+  return { data, error, errorCode, loading, reload: () => run(true), setData };
 }

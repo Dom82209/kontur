@@ -26,7 +26,7 @@ export function DashboardPage() {
   const { done: introDone } = useIntro();
   const navigate = useNavigate();
   const names = useSubjectNames();
-  const q = useBridgeQuery(() => bridge.getDashboard(), [], ["operation:completed", "inbox:file-added", "provider:status-changed"]);
+  const q = useBridgeQuery(() => bridge.getDashboard(), [], ["operation:completed", "inbox:file-added", "provider:status-changed", "homework:updated", "workflow:stage-changed"]);
   const homework = useBridgeQuery(() => bridge.getHomeworkList(), [], ["operation:completed", "workflow:stage-changed", "homework:version-created"]);
   const d = q.data;
 

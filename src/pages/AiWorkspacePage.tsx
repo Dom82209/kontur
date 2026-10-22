@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from "motion/react";
-import { BrainCircuit, CircleAlert, CircleCheck, ExternalLink, FilePlus2, GitCompareArrows, MessagesSquare, Pin, Play, ScanSearch, Wand2 } from "lucide-react";
+import { ArrowRight, BrainCircuit, CircleAlert, CircleCheck, ClipboardPen, ExternalLink, FilePlus2, GitCompareArrows, Layers, MessagesSquare, Pin, Play, ScanSearch, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useOps } from "../app/operations";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { ReviewResultView } from "../components/domain/ReviewResultView";
-import { RunMonitor } from "../components/domain/RunMonitor";
+import { ManualResultDialog } from "../components/domain/ManualResultDialog";
+import { isOpenRun, RunMonitor } from "../components/domain/RunMonitor";
 import { SourceList } from "../components/domain/SourceList";
 import { VersionComparePanel } from "../components/domain/VersionComparePanel";
 import { Dialog } from "../components/ui/Dialog";
@@ -36,12 +37,17 @@ export function AiWorkspacePage() {
   const homeworkId = params.get("homework") ?? active[0]?.id ?? "";
   const kind = (params.get("run") as RunKind | null) ?? "review_version";
   const wf = useHomeworkWorkflow(homeworkId);
-  const actions = useWorkflowActions(homeworkId);
+  const actions = useWorkflowActions(homeworkId, { revision: wf.revision, reload: wf.reloadAll });
+  const manual = wf.manual;
+  const [manualRun, setManualRun] = useState<ReviewRun | null>(null);
   const h = wf.homework.data;
   const latest = h?.versions[h.versions.length - 1] ?? null;
   const [versionId, setVersionId] = useState<string | null>(null);
   const vId = kind === "analyze_materials" ? null : (versionId && h?.versions.some((v) => v.id === versionId) ? versionId : (latest?.id ?? null));
-  const [bundle, setBundle] = useState<SourceBundle | null>(null);
+  const [previewBundle, setBundle] = useState<SourceBundle | null>(null);
+  // Tauri: только уже созданный неизменяемый снимок нужного вида; mock — предпросмотр набора.
+  const snapshot = [...(wf.workflow.data?.bundles ?? [])].reverse().find((b) => b.purpose === kind && (kind === "analyze_materials" || b.versionId === vId)) ?? null;
+  const bundle = manual ? snapshot : previewBundle;
   const [bundleError, setBundleError] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState<string | null>(null);
@@ -54,7 +60,7 @@ export function AiWorkspacePage() {
 
   // Набор источников зависит от ДЗ, типа запуска и версии.
   useEffect(() => {
-    if (!homeworkId) return;
+    if (!homeworkId || manual || !wf.workflow.data) return;
     let alive = true;
     setBundle(null);
     setBundleError(null);
@@ -65,10 +71,10 @@ export function AiWorkspacePage() {
     return () => {
       alive = false;
     };
-  }, [homeworkId, kind, vId, wf.comments.data?.length]);
+  }, [homeworkId, kind, vId, wf.comments.data?.length, manual, !!wf.workflow.data]);
 
   const runs = wf.runs.data ?? [];
-  const running = runs.find((r) => r.status === "running" || r.status === "queued") ?? null;
+  const running = runs.find(isOpenRun) ?? null;
   const result = useMemo<ReviewRun | null>(() => runs.find((r) => r.kind === kind && r.status === "completed" && (kind === "analyze_materials" || r.versionId === vId)) ?? null, [runs, kind, vId]);
   useEffect(() => setPromptDraft(null), [result?.id]);
 
@@ -79,7 +85,7 @@ export function AiWorkspacePage() {
   const savedPrompt = result ? (wf.prompts.data ?? []).find((p) => p.reviewRunId === result.id) ?? null : null;
   const prevVersion = h && vId ? h.versions[h.versions.findIndex((v) => v.id === vId) - 1] ?? null : null;
   const needsVersion = kind !== "analyze_materials";
-  const blockedReason = !h ? "Выберите ДЗ" : needsVersion && !vId ? "У этого ДЗ ещё нет версий" : kind === "review_teacher" && (wf.comments.data?.length ?? 0) === 0 ? "Добавьте комментарии преподавателя в карточке ДЗ" : bundle && !bundle.complete ? "Не хватает обязательных материалов" : status?.state !== "connected" ? `${providerName(providerId ?? "codex")} не подключён` : running ? "Идёт другой запуск" : null;
+  const blockedReason = !h ? "Выберите ДЗ" : needsVersion && !vId ? "У этого ДЗ ещё нет версий" : kind === "review_teacher" && (wf.comments.data?.length ?? 0) === 0 ? "Добавьте комментарии преподавателя в карточке ДЗ" : bundle && !bundle.complete ? "Не хватает обязательных материалов" : !manual && status?.state !== "connected" ? `${providerName(providerId ?? "codex")} не подключён` : running ? "Идёт другой запуск" : null;
 
   const createVersion = async () => {
     if (!result) return;
@@ -162,10 +168,17 @@ export function AiWorkspacePage() {
             <div className="panel__body">
               {bundleError ? (
                 <p className="faint">{bundleError}</p>
+              ) : !bundle && manual ? (
+                <p className="faint">Снимка источников для этого шага ещё нет. Он фиксирует подборку материалов ДЗ с SHA-256 и извлечённым текстом.</p>
               ) : !bundle ? (
                 <SkeletonRows count={4} />
               ) : (
-                <SourceList bundle={bundle} onToggle={(id, inc) => void bridge.setSourceIncluded(bundle.id, id, inc).then(setBundle, (e: unknown) => reportError(e))} />
+                <SourceList bundle={bundle} onToggle={manual ? undefined : (id, inc) => void bridge.setSourceIncluded(bundle.id, id, inc).then(setBundle, (e: unknown) => reportError(e))} />
+              )}
+              {manual && h && (
+                <button className="btn btn--sm" disabled={!!actions.busy || (needsVersion && !vId)} onClick={() => void actions.prepareBundle(kind, vId)}>
+                  <Layers /> {bundle ? "Новый снимок из подборки" : "Создать снимок из подборки"}
+                </button>
               )}
             </div>
           </section>
@@ -177,14 +190,27 @@ export function AiWorkspacePage() {
               <div>
                 <div className="ai2__runtitle">{RUN_KIND_LABEL[kind]}</div>
                 <div className="faint" style={{ fontSize: 12 }}>
-                  {blockedReason ?? `${providerName(providerId ?? "codex")} получит ${bundle?.items.filter((i) => i.included).length ?? 0} источников. Результат сохранит список использованных материалов.`}
+                  {blockedReason ??
+                    (manual
+                      ? `AI-адаптер не подключён: запуск будет ждать провайдера, а результат вы сохраните вручную. Источников: ${bundle?.items.filter((i) => i.included).length ?? 0}.`
+                      : `${providerName(providerId ?? "codex")} получит ${bundle?.items.filter((i) => i.included).length ?? 0} источников. Результат сохранит список использованных материалов.`)}
                 </div>
               </div>
               <button className="btn btn--primary" disabled={!!blockedReason || !!actions.busy} onClick={() => void actions.startRun(kind, vId, bundle)}>
                 <Play /> Запустить
               </button>
             </div>
-            <RunMonitor run={running} />
+            <RunMonitor
+              run={running}
+              onCancel={(id) => void actions.cancelRun(id)}
+              handoff={
+                running && (running.status === "waiting_for_provider" || running.status === "manual_handoff") ? (
+                  <button className="btn btn--sm btn--primary" disabled={!!actions.busy} onClick={() => setManualRun(running)}>
+                    <ClipboardPen /> Ввести результат вручную
+                  </button>
+                ) : undefined
+              }
+            />
           </section>
 
           <section className="panel">
@@ -218,7 +244,11 @@ export function AiWorkspacePage() {
                     comments={wf.comments.data ?? []}
                     onPromptChange={savedPrompt || kind === "analyze_materials" ? undefined : setPromptDraft}
                     promptActions={
-                      result.result?.prompt && authorId ? (
+                      manual && h ? (
+                        <Link className="btn btn--sm" to={`/homework/${h.id}?tab=cycle`}>
+                          Промт и версии — в карточке ДЗ <ArrowRight />
+                        </Link>
+                      ) : result.result?.prompt && authorId ? (
                         <>
                           <button className="btn btn--sm" onClick={() => void actions.openApp(authorId)}>
                             <ExternalLink /> Открыть {providerName(authorId)}
@@ -264,7 +294,7 @@ export function AiWorkspacePage() {
                       <motion.li key={r.id} layout className="run" data-status={r.status} initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
                         <div className="run__head">
                           {r.status === "completed" ? <CircleCheck size={14} className="run__ok" /> : r.status === "failed" || r.status === "cancelled" ? <CircleAlert size={14} className="run__fail" /> : <span className="dot dot--accent" />}
-                          <span className="run__provider">{providerName(r.provider)}</span>
+                          <span className="run__provider">{r.provenance === "manual" ? "Вручную" : providerName(r.provider)}</span>
                           <span>{RUN_KIND_LABEL[r.kind]}</span>
                           {r.versionId && <span className="mono faint">{h?.versions.find((v) => v.id === r.versionId)?.label}</span>}
                           {r.savedAsIteration && <Pin size={12} className="faint" aria-label="Сохранено как итерация" />}
@@ -274,6 +304,8 @@ export function AiWorkspacePage() {
                         </div>
                         {r.result && <div className="faint">{r.result.summary}</div>}
                         {r.status === "cancelled" && <div className="faint">Отменено</div>}
+                        {r.status === "waiting_for_provider" && <div className="faint">Ждёт провайдера — AI-адаптер не подключён</div>}
+                        {r.status === "manual_handoff" && <div className="faint">Выполняется вручную</div>}
                         {r.errorMessage && <div className="run__error">{r.errorMessage}</div>}
                         <div className="faint run__time">Источников: {r.sourcesUsed.length}</div>
                       </motion.li>
@@ -285,6 +317,14 @@ export function AiWorkspacePage() {
           </section>
         </div>
       </div>
+
+      <ManualResultDialog
+        run={manualRun}
+        busy={actions.busy === "manual"}
+        onClose={() => setManualRun(null)}
+        onAnalysis={(input) => manualRun && void actions.saveAnalysis(manualRun.id, input).then((r) => r && setManualRun(null))}
+        onReview={(input) => manualRun && void actions.saveReview(manualRun.id, input).then((r) => r && setManualRun(null))}
+      />
 
       <Dialog open={compareOpen} onClose={() => setCompareOpen(false)} title={`Сравнение ${prevVersion?.label ?? ""} → ${h?.versions.find((v) => v.id === vId)?.label ?? ""}`} wide>
         {prevVersion && vId && <VersionComparePanel fromId={prevVersion.id} toId={vId} />}

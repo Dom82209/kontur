@@ -466,3 +466,73 @@ export interface WorkflowSettings {
   styleProfilePath: string;
   requireTeacherReview: boolean;
 }
+
+// ───────────── Агрегат рабочего цикла (этап 8) ─────────────
+
+/** Как выполнить AI-шаг: provider — ждать адаптер роли; manual — выполнить вручную. */
+export type RunMode = "provider" | "manual";
+
+/** Опции любой мутации рабочего цикла: идемпотентность и optimistic revision. */
+export interface WorkflowCommandOptions {
+  /** UUID v4. Повтор с тем же id возвращает сохранённый итог без повторных действий. */
+  operationId?: string;
+  /** Ревизия ДЗ, которую видел клиент. Расхождение — BridgeError("conflict"). */
+  expectedRevision?: number;
+}
+
+export interface TransitionOption {
+  to: HomeworkWorkflowStage;
+  /** Решение backend state machine — кнопки блокируются по нему. */
+  allowed: boolean;
+  reason: string;
+}
+
+/** Ручной итог анализа материалов и текст первичного промта (provenance manual). */
+export interface ManualAnalysisInput {
+  summary: string;
+  promptText: string;
+}
+
+export interface FindingInput {
+  criterion: CriterionId;
+  text: string;
+  location: string | null;
+  evidence?: EvidenceReference[];
+}
+
+/** Ручной результат проверки: каждое измерение задаётся отдельно. */
+export interface ManualReviewInput {
+  verdict: ReviewVerdict;
+  summary: string;
+  correctness: CriterionStatus;
+  taskFit: CriterionStatus;
+  courseGrounding: CriterionStatus;
+  teacher: CriterionStatus;
+  /** Расхождение с личным стилем 0…10 — эвристика, а не определение авторства. */
+  styleScore: number | null;
+  styleReasons?: { kind: StyleReasonKind; text: string; example: string | null }[];
+  critical?: FindingInput[];
+  remarks?: FindingInput[];
+  unsupportedClaims?: { text: string; location: string }[];
+  missing?: ReviewMissingItem[];
+}
+
+/** Полное состояние рабочего цикла одного ДЗ, прочитанное одной командой. */
+export interface HomeworkWorkflow {
+  homework: import("./types").Homework;
+  revision: number;
+  stage: HomeworkWorkflowStage;
+  transitions: TransitionOption[];
+  bundles: SourceBundle[];
+  runs: ReviewRun[];
+  prompts: RevisionPrompt[];
+  teacherComments: TeacherComment[];
+  teacherRequirements: TeacherRequirement[];
+  styleConfirmations: StyleConfirmation[];
+  readiness: Readiness;
+  iterations: HomeworkIteration[];
+  submissionPackage: SubmissionPackage | null;
+  submissionReceipt: SubmissionReceipt | null;
+  /** manual_handoff — AI-адаптеров нет, каждый AI-шаг выполняется вручную (Tauri, этап 8); mock — демонстрационный адаптер. */
+  providerMode: "manual_handoff" | "mock";
+}

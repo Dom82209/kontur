@@ -9,7 +9,14 @@
 
 import type {
   HomeworkIteration,
+  HomeworkWorkflow,
   HomeworkWorkflowStage,
+  ManualAnalysisInput,
+  ManualReviewInput,
+  RunMode,
+  StyleConfirmation,
+  TeacherRequirementInput,
+  WorkflowCommandOptions,
   Readiness,
   ReviewRun,
   RevisionPrompt,
@@ -755,6 +762,12 @@ export interface BridgeEvents {
   "extraction:progress": { operationId: string; completed: number; total: number; material: MaterialRef | null; name: string | null; outcome: ExtractionItemOutcome | null };
   /** Результаты извлечения изменились: анализ, перестроение или очистка cache. */
   "extraction:updated": { reason: "analyzed" | "cleared"; materials: MaterialRef[] };
+  /** Агрегат ДЗ изменился (новая ревизия) — клиент перечитывает getWorkflow. */
+  "homework:updated": { homeworkId: string; revision: number; stage: HomeworkWorkflowStage; reason: string; operationId: string };
+  /** Создан черновик промта (первичного или исправлений). */
+  "homework:revision-prompt-created": { homeworkId: string; promptId: string; kind: RevisionPrompt["kind"]; status: RevisionPrompt["status"]; reviewRunId: string | null; basedOnVersionId: string | null };
+  /** Готовность к сдаче пересчитана после мутации. */
+  "homework:readiness-updated": { homeworkId: string; ready: boolean; blockers: Readiness["checks"][number]["id"][]; revision: number };
 }
 
 export type BridgeEventName = keyof BridgeEvents;
@@ -871,46 +884,67 @@ export interface DesktopBridge {
   getHomeworkList(): Promise<Homework[]>;
   getHomework(homeworkId: string): Promise<Homework | null>;
   getHomeworkCandidates(homeworkId: string): Promise<FileRef[]>;
-  createHomeworkVersion(homeworkId: string, fileId: string, meta?: { author?: VersionAuthor; promptId?: string | null }): Promise<OperationResult<HomeworkVersion>>;
-  markVersionFinal(versionId: string): Promise<OperationResult<Homework>>;
+  /** Новая append-only версия; номер назначает backend. attachmentFileIds — приложения той же версии. */
+  createHomeworkVersion(
+    homeworkId: string,
+    fileId: string,
+    meta?: { author?: VersionAuthor; promptId?: string | null; attachmentFileIds?: string[]; note?: string | null } & WorkflowCommandOptions,
+  ): Promise<OperationResult<HomeworkVersion>>;
+  /** Выбор текущей проверяемой версии (она же итоговая до снимка этапа 10). */
+  markVersionFinal(versionId: string, options?: WorkflowCommandOptions): Promise<OperationResult<Homework>>;
 
   // ── Рабочий цикл ДЗ ──
+  /** Весь рабочий цикл ДЗ одним запросом: этапы, наборы, запуски, промты, готовность, переходы. null — ДЗ нет. */
+  getWorkflow(homeworkId: string): Promise<HomeworkWorkflow | null>;
   getStyleProfile(): Promise<StyleProfile | null>;
-  /** Собирает набор источников для запуска. Пустые обязательные категории → missing. */
-  prepareSourceBundle(homeworkId: string, purpose: RunKind, versionId?: string | null): Promise<SourceBundle>;
+  /** Неизменяемый снимок подтверждённой подборки материалов для запуска. Пустые обязательные категории → missing. */
+  prepareSourceBundle(homeworkId: string, purpose: RunKind, versionId?: string | null, options?: WorkflowCommandOptions): Promise<SourceBundle>;
   setSourceIncluded(bundleId: string, itemId: string, included: boolean): Promise<SourceBundle>;
-  /** Аналитик читает материалы и создаёт первичный промт для автора. */
-  runMaterialAnalysis(homeworkId: string, bundleId: string): Promise<ReviewRun>;
+  /** Аналитик читает материалы и создаёт первичный промт для автора. Без адаптера — waiting_for_provider/manual_handoff. */
+  runMaterialAnalysis(homeworkId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
   /** Проверяющий проверяет версию по всем критериям. */
-  runVersionReview(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun>;
+  runVersionReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
   /** Отдельный запуск «создать промт исправлений» по версии (учитывает и замечания, и требования преподавателя). */
-  runRevisionPrompt(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun>;
-  /** Сохраняет промт исправлений из результата запуска (обычной проверки или по комментариям). */
-  createRevisionPrompt(reviewRunId: string, editedText?: string): Promise<OperationResult<RevisionPrompt>>;
-  /** Передаёт промт роли «автор». Backend отдаёт промт адаптеру; результат придёт новой версией. */
-  sendPromptToAuthor(promptId: string): Promise<OperationResult<RevisionPrompt>>;
-  updatePromptText(promptId: string, text: string): Promise<RevisionPrompt>;
+  runRevisionPrompt(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
+  /** Ручной итог анализа материалов: запуск завершается с provenance manual, создаётся черновик первичного промта. */
+  saveManualAnalysis(runId: string, input: ManualAnalysisInput, options?: WorkflowCommandOptions): Promise<OperationResult<ReviewRun>>;
+  /** Ручной результат проверки версии или проверки по комментариям преподавателя (provenance manual). */
+  saveManualReviewResult(runId: string, input: ManualReviewInput, options?: WorkflowCommandOptions): Promise<OperationResult<ReviewRun>>;
+  /** Черновик промта исправлений по проверке: только выявленные проблемы. */
+  createRevisionPrompt(reviewRunId: string, editedText?: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>>;
+  /** Фиксирует черновик: после этого промт неизменяем. */
+  commitPrompt(promptId: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>>;
+  /** Передаёт зафиксированный промт роли «автор». Без адаптера — отметка ручной передачи. */
+  sendPromptToAuthor(promptId: string, options?: WorkflowCommandOptions): Promise<OperationResult<RevisionPrompt>>;
+  /** Меняет только черновик. */
+  updatePromptText(promptId: string, text: string, options?: WorkflowCommandOptions): Promise<RevisionPrompt>;
   getPrompts(homeworkId: string): Promise<RevisionPrompt[]>;
-  cancelRun(runId: string): Promise<ReviewRun>;
+  cancelRun(runId: string, options?: WorkflowCommandOptions): Promise<ReviewRun>;
   getReviewRuns(homeworkId: string): Promise<ReviewRun[]>;
   /** Пользователь закрепляет результат запуска в истории итераций. */
-  saveRunAsIteration(runId: string): Promise<ReviewRun>;
+  saveRunAsIteration(runId: string, options?: WorkflowCommandOptions): Promise<ReviewRun>;
   getIterations(homeworkId: string): Promise<HomeworkIteration[]>;
   compareVersions(fromVersionId: string, toVersionId: string): Promise<VersionComparison>;
+  /** Явное подтверждение пользователем расхождения со стилем выше применённого порога. */
+  confirmStyleDivergence(reviewRunId: string, options?: WorkflowCommandOptions): Promise<OperationResult<StyleConfirmation>>;
+  /** Допустимый переход этапа (возвраты и решения пользователя) — проверяет backend state machine. */
+  transitionWorkflow(homeworkId: string, to: HomeworkWorkflowStage, options?: WorkflowCommandOptions & { reason?: string }): Promise<OperationResult<Homework>>;
 
   getTeacherComments(homeworkId: string): Promise<TeacherComment[]>;
-  saveTeacherComments(homeworkId: string, comments: TeacherCommentInput[]): Promise<OperationResult<TeacherComment[]>>;
+  saveTeacherComments(homeworkId: string, comments: TeacherCommentInput[], options?: WorkflowCommandOptions): Promise<OperationResult<TeacherComment[]>>;
+  /** Ручное добавление требования, выведенного из комментария преподавателя. */
+  addTeacherRequirement(homeworkId: string, input: TeacherRequirementInput, options?: WorkflowCommandOptions): Promise<OperationResult<TeacherRequirement>>;
   /** Разбирает вставленную переписку или файл (md/txt/pdf/изображение) на пары «вопрос — ответ». */
   importTeacherTranscript(homeworkId: string, input: { text?: string; file?: DroppedItem; source: TeacherComment["source"]; date: ISODate }): Promise<OperationResult<TeacherComment[]>>;
   removeTeacherComment(commentId: string): Promise<void>;
-  runTeacherReview(homeworkId: string, versionId: string, bundleId: string): Promise<ReviewRun>;
+  runTeacherReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
   getTeacherRequirements(homeworkId: string): Promise<TeacherRequirement[]>;
   /** Пользователь вручную закрывает требование со статусом «требует ручной проверки». */
-  resolveRequirement(requirementId: string, status: "done" | "not_done" | "na", note: string): Promise<TeacherRequirement>;
+  resolveRequirement(requirementId: string, status: "done" | "not_done" | "na", note: string, options?: WorkflowCommandOptions): Promise<TeacherRequirement>;
 
   getReadiness(homeworkId: string): Promise<Readiness>;
   /** Только по действию пользователя и только если все проверки readiness пройдены. */
-  markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean }): Promise<OperationResult<Homework>>;
+  markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean } & WorkflowCommandOptions): Promise<OperationResult<Homework>>;
   buildSubmissionPackage(homeworkId: string): Promise<OperationResult<SubmissionPackage>>;
   getSubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null>;
   setPackageCheck(packageId: string, checkId: PackageCheckId, done: boolean): Promise<SubmissionPackage>;

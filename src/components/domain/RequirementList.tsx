@@ -9,10 +9,12 @@ interface Props {
   comments: TeacherComment[];
   onResolve?: (r: TeacherRequirement, status: "done" | "not_done" | "na") => void;
   locked?: boolean;
+  /** Статусы, которые можно закрыть вручную. По умолчанию — только «требует ручной проверки». */
+  resolvable?: RequirementStatus[];
 }
 
 /** Чек-лист требований преподавателя; у каждого — связь с исходным вопросом/ответом. */
-export function RequirementList({ requirements, comments, onResolve, locked }: Props) {
+export function RequirementList({ requirements, comments, onResolve, locked, resolvable = ["manual"] }: Props) {
   return (
     <ul className="reqs">
       {requirements.map((r, i) => {
@@ -28,14 +30,16 @@ export function RequirementList({ requirements, comments, onResolve, locked }: P
               {r.note && <div className="req__note faint">{r.note}</div>}
             </div>
             <span className={`badge ${TONE[r.status] ? `badge--${TONE[r.status]}` : ""}`}>{REQUIREMENT_STATUS_LABEL[r.status]}</span>
-            {onResolve && r.status === "manual" && !locked && (
+            {onResolve && resolvable.includes(r.status) && !locked && (
               <div className="req__resolve">
                 <button className="btn btn--sm" onClick={() => onResolve(r, "done")}>
                   Выполнено
                 </button>
-                <button className="btn btn--sm btn--ghost" onClick={() => onResolve(r, "not_done")}>
-                  Нет
-                </button>
+                {r.status !== "not_done" && (
+                  <button className="btn btn--sm btn--ghost" onClick={() => onResolve(r, "not_done")}>
+                    Нет
+                  </button>
+                )}
                 <button className="btn btn--sm btn--ghost" onClick={() => onResolve(r, "na")}>
                   Неприменимо
                 </button>

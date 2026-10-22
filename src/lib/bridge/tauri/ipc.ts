@@ -1,5 +1,25 @@
 import type {
   AssignmentLinkTarget,
+  Dashboard,
+  FileRef,
+  HomeworkIteration,
+  HomeworkVersion,
+  HomeworkWorkflow,
+  HomeworkWorkflowStage,
+  ManualAnalysisInput,
+  ManualReviewInput,
+  ReviewRun,
+  RevisionPrompt,
+  RunKind,
+  RunMode,
+  SourceBundle,
+  StyleConfirmation,
+  TeacherComment,
+  TeacherCommentInput,
+  TeacherRequirement,
+  TeacherRequirementInput,
+  VersionAuthor,
+  VersionComparison,
   AutomationRules,
   ClassificationPatch,
   CorpusPreview,
@@ -299,6 +319,211 @@ export function setCorpusSelection(homeworkId: string | null, materials: Materia
 
 export function previewCorpus(homeworkId: string | null): Promise<CorpusPreview> {
   return call("preview_corpus", { homeworkId });
+}
+
+// ── Этап 8: рабочий цикл ДЗ ──
+
+/** Ревизия ДЗ, которую видел клиент; null — без проверки устаревшего состояния. */
+type Revision = number | null;
+
+export function getWorkflow(homeworkId: string): Promise<HomeworkWorkflow> {
+  return call("get_workflow", { homeworkId });
+}
+
+export function getDashboard(): Promise<Dashboard> {
+  return call("get_dashboard");
+}
+
+export function getIterations(homeworkId: string): Promise<HomeworkIteration[]> {
+  return call("get_iterations", { homeworkId });
+}
+
+export function compareVersions(fromVersionId: string, toVersionId: string): Promise<VersionComparison> {
+  return call("compare_versions", { fromVersionId, toVersionId });
+}
+
+export function getHomeworkCandidates(homeworkId: string): Promise<FileRef[]> {
+  return call("get_homework_candidates", { homeworkId });
+}
+
+export function createSourceBundle(
+  operationId: string,
+  homeworkId: string,
+  purpose: RunKind,
+  versionId: string | null,
+  expectedRevision: Revision,
+): Promise<OperationResult<SourceBundle>> {
+  return call("create_source_bundle", { operationId, homeworkId, purpose, versionId, expectedRevision });
+}
+
+export interface StartRunRequest {
+  homeworkId: string;
+  kind: RunKind;
+  versionId: string | null;
+  bundleId: string;
+  mode: RunMode;
+}
+
+export function startWorkflowRun(
+  operationId: string,
+  request: StartRunRequest,
+  expectedRevision: Revision,
+): Promise<OperationResult<ReviewRun>> {
+  return call("start_workflow_run", { operationId, request, expectedRevision });
+}
+
+export function cancelWorkflowRun(operationId: string, runId: string, expectedRevision: Revision): Promise<OperationResult<ReviewRun>> {
+  return call("cancel_workflow_run", { operationId, runId, expectedRevision });
+}
+
+export function pinWorkflowRun(operationId: string, runId: string, expectedRevision: Revision): Promise<OperationResult<ReviewRun>> {
+  return call("pin_workflow_run", { operationId, runId, expectedRevision });
+}
+
+export function saveManualAnalysis(
+  operationId: string,
+  runId: string,
+  input: ManualAnalysisInput,
+  expectedRevision: Revision,
+): Promise<OperationResult<ReviewRun>> {
+  return call("save_manual_analysis", { operationId, runId, input: { summary: input.summary, promptText: input.promptText }, expectedRevision });
+}
+
+/** Ручной результат проверки: необязательные списки передаются явными пустыми массивами. */
+export function saveManualReview(
+  operationId: string,
+  runId: string,
+  input: ManualReviewInput,
+  expectedRevision: Revision,
+): Promise<OperationResult<ReviewRun>> {
+  const finding = (item: NonNullable<ManualReviewInput["critical"]>[number]) => ({
+    criterion: item.criterion,
+    text: item.text,
+    location: item.location,
+    evidence: item.evidence ?? [],
+  });
+  return call("save_manual_review", {
+    operationId,
+    runId,
+    input: {
+      verdict: input.verdict,
+      summary: input.summary,
+      correctness: input.correctness,
+      taskFit: input.taskFit,
+      courseGrounding: input.courseGrounding,
+      teacher: input.teacher,
+      styleScore: input.styleScore,
+      styleReasons: input.styleReasons ?? [],
+      critical: (input.critical ?? []).map(finding),
+      remarks: (input.remarks ?? []).map(finding),
+      unsupportedClaims: input.unsupportedClaims ?? [],
+      missing: input.missing ?? [],
+    },
+    expectedRevision,
+  });
+}
+
+export function createRevisionPrompt(
+  operationId: string,
+  reviewRunId: string,
+  text: string | null,
+  expectedRevision: Revision,
+): Promise<OperationResult<RevisionPrompt>> {
+  return call("create_revision_prompt", { operationId, reviewRunId, text, expectedRevision });
+}
+
+export function updatePromptDraft(operationId: string, promptId: string, text: string, expectedRevision: Revision): Promise<OperationResult<RevisionPrompt>> {
+  return call("update_prompt_draft", { operationId, promptId, text, expectedRevision });
+}
+
+export function commitPrompt(operationId: string, promptId: string, expectedRevision: Revision): Promise<OperationResult<RevisionPrompt>> {
+  return call("commit_prompt", { operationId, promptId, expectedRevision });
+}
+
+export function handOffPrompt(operationId: string, promptId: string, expectedRevision: Revision): Promise<OperationResult<RevisionPrompt>> {
+  return call("hand_off_prompt", { operationId, promptId, expectedRevision });
+}
+
+export interface VersionInputIpc {
+  fileId: string;
+  attachmentFileIds: string[];
+  author: VersionAuthor | null;
+  promptId: string | null;
+  note: string | null;
+}
+
+export function createHomeworkVersion(
+  operationId: string,
+  homeworkId: string,
+  input: VersionInputIpc,
+  expectedRevision: Revision,
+): Promise<OperationResult<HomeworkVersion>> {
+  return call("create_homework_version", { operationId, homeworkId, input, expectedRevision });
+}
+
+export function selectHomeworkVersion(operationId: string, versionId: string, expectedRevision: Revision): Promise<OperationResult<Homework>> {
+  return call("select_homework_version", { operationId, versionId, expectedRevision });
+}
+
+export function addTeacherComments(
+  operationId: string,
+  homeworkId: string,
+  comments: TeacherCommentInput[],
+  expectedRevision: Revision,
+): Promise<OperationResult<TeacherComment[]>> {
+  return call("add_teacher_comments", {
+    operationId,
+    homeworkId,
+    comments: comments.map((comment) => ({ source: comment.source, date: comment.date, question: comment.question, answer: comment.answer })),
+    expectedRevision,
+  });
+}
+
+export function addTeacherRequirement(
+  operationId: string,
+  homeworkId: string,
+  input: TeacherRequirementInput,
+  expectedRevision: Revision,
+): Promise<OperationResult<TeacherRequirement>> {
+  return call("add_teacher_requirement", {
+    operationId,
+    homeworkId,
+    input: { commentId: input.commentId, text: input.text, origin: input.origin, status: input.status, note: input.note ?? null },
+    expectedRevision,
+  });
+}
+
+export function resolveTeacherRequirement(
+  operationId: string,
+  requirementId: string,
+  status: "done" | "not_done" | "na",
+  note: string,
+  expectedRevision: Revision,
+): Promise<OperationResult<TeacherRequirement>> {
+  return call("resolve_teacher_requirement", { operationId, requirementId, status, note, expectedRevision });
+}
+
+export function confirmStyleDivergence(operationId: string, reviewRunId: string, expectedRevision: Revision): Promise<OperationResult<StyleConfirmation>> {
+  return call("confirm_style_divergence", { operationId, reviewRunId, expectedRevision });
+}
+
+export function markReadyToSubmit(
+  operationId: string,
+  homeworkId: string,
+  noTeacherComments: boolean,
+  expectedRevision: Revision,
+): Promise<OperationResult<Homework>> {
+  return call("mark_ready_to_submit", { operationId, homeworkId, noTeacherComments, expectedRevision });
+}
+
+export function transitionWorkflow(
+  operationId: string,
+  homeworkId: string,
+  to: HomeworkWorkflowStage,
+  reason: string | null,
+  expectedRevision: Revision,
+): Promise<OperationResult<Homework>> {
+  return call("transition_workflow", { operationId, homeworkId, to, reason, expectedRevision });
 }
 
 /** Преобразует DroppedItem в аргумент IPC; без sourcePath импорт не начинается. */

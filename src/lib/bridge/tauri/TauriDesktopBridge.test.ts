@@ -140,6 +140,29 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     getCorpusSelection: unexpected("getCorpusSelection"),
     setCorpusSelection: unexpected("setCorpusSelection"),
     previewCorpus: unexpected("previewCorpus"),
+    getWorkflow: unexpected("getWorkflow"),
+    getDashboard: unexpected("getDashboard"),
+    getIterations: unexpected("getIterations"),
+    compareVersions: unexpected("compareVersions"),
+    getHomeworkCandidates: unexpected("getHomeworkCandidates"),
+    createSourceBundle: unexpected("createSourceBundle"),
+    startWorkflowRun: unexpected("startWorkflowRun"),
+    cancelWorkflowRun: unexpected("cancelWorkflowRun"),
+    pinWorkflowRun: unexpected("pinWorkflowRun"),
+    saveManualAnalysis: unexpected("saveManualAnalysis"),
+    saveManualReview: unexpected("saveManualReview"),
+    createRevisionPrompt: unexpected("createRevisionPrompt"),
+    updatePromptDraft: unexpected("updatePromptDraft"),
+    commitPrompt: unexpected("commitPrompt"),
+    handOffPrompt: unexpected("handOffPrompt"),
+    createHomeworkVersion: unexpected("createHomeworkVersion"),
+    selectHomeworkVersion: unexpected("selectHomeworkVersion"),
+    addTeacherComments: unexpected("addTeacherComments"),
+    addTeacherRequirement: unexpected("addTeacherRequirement"),
+    resolveTeacherRequirement: unexpected("resolveTeacherRequirement"),
+    confirmStyleDivergence: unexpected("confirmStyleDivergence"),
+    markReadyToSubmit: unexpected("markReadyToSubmit"),
+    transitionWorkflow: unexpected("transitionWorkflow"),
     ...overrides,
   };
 }
@@ -232,7 +255,7 @@ describe("TauriDesktopBridge", () => {
     const getSubjects = vi.fn(async () => Promise.reject(new BridgeError("database", "SQLite unavailable")));
     const adapter = new TauriDesktopBridge(readClient({ getSubjects }));
 
-    await expect(adapter.getDashboard()).rejects.toMatchObject({ code: "backend_unavailable" });
+    await expect(adapter.createWeek("subject-1", 8)).rejects.toMatchObject({ code: "backend_unavailable" });
     await expect(adapter.getSubjects()).rejects.toMatchObject({ code: "database" });
     expect(getSubjects).toHaveBeenCalledOnce();
   });

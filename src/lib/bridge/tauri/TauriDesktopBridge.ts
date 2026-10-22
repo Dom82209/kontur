@@ -1,5 +1,16 @@
 import { assertNativeSourcePaths, filesFromImportReport, newOperationId } from "../intake";
-import type { BridgeEventName, BridgeListener, DesktopBridge, DroppedItem, Unsubscribe } from "../types";
+import type {
+  BridgeEventName,
+  BridgeListener,
+  DesktopBridge,
+  DroppedItem,
+  HomeworkWorkflow,
+  ProviderStatus,
+  RunKind,
+  RunMode,
+  Unsubscribe,
+  WorkflowCommandOptions,
+} from "../types";
 import { BridgeError } from "../types";
 import { listenToBridgeEvent, listenToIntakeEvent } from "./events";
 import { unsupportedBackend } from "./errors";
@@ -46,6 +57,40 @@ export interface TauriIpcClient {
   getCorpusSelection: typeof ipc.getCorpusSelection;
   setCorpusSelection: typeof ipc.setCorpusSelection;
   previewCorpus: typeof ipc.previewCorpus;
+  getWorkflow: typeof ipc.getWorkflow;
+  getDashboard: typeof ipc.getDashboard;
+  getIterations: typeof ipc.getIterations;
+  compareVersions: typeof ipc.compareVersions;
+  getHomeworkCandidates: typeof ipc.getHomeworkCandidates;
+  createSourceBundle: typeof ipc.createSourceBundle;
+  startWorkflowRun: typeof ipc.startWorkflowRun;
+  cancelWorkflowRun: typeof ipc.cancelWorkflowRun;
+  pinWorkflowRun: typeof ipc.pinWorkflowRun;
+  saveManualAnalysis: typeof ipc.saveManualAnalysis;
+  saveManualReview: typeof ipc.saveManualReview;
+  createRevisionPrompt: typeof ipc.createRevisionPrompt;
+  updatePromptDraft: typeof ipc.updatePromptDraft;
+  commitPrompt: typeof ipc.commitPrompt;
+  handOffPrompt: typeof ipc.handOffPrompt;
+  createHomeworkVersion: typeof ipc.createHomeworkVersion;
+  selectHomeworkVersion: typeof ipc.selectHomeworkVersion;
+  addTeacherComments: typeof ipc.addTeacherComments;
+  addTeacherRequirement: typeof ipc.addTeacherRequirement;
+  resolveTeacherRequirement: typeof ipc.resolveTeacherRequirement;
+  confirmStyleDivergence: typeof ipc.confirmStyleDivergence;
+  markReadyToSubmit: typeof ipc.markReadyToSubmit;
+  transitionWorkflow: typeof ipc.transitionWorkflow;
+}
+
+/** Опции команды → аргументы IPC: новый UUID v4, если клиент не задал свой. */
+function command(options?: WorkflowCommandOptions): { operationId: string; revision: number | null } {
+  return { operationId: options?.operationId ?? newOperationId(), revision: options?.expectedRevision ?? null };
+}
+
+function providerUnavailable(): Promise<never> {
+  return Promise.reject(
+    new BridgeError("provider_unavailable", "AI-адаптеры ещё не подключены (этап 9): выполните шаг вручную и сохраните результат"),
+  );
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
@@ -159,46 +204,135 @@ export class TauriDesktopBridge implements DesktopBridge {
     this.ipcClient.setCorpusSelection(homeworkId, materials);
   previewCorpus: DesktopBridge["previewCorpus"] = (homeworkId) => this.ipcClient.previewCorpus(homeworkId);
 
-  getDashboard: DesktopBridge["getDashboard"] = () => unsupportedBackend("Главная");
+  // ── Рабочий цикл ДЗ (этап 8). Без mock fallback: ошибки backend пробрасываются как есть. ──
+
+  getWorkflow: DesktopBridge["getWorkflow"] = (homeworkId) => nullWhenNotFound(() => this.ipcClient.getWorkflow(homeworkId));
+
+  /** Чтение части агрегата: отсутствующее ДЗ — not_found (списки не превращаются в пустые). */
+  private async workflowOf(homeworkId: string): Promise<HomeworkWorkflow> {
+    return this.ipcClient.getWorkflow(homeworkId);
+  }
+
+  private async startRun(homeworkId: string, kind: RunKind, versionId: string | null, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }) {
+    const { operationId, revision } = command(options);
+    const result = await this.ipcClient.startWorkflowRun(operationId, { homeworkId, kind, versionId, bundleId, mode: options?.mode ?? "provider" }, revision);
+    return result.value;
+  }
+
+  getDashboard: DesktopBridge["getDashboard"] = () => this.ipcClient.getDashboard();
+  getHomeworkCandidates: DesktopBridge["getHomeworkCandidates"] = (homeworkId) => this.ipcClient.getHomeworkCandidates(homeworkId);
+  createHomeworkVersion: DesktopBridge["createHomeworkVersion"] = (homeworkId, fileId, meta) => {
+    const { operationId, revision } = command(meta);
+    return this.ipcClient.createHomeworkVersion(
+      operationId,
+      homeworkId,
+      { fileId, attachmentFileIds: meta?.attachmentFileIds ?? [], author: meta?.author ?? null, promptId: meta?.promptId ?? null, note: meta?.note ?? null },
+      revision,
+    );
+  };
+  markVersionFinal: DesktopBridge["markVersionFinal"] = (versionId, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.selectHomeworkVersion(operationId, versionId, revision);
+  };
+  getStyleProfile: DesktopBridge["getStyleProfile"] = () => unsupportedBackend("Профиль стиля");
+  prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = async (homeworkId, purpose, versionId = null, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.createSourceBundle(operationId, homeworkId, purpose, versionId, revision)).value;
+  };
+  setSourceIncluded: DesktopBridge["setSourceIncluded"] = () =>
+    Promise.reject(new BridgeError("immutable", "Набор источников — неизменяемый снимок: измените подборку материалов и создайте новый набор"));
+  runMaterialAnalysis: DesktopBridge["runMaterialAnalysis"] = (homeworkId, bundleId, options) => this.startRun(homeworkId, "analyze_materials", null, bundleId, options);
+  runVersionReview: DesktopBridge["runVersionReview"] = (homeworkId, versionId, bundleId, options) => this.startRun(homeworkId, "review_version", versionId, bundleId, options);
+  runRevisionPrompt: DesktopBridge["runRevisionPrompt"] = (homeworkId, versionId, bundleId, options) => this.startRun(homeworkId, "revision_prompt", versionId, bundleId, options);
+  runTeacherReview: DesktopBridge["runTeacherReview"] = (homeworkId, versionId, bundleId, options) => this.startRun(homeworkId, "review_teacher", versionId, bundleId, options);
+  saveManualAnalysis: DesktopBridge["saveManualAnalysis"] = (runId, input, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.saveManualAnalysis(operationId, runId, input, revision);
+  };
+  saveManualReviewResult: DesktopBridge["saveManualReviewResult"] = (runId, input, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.saveManualReview(operationId, runId, input, revision);
+  };
+  createRevisionPrompt: DesktopBridge["createRevisionPrompt"] = (reviewRunId, editedText, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.createRevisionPrompt(operationId, reviewRunId, editedText ?? null, revision);
+  };
+  commitPrompt: DesktopBridge["commitPrompt"] = (promptId, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.commitPrompt(operationId, promptId, revision);
+  };
+  /** Адаптера автора нет: команда фиксирует ручную передачу промта и переводит ДЗ к решению. */
+  sendPromptToAuthor: DesktopBridge["sendPromptToAuthor"] = (promptId, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.handOffPrompt(operationId, promptId, revision);
+  };
+  updatePromptText: DesktopBridge["updatePromptText"] = async (promptId, text, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.updatePromptDraft(operationId, promptId, text, revision)).value;
+  };
+  getPrompts: DesktopBridge["getPrompts"] = async (homeworkId) => (await this.workflowOf(homeworkId)).prompts;
+  cancelRun: DesktopBridge["cancelRun"] = async (runId, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.cancelWorkflowRun(operationId, runId, revision)).value;
+  };
+  getReviewRuns: DesktopBridge["getReviewRuns"] = async (homeworkId) => (await this.workflowOf(homeworkId)).runs;
+  saveRunAsIteration: DesktopBridge["saveRunAsIteration"] = async (runId, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.pinWorkflowRun(operationId, runId, revision)).value;
+  };
+  getIterations: DesktopBridge["getIterations"] = (homeworkId) => this.ipcClient.getIterations(homeworkId);
+  compareVersions: DesktopBridge["compareVersions"] = (fromVersionId, toVersionId) => this.ipcClient.compareVersions(fromVersionId, toVersionId);
+  confirmStyleDivergence: DesktopBridge["confirmStyleDivergence"] = (reviewRunId, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.confirmStyleDivergence(operationId, reviewRunId, revision);
+  };
+  transitionWorkflow: DesktopBridge["transitionWorkflow"] = (homeworkId, to, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.transitionWorkflow(operationId, homeworkId, to, options?.reason ?? null, revision);
+  };
+  getTeacherComments: DesktopBridge["getTeacherComments"] = async (homeworkId) => (await this.workflowOf(homeworkId)).teacherComments;
+  saveTeacherComments: DesktopBridge["saveTeacherComments"] = (homeworkId, comments, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.addTeacherComments(operationId, homeworkId, comments, revision);
+  };
+  addTeacherRequirement: DesktopBridge["addTeacherRequirement"] = (homeworkId, input, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.addTeacherRequirement(operationId, homeworkId, input, revision);
+  };
+  importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = () => unsupportedBackend("Автоматический разбор переписки преподавателя (этап 10)");
+  removeTeacherComment: DesktopBridge["removeTeacherComment"] = () => unsupportedBackend("Удаление комментария преподавателя");
+  getTeacherRequirements: DesktopBridge["getTeacherRequirements"] = async (homeworkId) => (await this.workflowOf(homeworkId)).teacherRequirements;
+  resolveRequirement: DesktopBridge["resolveRequirement"] = async (requirementId, status, note, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.resolveTeacherRequirement(operationId, requirementId, status, note, revision)).value;
+  };
+  getReadiness: DesktopBridge["getReadiness"] = async (homeworkId) => (await this.workflowOf(homeworkId)).readiness;
+  markReadyToSubmit: DesktopBridge["markReadyToSubmit"] = (homeworkId, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.markReadyToSubmit(operationId, homeworkId, options.noTeacherComments, revision);
+  };
+  buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = () => unsupportedBackend("Сборка комплекта на сдачу (этап 10)");
+  getSubmissionPackage: DesktopBridge["getSubmissionPackage"] = async (homeworkId) => (await this.workflowOf(homeworkId)).submissionPackage;
+  setPackageCheck: DesktopBridge["setPackageCheck"] = () => unsupportedBackend("Чек-лист комплекта (этап 10)");
+  confirmSubmission: DesktopBridge["confirmSubmission"] = () => unsupportedBackend("Подтверждение отправки (этап 10)");
+  getSubmissionReceipt: DesktopBridge["getSubmissionReceipt"] = async (homeworkId) => (await this.workflowOf(homeworkId)).submissionReceipt;
+
+  // ── Раскладка «Входящих» по предметам — следующий этап, не входит в рабочий цикл ДЗ. ──
+
   createWeek: DesktopBridge["createWeek"] = () => unsupportedBackend("Создание недели");
   classifyFiles: DesktopBridge["classifyFiles"] = () => unsupportedBackend("Классификация файлов");
   previewRoute: DesktopBridge["previewRoute"] = () => unsupportedBackend("Предпросмотр раскладки");
   routeFiles: DesktopBridge["routeFiles"] = () => unsupportedBackend("Раскладка файлов");
-  getHomeworkCandidates: DesktopBridge["getHomeworkCandidates"] = () => unsupportedBackend("Кандидаты версий ДЗ");
-  createHomeworkVersion: DesktopBridge["createHomeworkVersion"] = () => unsupportedBackend("Создание версии ДЗ");
-  markVersionFinal: DesktopBridge["markVersionFinal"] = () => unsupportedBackend("Выбор итоговой версии");
-  getStyleProfile: DesktopBridge["getStyleProfile"] = () => unsupportedBackend("Профиль стиля");
-  prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = () => unsupportedBackend("Подготовка источников");
-  setSourceIncluded: DesktopBridge["setSourceIncluded"] = () => unsupportedBackend("Изменение состава источников");
-  runMaterialAnalysis: DesktopBridge["runMaterialAnalysis"] = () => unsupportedBackend("Анализ материалов");
-  runVersionReview: DesktopBridge["runVersionReview"] = () => unsupportedBackend("Проверка версии");
-  runRevisionPrompt: DesktopBridge["runRevisionPrompt"] = () => unsupportedBackend("Создание промта исправлений");
-  createRevisionPrompt: DesktopBridge["createRevisionPrompt"] = () => unsupportedBackend("Сохранение промта исправлений");
-  sendPromptToAuthor: DesktopBridge["sendPromptToAuthor"] = () => unsupportedBackend("Передача промта автору");
-  updatePromptText: DesktopBridge["updatePromptText"] = () => unsupportedBackend("Редактирование промта");
-  getPrompts: DesktopBridge["getPrompts"] = () => unsupportedBackend("Чтение промтов");
-  cancelRun: DesktopBridge["cancelRun"] = () => unsupportedBackend("Отмена AI-запуска");
-  getReviewRuns: DesktopBridge["getReviewRuns"] = () => unsupportedBackend("История проверок");
-  saveRunAsIteration: DesktopBridge["saveRunAsIteration"] = () => unsupportedBackend("Сохранение итерации");
-  getIterations: DesktopBridge["getIterations"] = () => unsupportedBackend("История итераций");
-  compareVersions: DesktopBridge["compareVersions"] = () => unsupportedBackend("Сравнение версий");
-  getTeacherComments: DesktopBridge["getTeacherComments"] = () => unsupportedBackend("Комментарии преподавателя");
-  saveTeacherComments: DesktopBridge["saveTeacherComments"] = () => unsupportedBackend("Сохранение комментариев преподавателя");
-  importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = () => unsupportedBackend("Импорт переписки преподавателя");
-  removeTeacherComment: DesktopBridge["removeTeacherComment"] = () => unsupportedBackend("Удаление комментария преподавателя");
-  runTeacherReview: DesktopBridge["runTeacherReview"] = () => unsupportedBackend("Проверка по комментариям преподавателя");
-  getTeacherRequirements: DesktopBridge["getTeacherRequirements"] = () => unsupportedBackend("Требования преподавателя");
-  resolveRequirement: DesktopBridge["resolveRequirement"] = () => unsupportedBackend("Проверка требования преподавателя");
-  getReadiness: DesktopBridge["getReadiness"] = () => unsupportedBackend("Проверка готовности");
-  markReadyToSubmit: DesktopBridge["markReadyToSubmit"] = () => unsupportedBackend("Отметка готовности к сдаче");
-  buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = () => unsupportedBackend("Сборка комплекта на сдачу");
-  getSubmissionPackage: DesktopBridge["getSubmissionPackage"] = () => unsupportedBackend("Комплект на сдачу");
-  setPackageCheck: DesktopBridge["setPackageCheck"] = () => unsupportedBackend("Чек-лист комплекта");
-  confirmSubmission: DesktopBridge["confirmSubmission"] = () => unsupportedBackend("Подтверждение отправки");
-  getSubmissionReceipt: DesktopBridge["getSubmissionReceipt"] = () => unsupportedBackend("Снимок отправленной работы");
-  openProviderApp: DesktopBridge["openProviderApp"] = () => unsupportedBackend("Открытие приложения провайдера");
-  connectProvider: DesktopBridge["connectProvider"] = () => unsupportedBackend("Подключение провайдера");
-  disconnectProvider: DesktopBridge["disconnectProvider"] = () => unsupportedBackend("Отключение провайдера");
-  getProviderStatus: DesktopBridge["getProviderStatus"] = () => unsupportedBackend("Статус провайдера");
+
+  // ── Провайдеры: адаптеров нет (этап 9). Статус честный — «не подключён», ручной режим. ──
+
+  getProviderStatus: DesktopBridge["getProviderStatus"] = async (provider) => {
+    const status = (await this.ipcClient.getDashboard()).providers.find((item: ProviderStatus) => item.provider === provider);
+    if (!status) throw new BridgeError("not_found", "Провайдер не найден");
+    return status;
+  };
+  connectProvider: DesktopBridge["connectProvider"] = () => providerUnavailable();
+  disconnectProvider: DesktopBridge["disconnectProvider"] = () => providerUnavailable();
+  openProviderApp: DesktopBridge["openProviderApp"] = () => providerUnavailable();
   undoOperation: DesktopBridge["undoOperation"] = () => unsupportedBackend("Отмена операции");
 }

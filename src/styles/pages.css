@@ -2084,3 +2084,19 @@
 .materials .toolbar__check {
   white-space: nowrap;
 }
+
+/* ── Этап 8: ручной режим AI-шагов и состояния рабочего цикла ── */
+.runmon[data-status="waiting_for_provider"],
+.runmon[data-status="manual_handoff"] { border-color: var(--warn); background: var(--warn-soft); }
+.runmon[data-status="cancelled"] { border-color: var(--line-strong); background: var(--surface-2); }
+.runmon__handoff { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.runmon__handoff p { margin: 0; flex: 1 1 260px; min-width: 0; color: var(--text-2); font-size: var(--t-sm); }
+.manual-form { display: grid; gap: 12px; min-width: 0; }
+.manual-form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 12px; }
+.manual-form .textarea { min-height: 64px; }
+.manual-form__prompt.textarea { min-height: 160px; }
+.wf__transitions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.wf__stale { margin-bottom: 12px; }
+.prov-badge { font-size: var(--t-xs); }
+.req__add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-width: 0; }
+.req__add .input { flex: 1 1 200px; min-width: 0; }

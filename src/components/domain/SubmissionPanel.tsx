@@ -3,7 +3,7 @@ import { CircleCheck, CircleX, Cloud, Copy, FolderOpen, Link2, Lock, Package, Se
 import { useRef, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type Homework, type PackageItem, type Readiness, type SubmissionPackage, type SubmissionReceipt } from "../../lib/bridge";
+import { bridge, type Homework, type PackageItem, type Readiness, type SubmissionPackage, type SubmissionReceipt, type WorkflowCommandOptions } from "../../lib/bridge";
 import { formatBytes, formatDateTime } from "../../lib/format";
 import { Dialog } from "../ui/Dialog";
 import { EmptyState } from "../ui/States";
@@ -15,6 +15,11 @@ interface Props {
   receipt: SubmissionReceipt | null;
   commentsCount: number;
   onChanged: () => void;
+  /** Ручной режим этапа 8: комплект, копирование в «03 На сдачу» и снимок — этап 10. */
+  manual?: boolean;
+  /** Решение backend state machine: можно ли перейти к «Готово к сдаче». */
+  readyAllowed?: boolean;
+  commandOptions?: () => WorkflowCommandOptions;
 }
 
 const ROLE_TITLE: Record<PackageItem["role"], string> = { main: "Главный итоговый файл", attachment: "Обязательные приложения", extra: "Дополнительные файлы", cloud: "Загрузить на облачный диск" };
@@ -25,7 +30,7 @@ function toLocalInput(d: Date): string {
 }
 
 /** Готовность → комплект → ручное подтверждение отправки → неизменяемый снимок. */
-export function SubmissionPanel({ homework: h, readiness, pkg, receipt, commentsCount, onChanged }: Props) {
+export function SubmissionPanel({ homework: h, readiness, pkg, receipt, commentsCount, onChanged, manual = false, readyAllowed, commandOptions }: Props) {
   const toast = useToast();
   const { reportError, undo } = useOps();
   const [busy, setBusy] = useState(false);
@@ -120,11 +125,21 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
             {isReadyStage ? (
               <span className="badge badge--accent">Этап «Готово к сдаче» подтверждён</span>
             ) : (
-              <button className="btn btn--primary" disabled={!readiness?.ready || busy} onClick={() => setReadyOpen(true)} title={readiness?.ready ? undefined : "Статус ставится только после всех обязательных проверок"}>
+              <button
+                className="btn btn--primary"
+                disabled={!(readyAllowed ?? readiness?.ready) || busy}
+                onClick={() => setReadyOpen(true)}
+                title={(readyAllowed ?? readiness?.ready) ? undefined : "Статус ставится только после всех обязательных проверок и допустимого этапа"}
+              >
                 <ShieldCheck /> Отметить «Готово к сдаче»
               </button>
             )}
-            <button className="btn" disabled={!readiness?.ready || busy} onClick={() => void act(() => bridge.buildSubmissionPackage(h.id), "Комплект не собран", (r) => toast.push({ tone: "ok", title: r.operation.title, action: { label: "Отменить", run: () => void undo(r.operation.id) } }))}>
+            <button
+              className="btn"
+              disabled={manual || !readiness?.ready || busy}
+              title={manual ? "Сборка комплекта и копирование в «03 На сдачу» появятся на этапе сдачи" : undefined}
+              onClick={() => void act(() => bridge.buildSubmissionPackage(h.id), "Комплект не собран", (r) => toast.push({ tone: "ok", title: r.operation.title, action: { label: "Отменить", run: () => void undo(r.operation.id) } }))}
+            >
               <Package /> {pkg ? "Пересобрать комплект" : "Собрать комплект"}
             </button>
           </div>
@@ -242,9 +257,9 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
               className="btn btn--primary"
               disabled={busy || (commentsCount === 0 && !noComments)}
               onClick={() =>
-                void act(() => bridge.markReadyToSubmit(h.id, { noTeacherComments: noComments }), "Статус не изменён", (r) => {
+                void act(() => bridge.markReadyToSubmit(h.id, { noTeacherComments: noComments, ...commandOptions?.() }), "Статус не изменён", (r) => {
                   setReadyOpen(false);
-                  toast.push({ tone: "ok", title: r.operation.title, action: { label: "Отменить", run: () => void undo(r.operation.id) } });
+                  toast.push({ tone: "ok", title: r.operation.title, action: r.operation.undoable ? { label: "Отменить", run: () => void undo(r.operation.id) } : undefined });
                 })
               }
             >
