@@ -35,6 +35,17 @@ export interface TauriIpcClient {
   setHomeworkAssignmentUrl: typeof ipc.setHomeworkAssignmentUrl;
   openCourse: typeof ipc.openCourse;
   openAssignment: typeof ipc.openAssignment;
+  listMaterialExtractions: typeof ipc.listMaterialExtractions;
+  getMaterialExtraction: typeof ipc.getMaterialExtraction;
+  analyzeMaterial: typeof ipc.analyzeMaterial;
+  analyzeMaterials: typeof ipc.analyzeMaterials;
+  cancelExtraction: typeof ipc.cancelExtraction;
+  clearExtractionCache: typeof ipc.clearExtractionCache;
+  getExtractionSettings: typeof ipc.getExtractionSettings;
+  setExtractionSettings: typeof ipc.setExtractionSettings;
+  getCorpusSelection: typeof ipc.getCorpusSelection;
+  setCorpusSelection: typeof ipc.setCorpusSelection;
+  previewCorpus: typeof ipc.previewCorpus;
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
@@ -128,6 +139,25 @@ export class TauriDesktopBridge implements DesktopBridge {
     this.ipcClient.setHomeworkAssignmentUrl(homeworkId, url);
   openCourse: DesktopBridge["openCourse"] = (target) => this.ipcClient.openCourse(target);
   openAssignment: DesktopBridge["openAssignment"] = (target) => this.ipcClient.openAssignment(target);
+
+  // ── Извлечение текста (этап 7) ──
+
+  listMaterialExtractions: DesktopBridge["listMaterialExtractions"] = () => this.ipcClient.listMaterialExtractions();
+  getMaterialExtraction: DesktopBridge["getMaterialExtraction"] = (material) =>
+    nullWhenNotFound(() => this.ipcClient.getMaterialExtraction(material));
+  analyzeMaterial: DesktopBridge["analyzeMaterial"] = (material, options) =>
+    this.ipcClient.analyzeMaterial(material, options?.force ?? false);
+  analyzeMaterials: DesktopBridge["analyzeMaterials"] = (materials, options) =>
+    this.ipcClient.analyzeMaterials(options?.operationId ?? newOperationId(), materials, options?.force ?? false);
+  cancelExtraction: DesktopBridge["cancelExtraction"] = (operationId) => this.ipcClient.cancelExtraction(operationId);
+  clearExtractionCache: DesktopBridge["clearExtractionCache"] = () => this.ipcClient.clearExtractionCache();
+  getExtractionSettings: DesktopBridge["getExtractionSettings"] = () => this.ipcClient.getExtractionSettings();
+  setExtractionSettings: DesktopBridge["setExtractionSettings"] = (patch) =>
+    this.ipcClient.setExtractionSettings(patch.ocrEnabled);
+  getCorpusSelection: DesktopBridge["getCorpusSelection"] = (homeworkId) => this.ipcClient.getCorpusSelection(homeworkId);
+  setCorpusSelection: DesktopBridge["setCorpusSelection"] = (homeworkId, materials) =>
+    this.ipcClient.setCorpusSelection(homeworkId, materials);
+  previewCorpus: DesktopBridge["previewCorpus"] = (homeworkId) => this.ipcClient.previewCorpus(homeworkId);
 
   getDashboard: DesktopBridge["getDashboard"] = () => unsupportedBackend("Главная");
   createWeek: DesktopBridge["createWeek"] = () => unsupportedBackend("Создание недели");

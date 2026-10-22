@@ -56,6 +56,7 @@ import { lmsUrlProblem } from "../../lmsLinks";
 import { newOperationId } from "../intake";
 import { MockWorkflow, type MockContext } from "./workflow";
 import { MockLms } from "./lms";
+import { MockExtraction } from "./extraction";
 
 /**
  * MockDesktopBridge — имитация desktop-backend.
@@ -113,6 +114,7 @@ export class MockDesktopBridge implements DesktopBridge {
   private readonly latency: number;
   private readonly workflow: MockWorkflow;
   private readonly lms: MockLms;
+  private readonly extraction: MockExtraction;
 
   constructor(options: MockOptions = {}) {
     this.latency = options.latency ?? 1;
@@ -126,6 +128,28 @@ export class MockDesktopBridge implements DesktopBridge {
       addInbox: (files) => {
         this.inbox = [...files, ...this.inbox];
       },
+      log: (op) => {
+        this.log.unshift(op);
+      },
+    });
+    this.extraction = new MockExtraction({
+      emitter: this.emitter,
+      wait: (ms) => this.wait(ms),
+      inbox: () => this.inbox.filter((f) => f.status !== "routed"),
+      weekFiles: () => {
+        const short = (id: string) => this.subjects.find((s) => s.id === id)?.shortName ?? id;
+        const files: { file: FileRef; context: string }[] = [];
+        for (const [subjectId, list] of this.weeks)
+          for (const w of list) {
+            const base = `${short(subjectId)} · Неделя ${w.number}`;
+            files.push(...w.lectures.map((file) => ({ file, context: `${base} · Лекции` })));
+            files.push(...w.seminars.map((file) => ({ file, context: `${base} · Семинары` })));
+            files.push(...w.materials.map((file) => ({ file, context: `${base} · Дополнительно` })));
+          }
+        for (const h of this.homework) files.push(...h.taskFiles.map((file) => ({ file, context: `${short(h.subjectId)} · Неделя ${h.weekNumber} · ДЗ · условие и данные` })));
+        return files;
+      },
+      homework: () => this.homework,
       log: (op) => {
         this.log.unshift(op);
       },
@@ -384,6 +408,20 @@ export class MockDesktopBridge implements DesktopBridge {
   importCuExport: DesktopBridge["importCuExport"] = (request, operationId) => this.lms.import(request, operationId);
   setSubjectCourseUrl: DesktopBridge["setSubjectCourseUrl"] = (subjectId, url) => this.lms.setCourseUrl(subjectId, url);
   openCourse: DesktopBridge["openCourse"] = (target) => this.lms.openCourse(target);
+
+  // ───────────── Извлечение текста (имитация этапа 7) ─────────────
+
+  listMaterialExtractions: DesktopBridge["listMaterialExtractions"] = () => this.extraction.list();
+  getMaterialExtraction: DesktopBridge["getMaterialExtraction"] = (material) => this.extraction.get(material);
+  analyzeMaterial: DesktopBridge["analyzeMaterial"] = (material, options) => this.extraction.analyze(material, options?.force ?? false);
+  analyzeMaterials: DesktopBridge["analyzeMaterials"] = (materials, options) => this.extraction.analyzeBatch(materials, options?.force ?? false, options?.operationId);
+  cancelExtraction: DesktopBridge["cancelExtraction"] = (operationId) => this.extraction.cancel(operationId);
+  clearExtractionCache: DesktopBridge["clearExtractionCache"] = () => this.extraction.clearCache();
+  getExtractionSettings: DesktopBridge["getExtractionSettings"] = () => this.extraction.settings();
+  setExtractionSettings: DesktopBridge["setExtractionSettings"] = (patch) => this.extraction.setSettings(patch);
+  getCorpusSelection: DesktopBridge["getCorpusSelection"] = (homeworkId) => this.extraction.getSelection(homeworkId);
+  setCorpusSelection: DesktopBridge["setCorpusSelection"] = (homeworkId, materials) => this.extraction.setSelection(homeworkId, materials);
+  previewCorpus: DesktopBridge["previewCorpus"] = (homeworkId) => this.extraction.preview(homeworkId);
 
   async setHomeworkAssignmentUrl(homeworkId: string, url: string | null): Promise<Homework> {
     await this.wait(80);

@@ -496,8 +496,8 @@ fn persistent_path_deserialization_revalidates_input() {
 }
 
 #[test]
-fn schema_version_is_four_after_lms_import_stage() {
-    assert_eq!(CURRENT_SCHEMA_VERSION, 4);
+fn schema_version_is_five_after_extraction_stage() {
+    assert_eq!(CURRENT_SCHEMA_VERSION, 5);
 }
 
 fn undo_context() -> UndoContext {

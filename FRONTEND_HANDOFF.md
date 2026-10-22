@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 6. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS.
+Документ фиксирует frontend-контракт и границу этапа 7. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS; этап 7 — локальное извлечение текста и структуры, просмотр результата, cache по SHA-256 и подборку материалов для будущего анализа.
 
 ## 1. Граница архитектуры
 
@@ -20,14 +20,15 @@ React pages/components
 - Пути в моделях — относительные пути внутри выбранного хранилища. Абсолютный путь пользователя не хардкодится.
 - Все даты — ISO 8601, размеры — байты, идентификаторы непрозрачны для frontend.
 
-## 2. Семь основных экранов
+## 2. Восемь основных экранов
 
-Навигация содержит семь экранов; карточка ДЗ является детальным маршрутом раздела «Домашние задания».
+Навигация содержит восемь экранов (этап 7 добавил «Материалы»); карточка ДЗ является детальным маршрутом раздела «Домашние задания».
 
 | Маршрут | Экран | Основные данные и действия |
 |---|---|---|
 | `/` | Главная | `getDashboard`, `getHomeworkList`; девятиэтапная сводка, ближайшее действие и счётчики |
-| `/inbox` | Входящие | intake, классификация, preview и раскладка без перезаписи |
+| `/inbox` | Входящие | intake, классификация, preview и раскладка без перезаписи; «Текст и структура» файла |
+| `/materials` | Материалы | `listMaterialExtractions`, `analyzeMaterials`/`cancelExtraction`, просмотр извлечённого содержания, подборка для анализа (⌘7) |
 | `/week`, `/subjects/:subjectId/week/:n` | Неделя | предмет, файлы недели, связанное ДЗ, создание недели |
 | `/homework` | Домашние задания | доска по папочному `Homework.stage`; подробный workflow в карточках |
 | `/ai` | AI Workspace | source bundle, запуск анализа/проверок, результаты, промты и история |
@@ -114,6 +115,10 @@ React pages/components
 
 `getDownloadsWatcher`, `setDownloadsWatcher`, `dismissDownloadCandidate`, `pickCuExport`, `previewCuExport`, `importCuExport`, `setSubjectCourseUrl`, `setHomeworkAssignmentUrl`, `openCourse`, `openAssignment`.
 
+### Извлечение текста и подборка (этап 7)
+
+`listMaterialExtractions`, `getMaterialExtraction`, `analyzeMaterial`, `analyzeMaterials`, `cancelExtraction`, `clearExtractionCache`, `getExtractionSettings`, `setExtractionSettings`, `getCorpusSelection`, `setCorpusSelection`, `previewCorpus`.
+
 ### ДЗ и версии
 
 `getHomeworkList`, `getHomework`, `getHomeworkCandidates`, `createHomeworkVersion`, `markVersionFinal`.
@@ -155,6 +160,8 @@ React pages/components
 | `inbox:updated` | `{ reason: "import", fileIds }` — список «Входящих» изменился, перечитать `getInboxFiles` |
 | `downloads:watcher-updated` | `{ watcher: DownloadsWatcher }` — состояние watcher и список кандидатов |
 | `cu-import:progress` | `{ operationId, phase: inspect \| extract \| import \| cleanup, completed, total, entryName }` — фазы импорта экспорта ЦУ |
+| `extraction:progress` | `{ operationId, completed, total, material, name, outcome }` — прогресс пакетного извлечения текста |
+| `extraction:updated` | `{ reason: analyzed \| cleared, materials }` — результаты извлечения изменились, перечитать `listMaterialExtractions` |
 
 Событие «файл добавлен» в контракте называется `inbox:file-added` (`{ files }`) и эмитится только для впервые импортированных файлов. Служебные `intake:native-drop` и `intake:drag-state` слушает только Tauri adapter; в `BridgeEvents` они не входят.
 
@@ -182,6 +189,8 @@ start operation
 Команды этапа 5: `check_managed_roots`, `choose_managed_root { kind }`, `prepare_inbox_root`, `pick_import_files`, `import_inbox_files { operationId, items: [{ sourcePath, origin }] }`, `get_operation_result { operationId }`, `open_inbox_file { fileId }`, `reveal_inbox_file { fileId }`, `reveal_in_finder { relativePath }`. `TauriDesktopBridge` подключает к ним `getManagedRoots`, `chooseManagedRoot`, `prepareInboxRoot`, `pickFiles`, `importFiles`, `importDroppedFiles` (файлы из отчёта без ошибок), `getOperationResult` (`not_found` → `null`), `openInboxFile`, `revealInboxFile`, `revealInFinder`; `onNativeFileDrop` и `onNativeDragState` слушают `intake:native-drop`/`intake:drag-state`.
 
 Команды этапа 6: `get_downloads_watcher`, `set_downloads_watcher { enabled }`, `dismiss_download_candidate { candidateId }`, `pick_cu_export`, `preview_cu_export { candidateId }`, `import_cu_export { operationId, request }`, `set_subject_course_url { subjectId, url }`, `set_homework_assignment_url { homeworkId, url }`, `open_course { subjectId, fileId }`, `open_assignment { homeworkId, fileId }` (в двух последних задаётся ровно одно поле, второе — `null`). `TauriDesktopBridge` подключает к ним одноимённые методы `DesktopBridge` напрямую; `importCuExport` без `operationId` генерирует UUID v4. Mock fallback нет.
+
+Команды этапа 7: `list_material_extractions`, `get_material_extraction { material }`, `analyze_material { material, force }`, `analyze_materials { operationId, materials, force }`, `cancel_extraction { operationId }`, `clear_extraction_cache`, `get_extraction_settings`, `set_extraction_settings { ocrEnabled }`, `get_corpus_selection { homeworkId }`, `set_corpus_selection { homeworkId, materials }`, `preview_corpus { homeworkId }`. `material` — ровно `{ kind: "inbox" | "file", id }` (лишние поля не передаются). `TauriDesktopBridge` подключает к ним одноимённые методы; `getMaterialExtraction` переводит `not_found` в `null`; `analyzeMaterials` без `operationId` генерирует UUID v4; `force` по умолчанию `false`. Mock fallback нет.
 
 Пока unsupported:
 
@@ -224,6 +233,17 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - `InboxFile.provenance: InboxProvenance | null` — `source: manual | watcher | cu_export`, `via: picker | drop | watcher`, `archiveName`, `entryPath` (относительный путь в архиве), `courseUrl`, `assignmentUrl`. `InboxFile.origin` — `lms` для экспорта, `downloads` для обычной загрузки из watcher, `drop` для ручного импорта.
 - `Subject.courseUrl` — необязательная ссылка; `Homework.assignmentUrl` — как раньше. `openCourse({ subjectId } | { fileId })`, `openAssignment({ homeworkId } | { fileId })` открывают сохранённую ссылку во внешнем браузере после повторной проверки allowlist (`https://my.centraluniversity.ru`). Frontend не открывает URL сам; `lmsUrlProblem` в `src/lib/lmsLinks.ts` — только подсказка для формы.
 - UI: «Настройки» — переключатель watcher; «Автоматизация» — статус и кандидаты; «Входящие» — «Импортировать экспорт ЦУ», «Новые загрузки», окно предпросмотра (`CuExportDialog`), итог в `ImportPanel`, происхождение и кнопки ссылок в панели файла.
+
+## 8b. Извлечение текста и подборка материалов (этап 7)
+
+- Всё локально: Codex/Claude и сеть не вызываются. Оригинал только читается; результат привязан к SHA-256 содержимого и версии правил (`extractorVersion`).
+- `MaterialRef { kind: "inbox" | "file", id }` — файл «Входящих» или файл недели/ДЗ. `MaterialExtractionItem` — материал + `extraction: ExtractionSummary | null` (статус, формат, `textChars`, `warningCount`, `stale` — файл изменился после анализа).
+- `ExtractionStatus`: `complete`, `partial` (часть пропущена — см. `warnings`), `needs_ocr` (скан/изображение без текста, metadata сохранены), `unsupported`, `encrypted`, `corrupt`, `rejected` (безопасность: DTD, zip-бомба, обход пути), `too_large`, `timeout`, `failed` (последние два не кэшируются). Неподдерживаемый или повреждённый файл — это результат со статусом, а не ошибка Promise.
+- `MaterialExtraction`: `blocks: ExtractedBlock[]` (`heading`, `paragraph`, `list_item`, `table`, `page`, `slide`, `sheet` с ячейками и текстами формул, `code`), нормализованный `text`, `metadata`, `warnings[] { code, message, location }`, `cached`, `ocrUsed`, `durationMs`.
+- `analyzeMaterial(material, { force })` — тот же SHA-256 берётся из cache (`cached: true`), `force` перестраивает. `analyzeMaterials(materials, { force, operationId })` → `OperationResult<ExtractionBatchReport>`; прогресс — `extraction:progress` и `operation:progress` (kind `extract`), отмена — `cancelExtraction(operationId)`: уже обработанные файлы сохраняются, `stoppedByUser: true`, операция `failed` с кодом `cancelled`. Повтор с тем же `operationId` — `replayed: true` без событий.
+- `ExtractionSettings`: `ocrEnabled` (по умолчанию `false`), `ocr: { available, engine, languages, message }`, `limits`. OCR — только локальный Tesseract, если установлен; без него изображения получают `needs_ocr`.
+- `CorpusSelection` — явный выбор пользователя (общий или для ДЗ): элементы с `ready`/`problem`. `setCorpusSelection` принимает только материалы с извлечённым текстом (`complete`/`partial`) и неизменённым содержимым, иначе `blocked`; подборку отправленной работы — `immutable`. `previewCorpus` — ровно тот текст, который получит будущий анализ (лимит `limitChars`, список `excluded`). Построение `SourceBundle` и запуск анализа — будущий этап.
+- UI: «Материалы» (`MaterialsPage`, `ExtractionViewer`, `CorpusPanel`), кнопка «Текст и структура» в панели файла «Входящих», «Настройки → Извлечение текста» (`ExtractionSettingsPanel`).
 
 ## 9. Инварианты workflow и сдачи
 
@@ -271,4 +291,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие». Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

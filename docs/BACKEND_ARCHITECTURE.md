@@ -1,20 +1,22 @@
 # Архитектура Rust backend
 
-Статус документа: этап 6. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок и импорт экспорта CU LMS Enhancer подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 7. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
 
-- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants`, mutex последовательных импортов, in-memory `CandidateRegistry` и `WatcherService` (этап 6).
+- `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants`, mutex последовательных импортов, in-memory `CandidateRegistry` и `WatcherService` (этап 6), флаги отмены `ExtractionJobs`, лимиты извлечения и лениво найденный OCR-движок (этап 7).
 - `commands` — тонкие Tauri-команды; они получают managed `AppState`, делегируют чтение query-слою и DB-only записи mutation-слою, а после commit доставляют события.
 - `db` — соединение SQLite, параметры соединения и транзакционная граница.
 - `db/migrations` — встроенные, версионированные SQL-миграции.
 - `domain` — доменные enum и входные структуры persistence.
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
-- `events` — константы 12 bridge-событий, camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
+- `events` — константы 17 bridge-событий (12 исходных, 3 этапов 5–6, 2 этапа 7), camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
 - `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy (в том числе компенсируемый `atomic_copy_committed`), read-only `inspect_stored_file`, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI.
 - `intake` — этап 5 без зависимости от GUI: управляемые каталоги (`RootsService`), безопасные имена и MIME, `IntakeGrants`, `InboxImporter` с дедупликацией, компенсацией и идемпотентностью, абстракция `FilePicker`, SQL-граница `store`.
 - `lms` — этап 6 без зависимости от GUI: `zip_safe` (строгий парсер ZIP и ограниченная распаковка), `classify` (классификация по путям), `export` (предпросмотр и импорт экспорта через `InboxImporter`), `watcher` (чистый `DownloadScanner`, `WatcherCore`, фоновый `WatcherService`), `candidates`, `links` (allowlist LMS), `store` (SQL этапа 6).
+- `extraction` — этап 7 без зависимости от GUI: `model` (формат, статус, предупреждения, блоки, лимиты, бюджет времени, `Collector`), `engine` (определение формата по содержимому, изолированный поток с `catch_unwind` и сторожевым таймером), `pdf`, `ooxml` (XML без DTD, пакет OOXML поверх `zip_safe` в памяти, relationships только внутрь пакета), `docx`, `xlsx`, `pptx`, `text` (TXT/MD/CSV/TSV/IPYNB), `image`, `ocr` (необязательный локальный Tesseract), `store` (SQL v5), `service` (cache по SHA-256, пакет, подборка, корпус), `jobs` (отмена).
+- `extraction_commands` — тонкие Tauri-команды этапа 7 и доставка событий `extraction:progress`/`extraction:updated`.
 - `lms_commands` — тонкие Tauri-команды этапа 6, диалог выбора экспорта, хост watcher-потока (`AppWatcherHost`), открытие ссылок во внешнем браузере через `tauri-plugin-opener`.
 - `intake_commands` — тонкие Tauri-команды этапа 5, `DialogPicker` поверх официального `tauri-plugin-dialog`, действия Finder через `tauri-plugin-opener`, обработчик native drag-and-drop окна.
 - `ipc_commands` — единый список IPC-команд, который `build.rs` передаёт в `AppManifest`; тест сверяет его с capability.
@@ -28,7 +30,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `4`. Неизменяемые v1, v2, v3 и добавочная v4 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `5`. Неизменяемые v1–v4 и добавочная v5 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
 
 Схема содержит таблицы:
 
@@ -40,7 +42,8 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `teacher_comments`, `teacher_requirements`;
 - `submission_packages`, `submission_receipts`;
 - `operations`, `operation_results` (v3);
-- `download_seen` (v4).
+- `download_seen` (v4);
+- `extractions`, `material_extractions`, `extraction_batches`, `corpus_selections`, `corpus_selection_items` (v5).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 
@@ -112,7 +115,7 @@ Foreign keys задают владение и политику удаления,
 
 Native drag-and-drop: `Builder::on_window_event` → `WindowEvent::DragDrop` → `register_native_paths` (только абсолютные regular files) → `intake:native-drop { items }`; Enter/Leave → `intake:drag-state`.
 
-Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` генерирует `allow-<command>` (каталог `permissions/autogenerated/` создаётся при сборке и не хранится в Git). `capabilities/default.json` содержит только `core:event:default`, `core:window:allow-start-dragging` и `allow-*` для 30 команд (20 этапов 4–5 и 10 этапа 6).
+Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` генерирует `allow-<command>` (каталог `permissions/autogenerated/` создаётся при сборке и не хранится в Git). `capabilities/default.json` содержит только `core:event:default`, `core:window:allow-start-dragging` и `allow-*` для 41 команды (20 этапов 4–5, 10 этапа 6 и 11 этапа 7).
 
 ## Экспорт ЦУ и watcher загрузок — этап 6
 
@@ -131,6 +134,31 @@ Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` ге
 - Импорт экспорта: сериализуется тем же mutex, что и импорт этапа 5; повтор с тем же `operationId` возвращает сохранённый итог без событий. Ошибки запроса и отпечатка возвращаются до создания операции. Порядок событий: `cu-import:progress` + `operation:progress` → `inbox:file-added` → `inbox:updated` → `operation:completed`/`operation:failed` → `downloads:watcher-updated`.
 - Подробная модель угроз ZIP и watcher — `FILE_SERVICE_SECURITY.md`.
 
+## Извлечение текста — этап 7
+
+| Команда | Назначение |
+|---|---|
+| `list_material_extractions` | Материалы «Входящих» и недель с кратким итогом извлечения |
+| `get_material_extraction { material }` | Сохранённый результат (`not_found`, если анализа не было) |
+| `analyze_material { material, force }` | Анализ одного материала; cache по SHA-256, `force` — перестроение |
+| `analyze_materials { operationId, materials, force }` | Пакет с прогрессом и отменой; `OperationResult<ExtractionBatchReport>` |
+| `cancel_extraction { operationId }` | Остановить пакет (`false` — уже завершён) |
+| `clear_extraction_cache` | Удалить результаты и связи (оригиналы и подборки не трогаются) |
+| `get_extraction_settings`, `set_extraction_settings { ocrEnabled }` | OCR (по умолчанию выключен), состояние движка, лимиты |
+| `get_corpus_selection`, `set_corpus_selection`, `preview_corpus` | Подборка материалов (`homeworkId` или общая) и корпус для будущего анализа |
+
+`ExtractionService::analyze`:
+
+1. Материал по ссылке `{ kind, id }` → имя, относительный путь, SHA-256 импорта (для «Входящих»).
+2. Ключ cache: (SHA-256, `EXTRACTOR_VERSION`, `options_key`). Если SHA-256 известен и результат переиспользуемый (не `timeout`/`failed`) — связь с материалом и ответ без чтения файла.
+3. Иначе `RootsService::open_vault` → `file_service::read_vault_file` (fd-relative, только чтение, один inode, ≤ 200 МБ в память; больше — потоковый SHA-256 и статус `too_large`). Несовпадение с SHA-256 импорта → `conflict`.
+4. `engine::run_isolated`: поток `kontur-extract` (стек 32 МБ), `catch_unwind`, кооперативный бюджет и сторожевой таймер (срок + 2 с), опрос отмены каждые 50 мс.
+5. `store::save_extraction` одной транзакцией: upsert результата + связь материала.
+
+Пакет: UUID `operationId` (повтор — сохранённый итог из `extraction_batches` без событий; незавершённый — `conflict`), дедупликация, ≤ 500 материалов, операция kind `extract`, ошибка одного материала попадает в отчёт, отмена помечает оставшиеся `cancelled`. Порядок событий: `extraction:progress` + `operation:progress` → `extraction:updated` → `operation:completed`/`operation:failed`. Ошибка доставки события не откатывает сохранённое и возвращает `unknown` с просьбой обновить список.
+
+Подборка: только материалы с текстом (`complete`/`partial`), неизменённым содержимым и закреплённым SHA-256; до 200 материалов; подборка отправленной работы неизменяема; корпус — до 600 000 символов в порядке выбора.
+
 ## Health check
 
 Tauri-команда `backend_health` проверяет доступность соединения и возвращает только:
@@ -145,4 +173,4 @@ Tauri-команда `backend_health` проверяет доступность 
 
 React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` по умолчанию создаёт `MockDesktopBridge`; `TauriDesktopBridge` целиком включается только флагом разработчика `VITE_KONTUR_BRIDGE=tauri`. Hybrid bridge запрещён.
 
-Следующий этап — классификация обычных файлов и раскладка по предметам поверх того же импорта; затем применение backup/undo, provider adapters, AI-интеграции и immutable submission snapshot. Отправка работ в LMS остаётся ручной.
+Дальше — классификация обычных файлов и раскладка по предметам, применение backup/undo, provider adapters и построение `SourceBundle` из подборки этапа 7, AI-интеграции и immutable submission snapshot. Отправка работ в LMS остаётся ручной.

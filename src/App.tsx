@@ -10,6 +10,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { HomeworkDetailPage } from "./pages/HomeworkDetailPage";
 import { HomeworkListPage } from "./pages/HomeworkListPage";
 import { InboxPage } from "./pages/InboxPage";
+import { MaterialsPage } from "./pages/MaterialsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WeekIndexRedirect, WeekPage } from "./pages/WeekPage";
@@ -21,6 +22,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "inbox", element: <InboxPage /> },
+      { path: "materials", element: <MaterialsPage /> },
       { path: "week", element: <WeekIndexRedirect /> },
       { path: "subjects/:subjectId/week/:n", element: <WeekPage /> },
       { path: "homework", element: <HomeworkListPage /> },

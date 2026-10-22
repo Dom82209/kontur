@@ -1,6 +1,6 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 4. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие» и импорт экспорта ЦУ доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 5. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
@@ -23,6 +23,10 @@
 | `SubmissionPackage` | `SubmissionPackage` | `submission_packages` | нет для новых записей | `items_json`, `links_json`, `warnings_json`, `checklist_json`, `upload_list_json` | — | `submission_packages` |
 | `SubmissionReceipt` | `SubmissionReceipt` | `submission_receipts` | `proof_json` | `proof_json`, `files_json` | — | immutable row `submission_receipts` |
 | `Operation` | `OperationDto` | `operations` | `detail`, `finished_at`, `backup_path`, `homework_id`, `error_json`, `undo_payload_json` | typed `paths_json`; internal error/undo payload не выдаётся | status normalization | `operations` |
+| `MaterialExtraction`, `ExtractionSummary` | `MaterialExtractionDto`, `ExtractionSummaryDto` | v5 `extractions` + `material_extractions` | `statusMessage`, все поля `metadata` | `metadata_json`, `structure_json` (блоки), `warnings_json` | `stale`, `cached`, `context` | `extractions` (cache по SHA-256) |
+| `ExtractionBatchReport` | `ExtractionBatchReport` | v5 `extraction_batches.report_json` | — | весь отчёт | `replayed` при повторе | immutable row `extraction_batches` |
+| `CorpusSelection`, `CorpusPreview` | `CorpusSelectionDto`, `CorpusPreviewDto` | v5 `corpus_selections`, `corpus_selection_items` | `homeworkId` (общая подборка), `updatedAt` | — | `ready`, `problem`, корпус | обе таблицы + `extractions` |
+| `ExtractionSettings` | `ExtractionSettingsDto` | `app_settings.extraction = { ocrEnabled }` | — | весь тип | `ocr` и `limits` вычисляются | `app_settings` |
 | `StyleProfile`, `ProviderStatus` | пока JSON-настройки/будущий service DTO | `app_settings` хранит только безопасные preference/metadata | контрактные nullable-поля | профиль и безопасная metadata | runtime connection state не восстанавливается как подключённый | settings + будущий provider service |
 
 ## Enum-преобразования
@@ -87,9 +91,19 @@ File service 4D.1 уточняет будущий typed undo payload: `UndoManif
 - `app_settings.downloads_watcher = { enabled }` (`deny_unknown_fields`), отсутствие ключа = выключено. Абсолютный путь папки загрузок по-прежнему хранится только в `managed_roots.downloadsPath`.
 - `InboxImportReport` получил поле `skipped` (`#[serde(default)]` — старые сохранённые отчёты читаются как 0). Кандидаты watcher и разрешения выбора экспорта живут только в памяти процесса.
 
+## Извлечение текста (schema v5)
+
+- v5 добавлена отдельной транзакционной миграцией; v1–v4 не изменялись.
+- `extractions`: `id`, `sha256` (64 hex), `extractor_version` (> 0), `options_key` (1–32 символа), `format` и `status` (CHECK по спискам), `status_message` (≤ 2000), `metadata_json`, `structure_json`, `warnings_json` (`json_valid`), `text`, `text_chars`, `truncated`, `blocks_truncated`, `ocr_used`, `source_size_bytes`, `duration_ms`, `created_at`; `UNIQUE(sha256, extractor_version, options_key)`. Перестроение (`force`) обновляет строку под тем же ключом. Результаты привязаны к содержимому, а не к пути: путей файловой системы в таблице нет; `text` — извлечённое содержимое учебного материала, хранится только в локальной SQLite.
+- `material_extractions`: PK (`material_kind` ∈ `inbox`/`file`, `material_id`), `sha256` содержимого на момент анализа, `extraction_id` (FK, `ON DELETE SET NULL`), `analyzed_at`. Внешнего ключа на материал нет (два вида материалов) — триггеры `AFTER DELETE` на `inbox_files` и `files` снимают связи и выбор в подборках.
+- `extraction_batches`: `operation_id` (PK, FK на `operations`), `report_json`; триггеры запрещают абсолютные/home/`file:`/`..`-пути в тексте отчёта и любые UPDATE.
+- `corpus_selections`: `homework_id` (nullable, FK `ON DELETE CASCADE`); частичные уникальные индексы — одна подборка на ДЗ и одна общая. `corpus_selection_items`: PK (`selection_id`, `material_kind`, `material_id`), закреплённый `sha256`, `position`, `added_at`. Триггеры запрещают создавать подборку для отправленной работы и добавлять/удалять её элементы.
+- `operations.kind = 'extract'` (колонка без CHECK, `OperationKind::Extract`), `undoable = 0`.
+- `app_settings.extraction = { ocrEnabled }` (`deny_unknown_fields`); отсутствие ключа — OCR выключен. Путь к Tesseract не сохраняется.
+
 ## Не сохраняемые представления
 
-`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation`, `ExportPreview`, `DownloadCandidate`, `DownloadsWatcher` — входные/предварительные/вычисляемые DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
+`Dashboard`, `Deadline`, `Readiness`, `HomeworkIteration` и `VersionComparison` являются проекциями. Они детерминированно строятся из таблиц, а не имеют собственных строк. `RoutePreview`, `DroppedItem`, `SubmissionConfirmation`, `ExportPreview`, `DownloadCandidate`, `DownloadsWatcher`, `MaterialExtractionItem`, `CorpusPreview` — входные/предварительные/вычисляемые DTO; подтверждение материализуется в immutable `submission_receipts`. Визуальные состояния вкладок, раскрытий, загрузки и анимаций не сохраняются.
 
 ## AutomationRules defaults
 

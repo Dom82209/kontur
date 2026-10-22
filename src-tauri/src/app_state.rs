@@ -1,12 +1,13 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use crate::{
     db::Database,
     error::{AppError, BackendError},
     events::EventRegistry,
+    extraction::{ExtractionJobs, ExtractionLimits, OcrEngine, TesseractOcr},
     intake::IntakeGrants,
     lms::{CandidateRegistry, WatcherService},
 };
@@ -20,6 +21,9 @@ pub struct AppState {
     import_lock: Mutex<()>,
     candidates: CandidateRegistry,
     watcher: WatcherService,
+    extraction_jobs: ExtractionJobs,
+    extraction_limits: ExtractionLimits,
+    ocr: OnceLock<Option<Arc<dyn OcrEngine>>>,
 }
 
 impl AppState {
@@ -33,7 +37,41 @@ impl AppState {
             import_lock: Mutex::new(()),
             candidates: CandidateRegistry::new(),
             watcher: WatcherService::new(),
+            extraction_jobs: ExtractionJobs::new(),
+            extraction_limits: ExtractionLimits::default(),
+            ocr: OnceLock::new(),
         }
+    }
+
+    /// Лимиты извлечения (тесты задают меньшие значения до регистрации состояния).
+    #[cfg(test)]
+    pub fn with_extraction_limits(mut self, limits: ExtractionLimits) -> Self {
+        self.extraction_limits = limits;
+        self
+    }
+
+    /// Задаёт OCR-движок вместо поиска локального Tesseract (тесты).
+    #[cfg(test)]
+    pub fn with_ocr_engine(self, engine: Option<Arc<dyn OcrEngine>>) -> Self {
+        let _ = self.ocr.set(engine);
+        self
+    }
+
+    pub fn extraction_jobs(&self) -> &ExtractionJobs {
+        &self.extraction_jobs
+    }
+
+    pub fn extraction_limits(&self) -> ExtractionLimits {
+        self.extraction_limits
+    }
+
+    /// Локальный OCR ищется один раз и лениво (не замедляет запуск приложения).
+    pub fn ocr_engine(&self) -> Option<Arc<dyn OcrEngine>> {
+        self.ocr
+            .get_or_init(|| {
+                TesseractOcr::discover().map(|engine| Arc::new(engine) as Arc<dyn OcrEngine>)
+            })
+            .clone()
     }
 
     pub fn app_data_dir(&self) -> &Path {

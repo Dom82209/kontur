@@ -1,4 +1,4 @@
-import { BrainCircuit, CalendarRange, FileCheck2, Inbox, LayoutDashboard, Settings2, Workflow, type LucideIcon } from "lucide-react";
+import { BrainCircuit, CalendarRange, FileCheck2, Inbox, LayoutDashboard, ScanText, Settings2, Workflow, type LucideIcon } from "lucide-react";
 
 export interface NavItem {
   to: string;
@@ -13,6 +13,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { to: "/", label: "Главная", icon: LayoutDashboard, keywords: "главная дашборд обзор неделя", shortcut: "1" },
   { to: "/inbox", label: "Входящие", icon: Inbox, keywords: "входящие файлы разобрать скачанные", shortcut: "2" },
+  { to: "/materials", label: "Материалы", icon: ScanText, keywords: "материалы текст извлечение pdf docx xlsx pptx ocr подборка корпус", shortcut: "7" },
   { to: "/week", label: "Неделя", icon: CalendarRange, keywords: "неделя предмет лекции семинары", shortcut: "3" },
   { to: "/homework", label: "Домашние задания", icon: FileCheck2, keywords: "дз домашние задания версии сдача", shortcut: "4" },
   { to: "/ai", label: "AI Workspace", icon: BrainCircuit, keywords: "ai нейросеть codex claude промпт пакет", shortcut: "5" },

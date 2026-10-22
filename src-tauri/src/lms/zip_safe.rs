@@ -236,10 +236,57 @@ struct RawCentral {
     local_offset: u64,
 }
 
-fn read_exact_at(file: &File, offset: u64, length: usize) -> Result<Vec<u8>, ZipRejection> {
+/// Источник байтов архива с позиционным чтением: открытый файл (`pread`) или
+/// буфер в памяти (Office-документ, уже прочитанный из одного inode).
+pub trait ArchiveSource {
+    fn source_len(&self) -> Result<u64, ZipRejection>;
+    fn read_at_offset(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize>;
+}
+
+impl ArchiveSource for File {
+    fn source_len(&self) -> Result<u64, ZipRejection> {
+        Ok(self.metadata().map_err(|_| ZipRejection::Io)?.len())
+    }
+
+    fn read_at_offset(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.read_at(buffer, offset)
+    }
+}
+
+impl ArchiveSource for [u8] {
+    fn source_len(&self) -> Result<u64, ZipRejection> {
+        Ok(self.len() as u64)
+    }
+
+    fn read_at_offset(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        let Ok(start) = usize::try_from(offset) else {
+            return Ok(0);
+        };
+        if start >= self.len() {
+            return Ok(0);
+        }
+        let length = buffer.len().min(self.len() - start);
+        buffer[..length].copy_from_slice(&self[start..start + length]);
+        Ok(length)
+    }
+}
+
+fn read_exact_at<S: ArchiveSource + ?Sized>(
+    file: &S,
+    offset: u64,
+    length: usize,
+) -> Result<Vec<u8>, ZipRejection> {
     let mut buffer = vec![0_u8; length];
-    file.read_exact_at(&mut buffer, offset)
-        .map_err(|_| ZipRejection::Corrupt("неожиданный конец файла"))?;
+    let mut filled = 0_usize;
+    while filled < length {
+        let read = file
+            .read_at_offset(&mut buffer[filled..], offset + filled as u64)
+            .map_err(|_| ZipRejection::Io)?;
+        if read == 0 {
+            return Err(ZipRejection::Corrupt("неожиданный конец файла"));
+        }
+        filled += read;
+    }
     Ok(buffer)
 }
 
@@ -257,8 +304,11 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
 }
 
 /// Читает и проверяет индекс архива. Содержимое записей не распаковывается.
-pub fn read_index(file: &File, limits: &ZipLimits) -> Result<ZipIndex, ZipRejection> {
-    let length = file.metadata().map_err(|_| ZipRejection::Io)?.len();
+pub fn read_index<S: ArchiveSource + ?Sized>(
+    file: &S,
+    limits: &ZipLimits,
+) -> Result<ZipIndex, ZipRejection> {
+    let length = file.source_len()?;
     if length > limits.max_archive_bytes {
         return Err(ZipRejection::ArchiveTooLarge);
     }
@@ -536,8 +586,8 @@ pub fn read_index(file: &File, limits: &ZipLimits) -> Result<ZipIndex, ZipReject
 /// Поток ограничен заявленным размером и лимитом записи: архив, который при
 /// распаковке даёт больше байт, чем указано в заголовке, отклоняется.
 /// `budget` — оставшийся суммарный лимит распакованных байт для всей операции.
-pub fn extract_entry(
-    archive: &File,
+pub fn extract_entry<S: ArchiveSource + ?Sized>(
+    archive: &S,
     entry: &ZipEntry,
     output: &mut File,
     limits: &ZipLimits,
@@ -545,6 +595,43 @@ pub fn extract_entry(
 ) -> Result<(u64, Sha256Digest), ZipRejection> {
     use std::io::Write;
 
+    let check_magic = !is_document_container(&entry.path);
+    let result = stream_entry(archive, entry, limits, budget, check_magic, &mut |chunk| {
+        output.write_all(chunk).map_err(|_| ZipRejection::Io)
+    })?;
+    output.sync_all().map_err(|_| ZipRejection::Io)?;
+    Ok(result)
+}
+
+/// Распаковывает одну запись в память (часть Office-документа). Те же гарантии,
+/// что у [`extract_entry`]: размер ограничен заголовком, лимитами и `budget`,
+/// CRC-32 сверяется. Проверка сигнатуры вложенного архива не выполняется:
+/// вызывающий код читает только XML-части и никогда не распаковывает вложения.
+pub fn read_entry_to_vec<S: ArchiveSource + ?Sized>(
+    archive: &S,
+    entry: &ZipEntry,
+    limits: &ZipLimits,
+    budget: &mut u64,
+) -> Result<Vec<u8>, ZipRejection> {
+    let capacity = usize::try_from(entry.uncompressed_size.min(limits.max_entry_bytes))
+        .unwrap_or(0)
+        .min(16 * 1024 * 1024);
+    let mut data = Vec::with_capacity(capacity);
+    stream_entry(archive, entry, limits, budget, false, &mut |chunk| {
+        data.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    Ok(data)
+}
+
+fn stream_entry<S: ArchiveSource + ?Sized>(
+    archive: &S,
+    entry: &ZipEntry,
+    limits: &ZipLimits,
+    budget: &mut u64,
+    check_magic: bool,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), ZipRejection>,
+) -> Result<(u64, Sha256Digest), ZipRejection> {
     if entry.is_dir {
         return Err(ZipRejection::Corrupt("каталог нельзя распаковать как файл"));
     }
@@ -565,7 +652,6 @@ pub fn extract_entry(
     let mut sha = Sha256::new();
     let mut written = 0_u64;
     let mut buffer = vec![0_u8; 64 * 1024];
-    let check_magic = !is_document_container(&entry.path);
     loop {
         let read = reader
             .read(&mut buffer)
@@ -588,9 +674,7 @@ pub fn extract_entry(
         }
         crc.update(&buffer[..read]);
         sha.update(&buffer[..read]);
-        output
-            .write_all(&buffer[..read])
-            .map_err(|_| ZipRejection::Io)?;
+        sink(&buffer[..read])?;
     }
     if written != entry.uncompressed_size {
         return Err(ZipRejection::SizeMismatch(entry.path.clone()));
@@ -598,26 +682,27 @@ pub fn extract_entry(
     if crc.finalize() != entry.crc32 {
         return Err(ZipRejection::CrcMismatch(entry.path.clone()));
     }
-    output.sync_all().map_err(|_| ZipRejection::Io)?;
     *budget -= written;
     Ok((written, Sha256Digest::from_hasher(sha)))
 }
 
 /// Читает заданный диапазон файла позиционными чтениями (`pread`).
-struct PreadSlice<'a> {
-    file: &'a File,
+struct PreadSlice<'a, S: ArchiveSource + ?Sized> {
+    file: &'a S,
     position: u64,
     end: u64,
 }
 
-impl Read for PreadSlice<'_> {
+impl<S: ArchiveSource + ?Sized> Read for PreadSlice<'_, S> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let remaining = self.end.saturating_sub(self.position);
         if remaining == 0 {
             return Ok(0);
         }
         let length = buffer.len().min(remaining as usize);
-        let read = self.file.read_at(&mut buffer[..length], self.position)?;
+        let read = self
+            .file
+            .read_at_offset(&mut buffer[..length], self.position)?;
         if read == 0 {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
         }

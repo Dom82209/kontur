@@ -5,6 +5,7 @@ mod hashing;
 mod hooks;
 mod paths;
 mod planning;
+mod read;
 mod undo;
 
 pub use atomic_copy::{
@@ -22,6 +23,7 @@ pub use paths::{
     SourceFile, VaultRoot, VerifiedDestination,
 };
 pub use planning::{plan_copy, CopyDecision};
+pub use read::{read_vault_file, ReadSnapshot};
 pub use undo::{
     validate_undo, BackupUndoEntry, CreatedFileUndoEntry, UndoContext, UndoManifest, ValidatedUndo,
 };

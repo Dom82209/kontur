@@ -5,6 +5,8 @@ pub mod domain;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod extraction;
+mod extraction_commands;
 pub mod file_service;
 pub mod intake;
 mod intake_commands;
@@ -73,7 +75,18 @@ pub fn run() {
             lms_commands::set_subject_course_url,
             lms_commands::set_homework_assignment_url,
             lms_commands::open_course,
-            lms_commands::open_assignment
+            lms_commands::open_assignment,
+            extraction_commands::list_material_extractions,
+            extraction_commands::get_material_extraction,
+            extraction_commands::analyze_material,
+            extraction_commands::analyze_materials,
+            extraction_commands::cancel_extraction,
+            extraction_commands::clear_extraction_cache,
+            extraction_commands::get_extraction_settings,
+            extraction_commands::set_extraction_settings,
+            extraction_commands::get_corpus_selection,
+            extraction_commands::set_corpus_selection,
+            extraction_commands::preview_corpus
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");

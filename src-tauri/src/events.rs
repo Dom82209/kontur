@@ -28,12 +28,16 @@ pub mod names {
     pub const DOWNLOADS_WATCHER_UPDATED: &str = "downloads:watcher-updated";
     /// Этап 6: фаза и прогресс импорта экспорта ЦУ.
     pub const CU_IMPORT_PROGRESS: &str = "cu-import:progress";
+    /// Этап 7: прогресс пакетного извлечения текста.
+    pub const EXTRACTION_PROGRESS: &str = "extraction:progress";
+    /// Этап 7: результаты извлечения изменились (анализ, перестроение, очистка cache).
+    pub const EXTRACTION_UPDATED: &str = "extraction:updated";
 
     /// Служебные события native intake (не входят в `BridgeEvents`, слушает только Tauri adapter).
     pub const INTAKE_NATIVE_DROP: &str = "intake:native-drop";
     pub const INTAKE_DRAG_STATE: &str = "intake:drag-state";
 
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 17] = [
         INBOX_FILE_ADDED,
         INBOX_CLASSIFICATION_UPDATED,
         OPERATION_PROGRESS,
@@ -49,6 +53,8 @@ pub mod names {
         INBOX_UPDATED,
         DOWNLOADS_WATCHER_UPDATED,
         CU_IMPORT_PROGRESS,
+        EXTRACTION_PROGRESS,
+        EXTRACTION_UPDATED,
     ];
 }
 
@@ -66,6 +72,31 @@ pub struct CuImportProgressPayload {
     pub completed: usize,
     pub total: usize,
     pub entry_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractionProgressPayload {
+    pub operation_id: String,
+    pub completed: usize,
+    pub total: usize,
+    pub material: Option<crate::extraction::MaterialRef>,
+    pub name: Option<String>,
+    pub outcome: Option<crate::extraction::BatchItemOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionUpdateReason {
+    Analyzed,
+    Cleared,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractionUpdatedPayload {
+    pub reason: ExtractionUpdateReason,
+    pub materials: Vec<crate::extraction::MaterialRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -301,6 +332,8 @@ mod tests {
                 "inbox:updated",
                 "downloads:watcher-updated",
                 "cu-import:progress",
+                "extraction:progress",
+                "extraction:updated",
             ]
         );
         assert_eq!(names::INTAKE_NATIVE_DROP, "intake:native-drop");

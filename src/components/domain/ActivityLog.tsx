@@ -23,6 +23,7 @@ const KIND: Record<OperationKind, string> = {
   confirm_submission: "Отправка",
   update_rules: "Правила",
   import: "Импорт",
+  extract: "Извлечение",
   undo: "Отмена",
 };
 

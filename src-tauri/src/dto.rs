@@ -267,6 +267,8 @@ pub enum OperationKind {
     ConfirmSubmission,
     UpdateRules,
     Import,
+    /// Этап 7: пакетное извлечение текста из материалов.
+    Extract,
     Undo,
 }
 
@@ -289,6 +291,7 @@ impl OperationKind {
             Self::ConfirmSubmission => "confirm_submission",
             Self::UpdateRules => "update_rules",
             Self::Import => "import",
+            Self::Extract => "extract",
             Self::Undo => "undo",
         }
     }
@@ -311,6 +314,7 @@ impl OperationKind {
             "confirm_submission" => Ok(Self::ConfirmSubmission),
             "update_rules" => Ok(Self::UpdateRules),
             "import" => Ok(Self::Import),
+            "extract" => Ok(Self::Extract),
             "undo" => Ok(Self::Undo),
             _ => Err(format!("unknown operation kind: {value}")),
         }

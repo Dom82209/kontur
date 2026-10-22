@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 struct Migration {
     version: u32,
@@ -25,6 +25,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 4,
         sql: include_str!("v4.sql"),
+    },
+    Migration {
+        version: 5,
+        sql: include_str!("v5.sql"),
     },
 ];
 
@@ -64,11 +68,16 @@ mod tests {
         assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
         let expected = [
             "app_settings",
+            "corpus_selection_items",
+            "corpus_selections",
             "download_seen",
+            "extraction_batches",
+            "extractions",
             "files",
             "homework_versions",
             "homeworks",
             "inbox_files",
+            "material_extractions",
             "operation_results",
             "operations",
             "review_runs",
@@ -287,7 +296,7 @@ mod tests {
             .unwrap();
         assert!(provenance.is_none());
         assert_eq!(course, 0);
-        assert_eq!(schema_version(&connection).unwrap(), 4);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
@@ -356,5 +365,105 @@ mod tests {
         assert!(seen("Downloads/x.zip").is_err());
         assert!(seen("a\\b.zip").is_err());
         seen("Курс.zip").unwrap();
+    }
+
+    #[test]
+    fn v5_keeps_earlier_rows_and_starts_with_empty_extraction_tables() {
+        let mut connection = v2_database_with_inbox_row();
+        assert_eq!(migrate(&mut connection).unwrap(), 5);
+        let (inbox, extractions, links, selections): (i64, i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM inbox_files), (SELECT count(*) FROM extractions),
+                        (SELECT count(*) FROM material_extractions), (SELECT count(*) FROM corpus_selections)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((inbox, extractions, links, selections), (1, 0, 0, 0));
+        let applied: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM schema_migrations WHERE version = 5",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn v5_constraints_protect_cache_reports_and_selections() {
+        let mut connection = v2_database_with_inbox_row();
+        migrate(&mut connection).unwrap();
+        let insert = |id: &str, sha: &str, status: &str| {
+            connection.execute(
+                "INSERT INTO extractions(id, sha256, extractor_version, options_key, format, status,
+                    metadata_json, structure_json, blocks_truncated, text, text_chars, truncated,
+                    warnings_json, ocr_used, source_size_bytes, duration_ms, created_at)
+                 VALUES (?1, ?2, 1, 'pdf', 'pdf', ?3, '{}', '[]', 0, '', 0, 0, '[]', 0, 0, 0, 'now')",
+                rusqlite::params![id, sha, status],
+            )
+        };
+        assert!(insert("e0", "XYZ", "complete").is_err());
+        assert!(insert("e0", &"a".repeat(64), "magic").is_err());
+        insert("e1", &"a".repeat(64), "complete").unwrap();
+        assert!(
+            insert("e2", &"a".repeat(64), "partial").is_err(),
+            "one row per cache key"
+        );
+
+        connection
+            .execute(
+                "INSERT INTO operations(id, kind, status) VALUES ('op', 'extract', 'completed')",
+                [],
+            )
+            .unwrap();
+        let report = |json: &str| {
+            connection.execute(
+                "INSERT INTO extraction_batches(operation_id, report_json) VALUES ('op', ?1)",
+                [json],
+            )
+        };
+        assert!(report(r#"{"items":[{"name":"/Users/me/secret.pdf"}]}"#).is_err());
+        assert!(report(r#"{"items":[{"name":"~/x.pdf"}]}"#).is_err());
+        report(r#"{"items":[{"name":"Лекция.pdf"}]}"#).unwrap();
+        assert!(connection
+            .execute("UPDATE extraction_batches SET report_json = '{}'", [])
+            .is_err());
+
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO material_extractions(material_kind, material_id, sha256, extraction_id, analyzed_at)
+                     VALUES ('inbox', 'legacy', '{sha}', 'e1', 'now');
+                 INSERT INTO corpus_selections(id, homework_id, created_at, updated_at)
+                     VALUES ('sel', NULL, 'now', 'now');
+                 INSERT INTO corpus_selection_items(selection_id, material_kind, material_id, sha256, position, added_at)
+                     VALUES ('sel', 'inbox', 'legacy', '{sha}', 0, 'now');",
+                sha = "a".repeat(64)
+            ))
+            .unwrap();
+        assert!(connection
+            .execute(
+                "INSERT INTO corpus_selections(id, homework_id, created_at, updated_at) VALUES ('sel2', NULL, 'now', 'now')",
+                [],
+            )
+            .is_err(), "only one general selection");
+        connection
+            .execute("DELETE FROM inbox_files WHERE id = 'legacy'", [])
+            .unwrap();
+        let (links, items, cached): (i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM material_extractions),
+                        (SELECT count(*) FROM corpus_selection_items),
+                        (SELECT count(*) FROM extractions)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (links, items),
+            (0, 0),
+            "deleted material drops links and selection items"
+        );
+        assert_eq!(cached, 1, "content cache survives material deletion");
     }
 }

@@ -100,6 +100,17 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     setHomeworkAssignmentUrl: fail("setHomeworkAssignmentUrl"),
     openCourse: fail("openCourse"),
     openAssignment: fail("openAssignment"),
+    listMaterialExtractions: fail("listMaterialExtractions"),
+    getMaterialExtraction: fail("getMaterialExtraction"),
+    analyzeMaterial: fail("analyzeMaterial"),
+    analyzeMaterials: fail("analyzeMaterials"),
+    cancelExtraction: fail("cancelExtraction"),
+    clearExtractionCache: fail("clearExtractionCache"),
+    getExtractionSettings: fail("getExtractionSettings"),
+    setExtractionSettings: fail("setExtractionSettings"),
+    getCorpusSelection: fail("getCorpusSelection"),
+    setCorpusSelection: fail("setCorpusSelection"),
+    previewCorpus: fail("previewCorpus"),
     ...overrides,
   };
 }

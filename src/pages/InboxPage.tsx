@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Archive, ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, GraduationCap, Inbox, ListChecks, NotebookPen, Pencil, TriangleAlert, WandSparkles } from "lucide-react";
+import { Archive, ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, GraduationCap, Inbox, ListChecks, NotebookPen, Pencil, ScanText, TriangleAlert, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
 import { useOps } from "../app/operations";
 import { useToast } from "../app/toasts";
 import { CuExportDialog } from "../components/domain/CuExportDialog";
+import { ExtractionViewer } from "../components/domain/ExtractionViewer";
 import { DownloadCandidates } from "../components/domain/DownloadsWatcher";
 import { DropZone } from "../components/domain/DropZone";
 import { ImportPanel, type ImportRun } from "../components/domain/ImportPanel";
@@ -14,7 +15,7 @@ import { ClassifyWizard } from "../components/domain/ClassifyWizard";
 import { ClassificationFields } from "../components/domain/ClassificationFields";
 import { Confidence } from "../components/ui/Confidence";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
-import { bridge, BridgeError, newOperationId, type DownloadCandidate, type DroppedItem, type InboxFile, type InboxImportReport, type InboxProvenance, type RoutePreview } from "../lib/bridge";
+import { bridge, BridgeError, newOperationId, type DownloadCandidate, type DroppedItem, type InboxFile, type InboxImportReport, type InboxProvenance, type MaterialRef, type RoutePreview } from "../lib/bridge";
 import { CATEGORY_LABEL, formatBytes, formatRelative, pad2, plural } from "../lib/format";
 import { useBridgeEvent } from "../lib/hooks/useBridgeEvent";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
@@ -44,6 +45,7 @@ export function InboxPage() {
   const [importRun, setImportRun] = useState<ImportRun | null>(null);
   const [exportCandidate, setExportCandidate] = useState<DownloadCandidate | null>(null);
   const [picking, setPicking] = useState(false);
+  const [textOf, setTextOf] = useState<{ material: MaterialRef; name: string } | null>(null);
   const [params, setParams] = useSearchParams();
   const watcher = useDownloadsWatcher();
 
@@ -347,6 +349,11 @@ export function InboxPage() {
               ) : (
                 <div className="preview">
                   <div className="preview__name">{focus.name}</div>
+                  <div className="preview__actions">
+                    <button className="btn btn--sm" onClick={() => setTextOf({ material: { kind: "inbox", id: focus.id }, name: focus.name })} title="Локальное извлечение текста и структуры; файл только читается">
+                      <ScanText /> Текст и структура
+                    </button>
+                  </div>
                   {bridge.kind === "tauri" && (
                     <div className="preview__actions">
                       <button className="btn btn--sm" onClick={() => void bridge.openInboxFile(focus.id).catch((e: unknown) => reportError(e, "Не удалось открыть файл"))}>
@@ -463,6 +470,7 @@ export function InboxPage() {
 
       <ClassifyWizard open={wizard} files={files} onClose={() => setWizard(false)} onRoute={(ids) => void route(ids)} />
       <CuExportDialog candidate={exportCandidate} onClose={() => setExportCandidate(null)} onImported={onExportImported} />
+      <ExtractionViewer material={textOf?.material ?? null} name={textOf?.name ?? ""} onClose={() => setTextOf(null)} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура».",
+  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура». Извлечение текста (этап 7) читает материалы только в Rust.",
   "windows": [
     "main"
   ],
@@ -37,6 +37,17 @@
     "allow-set-subject-course-url",
     "allow-set-homework-assignment-url",
     "allow-open-course",
-    "allow-open-assignment"
+    "allow-open-assignment",
+    "allow-list-material-extractions",
+    "allow-get-material-extraction",
+    "allow-analyze-material",
+    "allow-analyze-materials",
+    "allow-cancel-extraction",
+    "allow-clear-extraction-cache",
+    "allow-get-extraction-settings",
+    "allow-set-extraction-settings",
+    "allow-get-corpus-selection",
+    "allow-set-corpus-selection",
+    "allow-preview-corpus"
   ]
 }

@@ -128,6 +128,17 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     setHomeworkAssignmentUrl: unexpected("setHomeworkAssignmentUrl"),
     openCourse: unexpected("openCourse"),
     openAssignment: unexpected("openAssignment"),
+    listMaterialExtractions: unexpected("listMaterialExtractions"),
+    getMaterialExtraction: unexpected("getMaterialExtraction"),
+    analyzeMaterial: unexpected("analyzeMaterial"),
+    analyzeMaterials: unexpected("analyzeMaterials"),
+    cancelExtraction: unexpected("cancelExtraction"),
+    clearExtractionCache: unexpected("clearExtractionCache"),
+    getExtractionSettings: unexpected("getExtractionSettings"),
+    setExtractionSettings: unexpected("setExtractionSettings"),
+    getCorpusSelection: unexpected("getCorpusSelection"),
+    setCorpusSelection: unexpected("setCorpusSelection"),
+    previewCorpus: unexpected("previewCorpus"),
     ...overrides,
   };
 }

@@ -1,6 +1,7 @@
 import { BrainCircuit, Gauge, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun } from "lucide-react";
 import { usePrefs } from "../app/preferences";
 import { DownloadsWatcherToggle } from "../components/domain/DownloadsWatcher";
+import { ExtractionSettingsPanel } from "../components/domain/ExtractionSettingsPanel";
 import { ManagedRootsPanel } from "../components/domain/ManagedRootsPanel";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { SaveBar } from "../components/ui/SaveBar";
@@ -37,6 +38,13 @@ export function SettingsPage() {
           <h2 className="settings__h">Управляемые каталоги</h2>
           <ManagedRootsPanel />
           <DownloadsWatcherToggle />
+        </section>
+
+        <section className="settings__group">
+          <h2 className="settings__h">
+            <ScanSearch size={16} /> Извлечение текста
+          </h2>
+          <ExtractionSettingsPanel />
         </section>
 
         <section className="settings__group">

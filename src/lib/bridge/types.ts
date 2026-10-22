@@ -299,6 +299,261 @@ export interface OperationRecord {
   importReport: InboxImportReport | null;
 }
 
+// ───────────────────────── Извлечение текста (этап 7) ─────────────────────────
+
+/** Материал для извлечения: файл «Входящих» или файл недели/ДЗ. Идентификаторы непрозрачны. */
+export interface MaterialRef {
+  kind: "inbox" | "file";
+  id: string;
+}
+
+export type ExtractionFormat = "pdf" | "docx" | "xlsx" | "pptx" | "text" | "markdown" | "csv" | "tsv" | "notebook" | "image" | "unknown";
+
+/**
+ * Итог извлечения. complete — всё поддерживаемое извлечено; partial — часть пропущена
+ * (см. warnings); needs_ocr — текстового слоя нет (скан/изображение), метаданные сохранены;
+ * rejected — отклонён по соображениям безопасности. timeout/failed не кэшируются.
+ */
+export type ExtractionStatus =
+  | "complete"
+  | "partial"
+  | "needs_ocr"
+  | "unsupported"
+  | "encrypted"
+  | "corrupt"
+  | "rejected"
+  | "too_large"
+  | "timeout"
+  | "failed";
+
+export type ExtractionWarningCode =
+  | "text_truncated"
+  | "blocks_truncated"
+  | "pages_truncated"
+  | "page_without_text"
+  | "page_unreadable"
+  | "sheets_truncated"
+  | "cells_truncated"
+  | "rows_truncated"
+  | "slides_truncated"
+  | "macros_ignored"
+  | "embedded_objects_skipped"
+  | "images_skipped"
+  | "charts_skipped"
+  | "external_links_ignored"
+  | "formulas_not_evaluated"
+  | "parts_skipped"
+  | "part_unreadable"
+  | "encoding_fallback"
+  | "extension_mismatch"
+  | "hidden_content"
+  | "unknown_entity"
+  | "tracked_changes_skipped"
+  | "outputs_skipped"
+  | "ocr_disabled"
+  | "ocr_unavailable"
+  | "ocr_failed"
+  | "empty_document";
+
+export interface ExtractionWarning {
+  code: ExtractionWarningCode;
+  message: string;
+  /** «стр. 3», «лист «Данные»», «слайд 4» — без путей файловой системы. */
+  location: string | null;
+}
+
+export interface ExtractionMetadata {
+  title: string | null;
+  author: string | null;
+  subject: string | null;
+  application: string | null;
+  producer: string | null;
+  created: string | null;
+  modified: string | null;
+  pageCount: number | null;
+  sheetCount: number | null;
+  slideCount: number | null;
+  wordCount: number | null;
+  pdfVersion: string | null;
+  imageFormat: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  encoding: string | null;
+  delimiter: string | null;
+  rowCount: number | null;
+  columnCount: number | null;
+  language: string | null;
+}
+
+export interface SheetCell {
+  ref: string;
+  value: string;
+  /** Текст формулы; формулы не вычисляются. */
+  formula: string | null;
+}
+
+export type ExtractedBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "list_item"; level: number; ordered: boolean; text: string }
+  | { type: "table"; rows: string[][]; truncated: boolean }
+  | { type: "page"; number: number; text: string }
+  | { type: "slide"; number: number; title: string | null; body: string[]; notes: string | null; hidden: boolean }
+  | {
+      type: "sheet";
+      name: string;
+      hidden: boolean;
+      declaredRange: string | null;
+      usedRange: string | null;
+      rowCount: number;
+      columnCount: number;
+      cellCount: number;
+      formulaCount: number;
+      cells: SheetCell[];
+      truncated: boolean;
+    }
+  | { type: "code"; language: string | null; text: string };
+
+export interface ExtractionSummary {
+  sha256: string;
+  format: ExtractionFormat | null;
+  status: ExtractionStatus | null;
+  statusMessage: string | null;
+  textChars: number;
+  truncated: boolean;
+  warningCount: number;
+  analyzedAt: ISODate;
+  /** Файл изменился после анализа. */
+  stale: boolean;
+  ocrUsed: boolean;
+}
+
+export interface MaterialExtractionItem {
+  material: MaterialRef;
+  name: string;
+  fileKind: FileKind;
+  sizeBytes: number;
+  /** «Входящие» или «ОБА · Неделя 7 · Лекции». */
+  context: string;
+  extraction: ExtractionSummary | null;
+}
+
+export interface MaterialExtraction {
+  material: MaterialRef;
+  name: string;
+  context: string;
+  sha256: string;
+  extractorVersion: number;
+  format: ExtractionFormat;
+  status: ExtractionStatus;
+  statusMessage: string | null;
+  metadata: ExtractionMetadata;
+  blocks: ExtractedBlock[];
+  blocksTruncated: boolean;
+  text: string;
+  textChars: number;
+  truncated: boolean;
+  warnings: ExtractionWarning[];
+  ocrUsed: boolean;
+  sourceSizeBytes: number;
+  durationMs: number;
+  extractedAt: ISODate;
+  stale: boolean;
+  /** Взято из cache по SHA-256 без повторного разбора. */
+  cached: boolean;
+}
+
+export type ExtractionItemOutcome = "extracted" | "cached" | "failed" | "cancelled";
+
+export interface ExtractionBatchItem {
+  material: MaterialRef;
+  name: string;
+  outcome: ExtractionItemOutcome;
+  status: ExtractionStatus | null;
+  textChars: number;
+  error: BridgeErrorPayload | null;
+}
+
+export interface ExtractionBatchReport {
+  operationId: string;
+  items: ExtractionBatchItem[];
+  extracted: number;
+  cached: number;
+  failed: number;
+  cancelled: number;
+  stoppedByUser: boolean;
+  replayed: boolean;
+}
+
+export interface OcrStatus {
+  available: boolean;
+  engine: string | null;
+  languages: string | null;
+  message: string;
+}
+
+export interface ExtractionLimitsInfo {
+  maxInputBytes: number;
+  maxTextChars: number;
+  timeLimitSeconds: number;
+  maxPdfPages: number;
+  maxSheets: number;
+  maxCellsPerSheet: number;
+  maxSlides: number;
+  maxCorpusChars: number;
+}
+
+export interface ExtractionSettings {
+  /** Локальный OCR изображений. По умолчанию выключен. */
+  ocrEnabled: boolean;
+  ocr: OcrStatus;
+  limits: ExtractionLimitsInfo;
+}
+
+export interface CorpusItem {
+  material: MaterialRef;
+  name: string;
+  context: string;
+  sha256: string;
+  status: ExtractionStatus | null;
+  textChars: number;
+  warningCount: number;
+  /** Материал на месте, содержимое не менялось, текст извлечён. */
+  ready: boolean;
+  problem: string | null;
+}
+
+/** Явно выбранный пользователем набор материалов — вход будущего SourceBundle. */
+export interface CorpusSelection {
+  homeworkId: string | null;
+  updatedAt: ISODate | null;
+  items: CorpusItem[];
+  totalChars: number;
+  limitChars: number;
+}
+
+export interface CorpusDocument {
+  material: MaterialRef;
+  name: string;
+  sha256: string;
+  format: ExtractionFormat;
+  status: ExtractionStatus;
+  text: string;
+  textChars: number;
+  truncated: boolean;
+  warnings: ExtractionWarning[];
+}
+
+/** Ровно то, что получит будущий анализ. Сам анализ не запускается. */
+export interface CorpusPreview {
+  homeworkId: string | null;
+  documents: CorpusDocument[];
+  excluded: { material: MaterialRef; name: string; reason: string }[];
+  totalChars: number;
+  limitChars: number;
+  truncated: boolean;
+}
+
 // ───────────────────────── Домашние задания ─────────────────────────
 
 export type HomeworkStage = "task" | "in_progress" | "ready" | "submitted";
@@ -423,6 +678,7 @@ export type OperationKind =
   | "confirm_submission"
   | "update_rules"
   | "import"
+  | "extract"
   | "undo";
 
 export type OperationStatus = "running" | "completed" | "failed" | "undone";
@@ -491,6 +747,10 @@ export interface BridgeEvents {
   "downloads:watcher-updated": { watcher: DownloadsWatcher };
   /** Фаза импорта экспорта ЦУ: проверка → распаковка во временную папку → импорт → удаление временных файлов. */
   "cu-import:progress": { operationId: string; phase: CuImportPhase; completed: number; total: number; entryName: string | null };
+  /** Прогресс пакетного извлечения текста (этап 7). */
+  "extraction:progress": { operationId: string; completed: number; total: number; material: MaterialRef | null; name: string | null; outcome: ExtractionItemOutcome | null };
+  /** Результаты извлечения изменились: анализ, перестроение или очистка cache. */
+  "extraction:updated": { reason: "analyzed" | "cleared"; materials: MaterialRef[] };
 }
 
 export type BridgeEventName = keyof BridgeEvents;
@@ -579,6 +839,24 @@ export interface DesktopBridge {
   /** Открывает ссылку во внешнем браузере после проверки allowlist HTTPS-домена LMS. */
   openCourse(target: CourseLinkTarget): Promise<void>;
   openAssignment(target: AssignmentLinkTarget): Promise<void>;
+
+  // ── Локальное извлечение текста (этап 7). Codex/Claude не вызываются. ──
+  listMaterialExtractions(): Promise<MaterialExtractionItem[]>;
+  /** Сохранённый результат; null — текст из материала ещё не извлекался. */
+  getMaterialExtraction(material: MaterialRef): Promise<MaterialExtraction | null>;
+  /** Анализ одного материала. Тот же SHA-256 берётся из cache; force перестраивает. */
+  analyzeMaterial(material: MaterialRef, options?: { force?: boolean }): Promise<MaterialExtraction>;
+  /** Пакет с прогрессом extraction:progress; отмена — cancelExtraction(operationId). */
+  analyzeMaterials(materials: MaterialRef[], options?: { force?: boolean; operationId?: string }): Promise<OperationResult<ExtractionBatchReport>>;
+  /** false — пакет уже завершён. */
+  cancelExtraction(operationId: string): Promise<boolean>;
+  clearExtractionCache(): Promise<{ removed: number }>;
+  getExtractionSettings(): Promise<ExtractionSettings>;
+  setExtractionSettings(patch: { ocrEnabled: boolean }): Promise<ExtractionSettings>;
+  /** homeworkId = null — общая подборка без ДЗ. */
+  getCorpusSelection(homeworkId: string | null): Promise<CorpusSelection>;
+  setCorpusSelection(homeworkId: string | null, materials: MaterialRef[]): Promise<CorpusSelection>;
+  previewCorpus(homeworkId: string | null): Promise<CorpusPreview>;
 
   classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>>;
   updateClassification(fileId: string, patch: ClassificationPatch): Promise<InboxFile>;

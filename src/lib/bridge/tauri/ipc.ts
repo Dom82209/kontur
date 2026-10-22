@@ -2,16 +2,23 @@ import type {
   AssignmentLinkTarget,
   AutomationRules,
   ClassificationPatch,
+  CorpusPreview,
+  CorpusSelection,
   CourseLinkTarget,
   DownloadCandidate,
   DownloadsWatcher,
   DroppedItem,
   ExportImportRequest,
   ExportPreview,
+  ExtractionBatchReport,
+  ExtractionSettings,
   Homework,
   InboxFile,
   InboxImportReport,
   ManagedRoots,
+  MaterialExtraction,
+  MaterialExtractionItem,
+  MaterialRef,
   Operation,
   OperationRecord,
   OperationResult,
@@ -240,6 +247,58 @@ export function openCourse(target: CourseLinkTarget): Promise<void> {
 
 export function openAssignment(target: AssignmentLinkTarget): Promise<void> {
   return call("open_assignment", "homeworkId" in target ? { homeworkId: target.homeworkId, fileId: null } : { homeworkId: null, fileId: target.fileId });
+}
+
+// ── Этап 7: локальное извлечение текста, подборка материалов ──
+
+const materialArg = (material: MaterialRef): MaterialRef => ({ kind: material.kind, id: material.id });
+
+export function listMaterialExtractions(): Promise<MaterialExtractionItem[]> {
+  return call("list_material_extractions");
+}
+
+export function getMaterialExtraction(material: MaterialRef): Promise<MaterialExtraction> {
+  return call("get_material_extraction", { material: materialArg(material) });
+}
+
+export function analyzeMaterial(material: MaterialRef, force: boolean): Promise<MaterialExtraction> {
+  return call("analyze_material", { material: materialArg(material), force });
+}
+
+export function analyzeMaterials(
+  operationId: string,
+  materials: MaterialRef[],
+  force: boolean,
+): Promise<OperationResult<ExtractionBatchReport>> {
+  return call("analyze_materials", { operationId, materials: materials.map(materialArg), force });
+}
+
+export function cancelExtraction(operationId: string): Promise<boolean> {
+  return call("cancel_extraction", { operationId });
+}
+
+export function clearExtractionCache(): Promise<{ removed: number }> {
+  return call("clear_extraction_cache");
+}
+
+export function getExtractionSettings(): Promise<ExtractionSettings> {
+  return call("get_extraction_settings");
+}
+
+export function setExtractionSettings(ocrEnabled: boolean): Promise<ExtractionSettings> {
+  return call("set_extraction_settings", { ocrEnabled });
+}
+
+export function getCorpusSelection(homeworkId: string | null): Promise<CorpusSelection> {
+  return call("get_corpus_selection", { homeworkId });
+}
+
+export function setCorpusSelection(homeworkId: string | null, materials: MaterialRef[]): Promise<CorpusSelection> {
+  return call("set_corpus_selection", { homeworkId, materials: materials.map(materialArg) });
+}
+
+export function previewCorpus(homeworkId: string | null): Promise<CorpusPreview> {
+  return call("preview_corpus", { homeworkId });
 }
 
 /** Преобразует DroppedItem в аргумент IPC; без sourcePath импорт не начинается. */
