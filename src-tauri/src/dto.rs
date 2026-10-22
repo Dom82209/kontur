@@ -271,6 +271,10 @@ pub enum OperationKind {
     Import,
     /// Этап 7: пакетное извлечение текста из материалов.
     Extract,
+    /// Этап 8: явный переход этапа рабочего цикла пользователем.
+    WorkflowTransition,
+    /// Этап 8: подтверждение расхождения с личным стилем выше порога.
+    ConfirmStyle,
     Undo,
 }
 
@@ -294,6 +298,8 @@ impl OperationKind {
             Self::UpdateRules => "update_rules",
             Self::Import => "import",
             Self::Extract => "extract",
+            Self::WorkflowTransition => "workflow_transition",
+            Self::ConfirmStyle => "confirm_style",
             Self::Undo => "undo",
         }
     }
@@ -317,6 +323,8 @@ impl OperationKind {
             "update_rules" => Ok(Self::UpdateRules),
             "import" => Ok(Self::Import),
             "extract" => Ok(Self::Extract),
+            "workflow_transition" => Ok(Self::WorkflowTransition),
+            "confirm_style" => Ok(Self::ConfirmStyle),
             "undo" => Ok(Self::Undo),
             _ => Err(format!("unknown operation kind: {value}")),
         }

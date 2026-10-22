@@ -17,6 +17,8 @@ use crate::{db::Database, error::BackendError};
 pub(crate) use files::hydrate_file;
 pub(crate) use homeworks::{load_homework, load_homeworks, load_versions};
 pub use mutations::Repositories;
+pub(crate) use operations::operation_in;
+pub(crate) use settings::load_automation_rules;
 
 pub struct ReadRepository<'a> {
     database: &'a Database,

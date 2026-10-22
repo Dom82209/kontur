@@ -73,7 +73,7 @@ impl HomeworkStage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeworkWorkflowStage {
     MaterialsCollected,
@@ -255,56 +255,6 @@ pub struct NewInboxFile<'a> {
     pub duplicate: Option<&'a Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewRun {
-    pub id: String,
-    pub homework_id: String,
-    pub kind: String,
-    pub role: String,
-    pub provider: String,
-    pub version_id: Option<String>,
-    pub source_bundle_id: Option<String>,
-    pub sources_used: Value,
-    pub status: String,
-    pub progress: i64,
-    pub step: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub saved_as_iteration: bool,
-    pub result: Option<Value>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RevisionPrompt {
-    pub id: String,
-    pub homework_id: String,
-    pub kind: String,
-    pub text: String,
-    pub created_at: String,
-    pub created_by: String,
-    pub based_on_version_id: Option<String>,
-    pub review_run_id: Option<String>,
-    pub addresses: Value,
-    pub sources: Value,
-    pub sent_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeacherComment {
-    pub id: String,
-    pub homework_id: String,
-    pub source: String,
-    pub date: String,
-    pub question: String,
-    pub answer: String,
-    pub added_at: String,
-    pub attachment_file_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequirementStatus {
@@ -333,50 +283,6 @@ impl RequirementStatus {
             _ => Err(format!("unknown requirement status: {value}")),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeacherRequirement {
-    pub id: String,
-    pub homework_id: String,
-    pub text: String,
-    pub comment_id: Option<String>,
-    pub origin: String,
-    pub status: RequirementStatus,
-    pub note: String,
-    pub checked_version_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubmissionPackage {
-    pub id: String,
-    pub homework_id: String,
-    pub version_id: String,
-    pub folder_path: String,
-    pub items: Value,
-    pub links: Value,
-    pub warnings: Value,
-    pub checklist: Value,
-    pub upload_list: Value,
-    pub built_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubmissionReceipt {
-    pub id: String,
-    pub homework_id: String,
-    pub version_id: String,
-    pub package_id: String,
-    pub submitted_at: String,
-    pub confirmed_at: String,
-    pub assignment_url: String,
-    pub proof: Option<Value>,
-    pub snapshot_path: String,
-    pub files: Value,
-    pub snapshot_hash: String,
 }
 
 #[derive(Debug, Clone)]

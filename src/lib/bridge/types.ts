@@ -681,6 +681,8 @@ export type OperationKind =
   | "update_rules"
   | "import"
   | "extract"
+  | "workflow_transition"
+  | "confirm_style"
   | "undo";
 
 export type OperationStatus = "running" | "completed" | "failed" | "undone";

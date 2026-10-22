@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура». Извлечение текста (этап 7) читает материалы только в Rust.",
+  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура». Извлечение текста (этап 7) читает материалы только в Rust. Рабочий цикл ДЗ (этап 8) меняется только командами backend; AI-адаптеры не подключены.",
   "windows": [
     "main"
   ],
@@ -48,6 +48,29 @@
     "allow-set-extraction-settings",
     "allow-get-corpus-selection",
     "allow-set-corpus-selection",
-    "allow-preview-corpus"
+    "allow-preview-corpus",
+    "allow-get-workflow",
+    "allow-get-dashboard",
+    "allow-get-iterations",
+    "allow-compare-versions",
+    "allow-get-homework-candidates",
+    "allow-create-source-bundle",
+    "allow-start-workflow-run",
+    "allow-cancel-workflow-run",
+    "allow-pin-workflow-run",
+    "allow-save-manual-analysis",
+    "allow-save-manual-review",
+    "allow-create-revision-prompt",
+    "allow-update-prompt-draft",
+    "allow-commit-prompt",
+    "allow-hand-off-prompt",
+    "allow-create-homework-version",
+    "allow-select-homework-version",
+    "allow-add-teacher-comments",
+    "allow-add-teacher-requirement",
+    "allow-resolve-teacher-requirement",
+    "allow-confirm-style-divergence",
+    "allow-mark-ready-to-submit",
+    "allow-transition-workflow"
   ]
 }

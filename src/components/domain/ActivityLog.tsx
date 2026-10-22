@@ -24,6 +24,8 @@ const KIND: Record<OperationKind, string> = {
   update_rules: "Правила",
   import: "Импорт",
   extract: "Извлечение",
+  workflow_transition: "Этап работы",
+  confirm_style: "Подтверждение стиля",
   undo: "Отмена",
 };
 

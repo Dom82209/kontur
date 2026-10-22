@@ -154,3 +154,9 @@ v1 уже неизменяема. v2 добавляет недостающие �
 | `SubmissionPackage` | `SubmissionPackageDto` | `submission_packages` | `submission_package` (чтение) |
 | `SubmissionReceipt` | `SubmissionReceiptDto` | `submission_receipts` | `submission_receipt` (чтение) |
 | `Readiness`, `HomeworkIteration`, `VersionComparison`, `Dashboard` | `ReadinessDto`, `HomeworkIterationDto`, `VersionComparisonDto`, `DashboardDto` | проекции | `workflow::projections` |
+
+### Команды (этап 8B)
+
+Мутации каждой сущности выполняются только командами `workflow_commands` поверх `WorkflowService`: SourceBundle — `create_source_bundle`; ReviewRun — `start_workflow_run`, `save_manual_analysis`, `save_manual_review`, `cancel_workflow_run`, `pin_workflow_run`; RevisionPrompt — `create_revision_prompt`, `update_prompt_draft`, `commit_prompt`, `hand_off_prompt` (и черновик первичного промта из `save_manual_analysis`); HomeworkVersion — `create_homework_version`, `select_homework_version`; TeacherComment/TeacherRequirement — `add_teacher_comments`, `add_teacher_requirement`, `resolve_teacher_requirement`; StyleConfirmation — `confirm_style_divergence`; Homework.workflowStage — только через state machine (`mark_ready_to_submit`, `transition_workflow` и переходы внутри команд). Чтение — `get_workflow`, `get_iterations`, `compare_versions`, `get_homework_candidates`, `get_dashboard`. SubmissionPackage и SubmissionReceipt на этапе 8 только читаются в составе агрегата.
+
+`operations.kind` дополнен `workflow_transition` и `confirm_style` (колонка без CHECK, миграция не нужна).

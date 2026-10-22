@@ -18,6 +18,7 @@ pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;
 pub mod workflow;
+mod workflow_commands;
 
 use app_state::AppState;
 use db::Database;
@@ -87,7 +88,30 @@ pub fn run() {
             extraction_commands::set_extraction_settings,
             extraction_commands::get_corpus_selection,
             extraction_commands::set_corpus_selection,
-            extraction_commands::preview_corpus
+            extraction_commands::preview_corpus,
+            workflow_commands::get_workflow,
+            workflow_commands::get_dashboard,
+            workflow_commands::get_iterations,
+            workflow_commands::compare_versions,
+            workflow_commands::get_homework_candidates,
+            workflow_commands::create_source_bundle,
+            workflow_commands::start_workflow_run,
+            workflow_commands::cancel_workflow_run,
+            workflow_commands::pin_workflow_run,
+            workflow_commands::save_manual_analysis,
+            workflow_commands::save_manual_review,
+            workflow_commands::create_revision_prompt,
+            workflow_commands::update_prompt_draft,
+            workflow_commands::commit_prompt,
+            workflow_commands::hand_off_prompt,
+            workflow_commands::create_homework_version,
+            workflow_commands::select_homework_version,
+            workflow_commands::add_teacher_comments,
+            workflow_commands::add_teacher_requirement,
+            workflow_commands::resolve_teacher_requirement,
+            workflow_commands::confirm_style_divergence,
+            workflow_commands::mark_ready_to_submit,
+            workflow_commands::transition_workflow
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");

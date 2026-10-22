@@ -1,6 +1,6 @@
 # Архитектура Rust backend
 
-Статус документа: этап 8A. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 8B. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
 
@@ -22,7 +22,8 @@
 - `ipc_commands` — единый список IPC-команд, который `build.rs` передаёт в `AppManifest`; тест сверяет его с capability.
 - `mutation_service` — транзакционные сценарии сохранения AutomationRules и ручной классификации, журнал операций и намерения событий без зависимости от GUI.
 - `query_service` — прикладной read-only слой сборки DTO и общей обработки ошибок без зависимости от GUI.
-- `workflow` — этап 8: `dto` (точные DTO рабочего цикла и исчерпывающие enum), `repository` (SQL поверх `&Connection` — одинаково в чтении и в транзакции), `bundle` (неизменяемый SourceBundle из подборки этапа 7, `ContentVerifier`), `projections` (Readiness, IterationChain, сравнение версий, Главная).
+- `workflow_commands` — тонкие Tauri-команды этапа 8, `EventSink` и доставка событий после commit.
+- `workflow` — этап 8: `dto` (точные DTO рабочего цикла и исчерпывающие enum), `repository` (SQL поверх `&Connection` — одинаково в чтении и в транзакции), `bundle` (неизменяемый SourceBundle из подборки этапа 7, `ContentVerifier`), `projections` (Readiness, IterationChain, сравнение версий, Главная), `state_machine` (единственная таблица переходов девяти этапов), `service` (транзакционные команды: идемпотентность, optimistic revision, журнал операций, события после commit).
 - `repositories` — каталог специализированных модулей: `subjects`, `weeks`, `homeworks`, `files`, `inbox`, `operations`, `settings`, DB-only `writes`; прежние транзакционные методы этапа 4B.1 сохранены в `mutations`.
 
 Списковые агрегаты собираются фиксированной серией запросов: Subject — одним агрегатным запросом, Week — базовые строки + файлы + связи Homework, Homework — базовые строки + task files + versions. N+1-запросов по элементам списков нет.
@@ -160,6 +161,66 @@ Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` ге
 Пакет: UUID `operationId` (повтор — сохранённый итог из `extraction_batches` без событий; незавершённый — `conflict`), дедупликация, ≤ 500 материалов, операция kind `extract`, ошибка одного материала попадает в отчёт, отмена помечает оставшиеся `cancelled`. Порядок событий: `extraction:progress` + `operation:progress` → `extraction:updated` → `operation:completed`/`operation:failed`. Ошибка доставки события не откатывает сохранённое и возвращает `unknown` с просьбой обновить список.
 
 Подборка: только материалы с текстом (`complete`/`partial`), неизменённым содержимым и закреплённым SHA-256; до 200 материалов; подборка отправленной работы неизменяема; корпус — до 600 000 символов в порядке выбора.
+
+## Рабочий цикл ДЗ — этап 8
+
+### State machine (`workflow/state_machine.rs`)
+
+Этап меняет только backend; записать `workflowStage` напрямую нельзя. Разрешены ровно 18 пар (всё остальное — `conflict`, из «Отправлено» — `immutable`); невыполненное условие — `blocked`:
+
+| Откуда → куда | Условие |
+|---|---|
+| materials_collected → codex_analysis | есть полный набор источников анализа из подборки |
+| codex_analysis → materials_collected, prompt_ready → codex_analysis, claude_solving → prompt_ready, codex_review → claude_solving, teacher_review → codex_review | возврат, без условий |
+| codex_analysis → prompt_ready | анализ сохранён и первичный промт зафиксирован |
+| prompt_ready → claude_solving | зафиксированный промт передан автору |
+| claude_solving → codex_review | выбрана версия решения |
+| codex_review → needs_fixes | проверка текущей версии требует исправлений |
+| codex_review → teacher_review | проверка текущей версии пройдена, критических ошибок нет |
+| codex_review → ready_to_submit | проверка преподавателем не обязательна и готовность пройдена |
+| needs_fixes → claude_solving | промт исправлений по текущей версии зафиксирован и передан |
+| teacher_review → needs_fixes, ready_to_submit → needs_fixes, ready_to_submit → teacher_review | решение пользователя |
+| teacher_review → ready_to_submit | готовность пройдена; без комментариев преподавателя — явное подтверждение (`confirmation_required`) |
+| ready_to_submit → submitted | только подтверждением отправки этапа 10 — сейчас всегда `blocked` |
+
+Названия этапов исторические: провайдер каждой роли берётся из `AutomationRules.workflow.roles`.
+
+### Application service (`workflow/service.rs`)
+
+Каждая мутация: UUID v4 `operationId` и SHA-256 отпечаток запроса → повтор с тем же id и запросом возвращает сохранённый итог (`operation_results.kind = workflow`) без действий и событий, тот же id с другим запросом — `conflict`, id завершившейся ошибкой операции — `conflict` → транзакция: операция `running` с `homework_id` → проверка «не отправлено» и `expectedRevision` (устаревшая — `conflict` с просьбой перечитать) → проверки состояния и state machine → запись → `revision + 1` → итог → `completed`. Любая ошибка откатывает всю транзакцию и записывает одну отдельную `failed`-операцию (без секретов и путей). Одновременные команды на одной ревизии дают одного победителя. События строятся только после commit из перечитанного состояния.
+
+Реальных AI-адаптеров нет. Запуск получает `waiting_for_provider` (режим `provider`) или `manual_handoff` (режим `manual`); результат сохраняет пользователь с provenance `manual`. Одновременно у ДЗ может быть только один незавершённый запуск. Набор источников запуска должен быть того же вида, полным и неизменившимся; проверяется только текущая выбранная версия. Применённый порог стиля берётся из текущих настроек и сохраняется в запуске.
+
+### IPC-команды этапа 8
+
+| Команда | DesktopBridge | Результат |
+|---|---|---|
+| `get_workflow { homeworkId }` | `getWorkflow` (+ `getReviewRuns`, `getPrompts`, `getTeacherComments`, `getTeacherRequirements`, `getReadiness`, `getSubmissionPackage`, `getSubmissionReceipt`) | агрегат `HomeworkWorkflowDto` |
+| `get_dashboard` | `getDashboard` | `DashboardDto` |
+| `get_iterations { homeworkId }` | `getIterations` | `HomeworkIterationDto[]` |
+| `compare_versions { fromVersionId, toVersionId }` | `compareVersions` | `VersionComparisonDto` |
+| `get_homework_candidates { homeworkId }` | `getHomeworkCandidates` | `FileRefDto[]` |
+| `create_source_bundle { operationId, homeworkId, purpose, versionId, expectedRevision }` | `prepareSourceBundle` | `OperationResult<SourceBundle>` |
+| `start_workflow_run { operationId, request: { homeworkId, kind, versionId, bundleId, mode }, expectedRevision }` | `runMaterialAnalysis`, `runVersionReview`, `runRevisionPrompt`, `runTeacherReview` | `OperationResult<ReviewRun>` |
+| `save_manual_analysis { operationId, runId, input, expectedRevision }` | `saveManualAnalysis` | `OperationResult<ReviewRun>` + черновик первичного промта |
+| `save_manual_review { operationId, runId, input, expectedRevision }` | `saveManualReviewResult` | `OperationResult<ReviewRun>` |
+| `cancel_workflow_run`, `pin_workflow_run { operationId, runId, expectedRevision }` | `cancelRun`, `saveRunAsIteration` | `OperationResult<ReviewRun>` |
+| `create_revision_prompt { operationId, reviewRunId, text, expectedRevision }` | `createRevisionPrompt` | `OperationResult<RevisionPrompt>` (черновик) |
+| `update_prompt_draft { operationId, promptId, text, expectedRevision }` | `updatePromptText` | только черновик |
+| `commit_prompt { operationId, promptId, expectedRevision }` | `commitPrompt` | фиксация |
+| `hand_off_prompt { operationId, promptId, expectedRevision }` | `sendPromptToAuthor` | ручная передача автору |
+| `create_homework_version { operationId, homeworkId, input, expectedRevision }` | `createHomeworkVersion` | append-only версия, номер назначает backend |
+| `select_homework_version { operationId, versionId, expectedRevision }` | `markVersionFinal` | текущая проверяемая версия |
+| `add_teacher_comments`, `add_teacher_requirement`, `resolve_teacher_requirement` | `saveTeacherComments`, `addTeacherRequirement`, `resolveRequirement` | ручное добавление и проверка |
+| `confirm_style_divergence { operationId, reviewRunId, expectedRevision }` | `confirmStyleDivergence` | `StyleConfirmation` |
+| `mark_ready_to_submit { operationId, homeworkId, noTeacherComments, expectedRevision }` | `markReadyToSubmit` | переход через state machine |
+| `transition_workflow { operationId, homeworkId, to, reason, expectedRevision }` | `transitionWorkflow` | допустимый переход (кроме «Готово к сдаче» и «Отправлено») |
+
+Capability содержит ровно 64 команды; тесты сверяют `ipc_commands::COMMANDS` с capability и с `generate_handler!`.
+
+### События
+
+После commit, в порядке: доменные (`homework:version-created`, `review:completed`, `homework:revision-prompt-created`), `workflow:stage-changed` для каждого перехода, `homework:updated { homeworkId, revision, stage, reason, operationId }`, `homework:readiness-updated { homeworkId, ready, blockers, revision }`, `operation:progress`, `operation:completed`. Ошибка — только `operation:failed`. Повтор — без событий. Имена `workflow:stage-changed`, `review:completed` и `homework:version-created` существовали в контракте и сохранены (вместо `homework:workflow-stage-changed` и `homework:review-completed`). Payload — camelCase, только ID и короткие поля, без абсолютных путей и текста извлечения. Ошибка доставки события не откатывает сохранённое: команда возвращает `unknown` с просьбой перечитать состояние.
 
 ## Health check
 

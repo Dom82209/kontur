@@ -2,12 +2,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
-    domain::{HomeworkWorkflowStage, ReviewRun, SubmissionReceipt},
+    domain::HomeworkWorkflowStage,
     dto::{
         ClassificationDto, HomeworkVersionDto, InboxFileDto, InboxStatus, OperationDto,
         OperationKind, ProviderId,
     },
     error::{AppError, ErrorCode},
+    workflow::dto::{ReviewRunDto, SubmissionReceiptDto},
 };
 
 pub mod names {
@@ -32,12 +33,18 @@ pub mod names {
     pub const EXTRACTION_PROGRESS: &str = "extraction:progress";
     /// Этап 7: результаты извлечения изменились (анализ, перестроение, очистка cache).
     pub const EXTRACTION_UPDATED: &str = "extraction:updated";
+    /// Этап 8: агрегат ДЗ изменился (новая ревизия) — клиент перечитывает `get_workflow`.
+    pub const HOMEWORK_UPDATED: &str = "homework:updated";
+    /// Этап 8: создан черновик промта (первичного или исправлений).
+    pub const HOMEWORK_REVISION_PROMPT_CREATED: &str = "homework:revision-prompt-created";
+    /// Этап 8: готовность к сдаче пересчитана после мутации.
+    pub const HOMEWORK_READINESS_UPDATED: &str = "homework:readiness-updated";
 
     /// Служебные события native intake (не входят в `BridgeEvents`, слушает только Tauri adapter).
     pub const INTAKE_NATIVE_DROP: &str = "intake:native-drop";
     pub const INTAKE_DRAG_STATE: &str = "intake:drag-state";
 
-    pub const ALL: [&str; 17] = [
+    pub const ALL: [&str; 20] = [
         INBOX_FILE_ADDED,
         INBOX_CLASSIFICATION_UPDATED,
         OPERATION_PROGRESS,
@@ -55,6 +62,9 @@ pub mod names {
         CU_IMPORT_PROGRESS,
         EXTRACTION_PROGRESS,
         EXTRACTION_UPDATED,
+        HOMEWORK_UPDATED,
+        HOMEWORK_REVISION_PROMPT_CREATED,
+        HOMEWORK_READINESS_UPDATED,
     ];
 }
 
@@ -240,20 +250,20 @@ pub struct ReviewProgressPayload {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewCompletedPayload {
-    pub run: ReviewRun,
+    pub run: ReviewRunDto,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFailedPayload {
-    pub run: ReviewRun,
+    pub run: ReviewRunDto,
     pub error: AppError,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionConfirmedPayload {
-    pub receipt: SubmissionReceipt,
+    pub receipt: SubmissionReceiptDto,
 }
 
 pub fn emit_bridge_event<R, T>(
@@ -334,6 +344,9 @@ mod tests {
                 "cu-import:progress",
                 "extraction:progress",
                 "extraction:updated",
+                "homework:updated",
+                "homework:revision-prompt-created",
+                "homework:readiness-updated",
             ]
         );
         assert_eq!(names::INTAKE_NATIVE_DROP, "intake:native-drop");

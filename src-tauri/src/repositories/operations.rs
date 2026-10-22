@@ -9,22 +9,8 @@ use super::{parse_json, require_relative_path, ReadRepository};
 
 impl ReadRepository<'_> {
     pub fn operation(&self, operation_id: &str) -> Result<OperationDto, BackendError> {
-        self.database.with_connection(|connection| {
-            connection
-                .query_row(
-                    "SELECT id, kind, title, detail, status, started_at, completed_at, undoable,
-                            paths_json, backup_path, homework_id
-                     FROM operations WHERE id = ?1",
-                    params![operation_id],
-                    hydrate_operation,
-                )
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        BackendError::not_found("operation not found")
-                    }
-                    other => other.into(),
-                })
-        })
+        self.database
+            .with_connection(|connection| operation_in(connection, operation_id))
     }
 
     pub fn activity_log(&self) -> Result<Vec<OperationDto>, BackendError> {
@@ -42,6 +28,25 @@ impl ReadRepository<'_> {
             Ok(output)
         })
     }
+}
+
+/// Операция по id поверх уже открытого соединения (в том числе внутри транзакции).
+pub(crate) fn operation_in(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+) -> Result<OperationDto, BackendError> {
+    connection
+        .query_row(
+            "SELECT id, kind, title, detail, status, started_at, completed_at, undoable,
+                    paths_json, backup_path, homework_id
+             FROM operations WHERE id = ?1",
+            params![operation_id],
+            hydrate_operation,
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => BackendError::not_found("operation not found"),
+            other => other.into(),
+        })
 }
 
 fn hydrate_operation(row: &Row<'_>) -> Result<OperationDto, rusqlite::Error> {
