@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    ai::ProviderRuntime,
     db::Database,
     error::{AppError, BackendError},
     events::EventRegistry,
@@ -24,11 +25,14 @@ pub struct AppState {
     extraction_jobs: ExtractionJobs,
     extraction_limits: ExtractionLimits,
     ocr: OnceLock<Option<Arc<dyn OcrEngine>>>,
+    providers: Arc<ProviderRuntime>,
 }
 
 impl AppState {
     pub fn new(app_data_dir: PathBuf, home_dir: Option<PathBuf>, database: Database) -> Self {
+        let providers = Arc::new(ProviderRuntime::new(&app_data_dir, home_dir.as_deref()));
         Self {
+            providers,
             app_data_dir,
             home_dir,
             database,
@@ -55,6 +59,18 @@ impl AppState {
     pub fn with_ocr_engine(self, engine: Option<Arc<dyn OcrEngine>>) -> Self {
         let _ = self.ocr.set(engine);
         self
+    }
+
+    /// Провайдеры этапа 9 (тесты подставляют fake-адаптеры и TempDir).
+    #[cfg(test)]
+    pub fn with_providers(mut self, providers: ProviderRuntime) -> Self {
+        self.providers = Arc::new(providers);
+        self
+    }
+
+    /// Состояние провайдеров: кэш проверки CLI и флаги отмены заданий.
+    pub fn providers(&self) -> Arc<ProviderRuntime> {
+        Arc::clone(&self.providers)
     }
 
     pub fn extraction_jobs(&self) -> &ExtractionJobs {

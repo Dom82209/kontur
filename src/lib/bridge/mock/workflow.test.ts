@@ -1,19 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MockDesktopBridge } from "./MockDesktopBridge";
-import type { ReviewRun, RunKind } from "../types";
+import { TASK_FOR_RUN, type AiConfirmInput, type AiJob, type ManualAnalysisInput, type ManualReviewInput, type ReviewRun, type RunKind } from "../types";
 
-/** Полный mock-процесс рабочего цикла ДЗ без задержек. */
+/**
+ * Полный mock-процесс рабочего цикла ДЗ без задержек. Этап 9: каждый AI-шаг —
+ * задание передачи: подготовка (полный текст) → явная отправка в «CLI» (демо) →
+ * ответ → подтверждение пользователем. Без подтверждения ничего не меняется.
+ */
 
 let b: MockDesktopBridge;
 const HW = "hw-linal-8";
 
-async function settle(runId: string, homeworkId = HW): Promise<ReviewRun> {
-  for (let i = 0; i < 200; i += 1) {
-    const run = (await b.getReviewRuns(homeworkId)).find((r) => r.id === runId);
-    if (run && run.status !== "queued" && run.status !== "running") return run;
+async function settleJob(jobId: string): Promise<AiJob> {
+  for (let i = 0; i < 400; i += 1) {
+    const job = await b.getAiJob(jobId);
+    if (job.status !== "running") return job;
     await new Promise((r) => setTimeout(r, 0));
   }
-  throw new Error("run did not finish");
+  throw new Error("job did not finish");
 }
 
 async function run(kind: RunKind, versionId: string | null, homeworkId = HW): Promise<ReviewRun> {
@@ -24,16 +28,32 @@ async function run(kind: RunKind, versionId: string | null, homeworkId = HW): Pr
       : kind === "review_teacher"
         ? await b.runTeacherReview(homeworkId, versionId!, bundle.id)
         : await b.runVersionReview(homeworkId, versionId!, bundle.id);
-  const done = await settle(started.id, homeworkId);
+  expect(started.status).toBe("waiting_for_provider");
+  const task = TASK_FOR_RUN[kind];
+  const job = await b.prepareAiJob(started.id, task);
+  expect(job.transport).toBe("cli");
+  expect(job.promptText).toContain("[S1]");
+  await b.sendAiJob(job.id);
+  const ready = await settleJob(job.id);
+  expect(ready.status).toBe("response_ready");
+  // Ответ получен, но запуск ещё не завершён — нужно подтверждение.
+  expect((await b.getReviewRuns(homeworkId)).find((r) => r.id === started.id)?.status).toBe("waiting_for_provider");
+  const input: AiConfirmInput = kind === "analyze_materials" ? { kind: "analysis", value: ready.draft as ManualAnalysisInput } : { kind: "review", value: ready.draft as ManualReviewInput };
+  const done = (await b.confirmAiResult(job.id, input)).value.run;
   expect(done.status).toBe("completed");
+  expect(done.provenance).toBe("provider");
   expect(done.sourcesUsed.length).toBeGreaterThan(0);
   return done;
 }
 
-async function latestVersion(homeworkId = HW) {
-  const h = (await b.getHomework(homeworkId))!;
-  return h.versions[h.versions.length - 1]!;
+/** Решение автор создаёт сам; пользователь добавляет его как новую версию. */
+async function addVersion(promptId: string, homeworkId = HW) {
+  await b.sendPromptToAuthor(promptId);
+  const author = (await b.getAutomationRules()).workflow.roles.author;
+  const [file] = await b.getHomeworkCandidates(homeworkId);
+  return (await b.createHomeworkVersion(homeworkId, file!.id, { author, promptId })).value;
 }
+
 
 async function stage(homeworkId = HW) {
   return (await b.getHomework(homeworkId))!.workflowStage;
@@ -60,16 +80,21 @@ describe("рабочий цикл ДЗ (mock)", () => {
     expect((await b.getProviderStatus("codex")).roles).toEqual(["author"]);
     expect((await b.getProviderStatus("claude")).roles).toEqual(["analyst", "reviewer"]);
 
+    rules.workflow.tasks = { material_analysis: "claude", initial_prompt: "claude", solution_review: "claude", revision_prompt: "claude", teacher_review: "claude" };
+    await b.updateAutomationRules(rules);
+    expect((await b.getProviderStatus("claude")).tasks).toHaveLength(5);
     const analysis = await run("analyze_materials", null);
     expect(analysis).toMatchObject({ role: "analyst", provider: "claude" });
     const [prompt] = await b.getPrompts(HW);
-    await b.sendPromptToAuthor(prompt!.id);
-    const version = await latestVersion();
+    expect(prompt).toMatchObject({ provenance: "provider", createdBy: "claude", status: "draft" });
+    await b.commitPrompt(prompt!.id);
+    const version = await addVersion(prompt!.id);
     expect(version.author).toBe("codex");
     const review = await run("review_version", version.id);
     expect(review).toMatchObject({ role: "reviewer", provider: "claude" });
     expect(review.result?.style?.threshold).toBe(7);
 
+    await b.undoOperation((await b.getActivityLog()).find((o) => o.kind === "update_rules" && o.undoable)!.id);
     await b.undoOperation(saved.operation.id);
     expect((await b.getAutomationRules()).workflow.roles).toEqual({ analyst: "codex", author: "claude", reviewer: "codex" });
     expect((await b.getProviderStatus("codex")).roles).toEqual(["analyst", "reviewer"]);
@@ -85,13 +110,14 @@ describe("рабочий цикл ДЗ (mock)", () => {
     // 1. Создание первого промта
     const analysis = await run("analyze_materials", null);
     expect(analysis.result?.prompt?.kind).toBe("initial");
-    expect(await stage()).toBe("prompt_ready");
+    expect(await stage()).toBe("codex_analysis");
     const [initial] = await b.getPrompts(HW);
     expect(initial?.sources.length).toBeGreaterThan(0);
+    await b.commitPrompt(initial!.id);
+    expect(await stage()).toBe("prompt_ready");
 
-    // 2. Сохранение версии автором
-    await b.sendPromptToAuthor(initial!.id);
-    const v1 = await latestVersion();
+    // 2. Решение автора — новая версия (автор работает в своём приложении)
+    const v1 = await addVersion(initial!.id);
     expect(v1.label).toBe("v01");
     expect(v1.author).toBe("claude");
     expect(v1.promptId).toBe(initial!.id);
@@ -111,11 +137,12 @@ describe("рабочий цикл ДЗ (mock)", () => {
     expect(fix.value.kind).toBe("revision");
     expect(fix.value.addresses.length).toBeGreaterThanOrEqual(2);
     expect(fix.value.basedOnVersionId).toBe(v1.id);
-    expect(await stage()).toBe("prompt_ready");
+    expect(fix.value.provenance).toBe("manual");
+    expect(await stage()).toBe("needs_fixes");
+    await b.commitPrompt(fix.value.id);
 
     // 5. Следующая версия; старая не изменилась
-    await b.sendPromptToAuthor(fix.value.id);
-    const v2 = await latestVersion();
+    const v2 = await addVersion(fix.value.id);
     expect(v2.label).toBe("v02");
     expect((await b.getHomework(HW))!.versions[0]).toEqual(v1Snapshot);
     const r2 = await run("review_version", v2.id);
@@ -133,6 +160,11 @@ describe("рабочий цикл ДЗ (mock)", () => {
       { source: "chat", date: new Date().toISOString(), question: "Оформлять в LaTeX?", answer: "Да, формулы в LaTeX." },
       { source: "chat", date: new Date().toISOString(), question: "Нужен ли вывод?", answer: "Добавьте вывод в конце каждой задачи." },
     ]);
+    // Требования из ответов преподавателя пользователь фиксирует сам.
+    const comments = await b.getTeacherComments(HW);
+    for (const [i, c] of comments.entries()) {
+      await b.addTeacherRequirement(HW, { commentId: c.id, text: c.answer, origin: c.answer, status: i === 2 ? "not_done" : "done" });
+    }
     const t2 = await run("review_teacher", v2.id);
     const reqs = await b.getTeacherRequirements(HW);
     expect(reqs).toHaveLength(3);
@@ -151,12 +183,13 @@ describe("рабочий цикл ДЗ (mock)", () => {
     // 8. Исправление по комментариям → v03 → все проверки
     const teacherFix = await b.createRevisionPrompt(t2.id);
     expect(teacherFix.value.kind).toBe("teacher");
-    await b.sendPromptToAuthor(teacherFix.value.id);
-    const v3 = await latestVersion();
+    await b.commitPrompt(teacherFix.value.id);
+    const v3 = await addVersion(teacherFix.value.id);
     expect(v3.label).toBe("v03");
     const r3 = await run("review_version", v3.id);
     await b.saveRunAsIteration(r3.id);
     expect(r3.result?.style?.score).toBe(3);
+    for (const r of (await b.getTeacherRequirements(HW)).filter((x) => x.status === "not_done")) await b.resolveRequirement(r.id, "done", "Исправлено в v03");
     await run("review_teacher", v3.id);
     expect((await b.getTeacherRequirements(HW)).every((r) => r.status === "done")).toBe(true);
     await b.markVersionFinal(v3.id);
@@ -208,19 +241,32 @@ describe("рабочий цикл ДЗ (mock)", () => {
     expect(updated.missing.some((m) => m.kind === "style")).toBe(true);
   });
 
-  it("запуск можно отменить, этап возвращается", async () => {
-    const before = await stage();
+  it("отмена запуска останавливает выполняющееся задание без результата", async () => {
     const bundle = await b.prepareSourceBundle(HW, "analyze_materials");
     const started = await b.runMaterialAnalysis(HW, bundle.id);
+    const job = await b.prepareAiJob(started.id, "material_analysis");
+    await b.sendAiJob(job.id);
     const cancelled = await b.cancelRun(started.id);
     expect(cancelled.status).toBe("cancelled");
-    expect(await stage()).toBe(before);
+    expect(cancelled.result).toBeNull();
+    const stopped = await settleJob(job.id);
+    expect(stopped.status).toBe("cancelled");
+    expect(stopped.responseText).toBeNull();
   });
 
-  it("без подключённого провайдера запуск отклоняется", async () => {
+  it("без подключённого CLI — ручная передача, CLI отклоняется честно", async () => {
     await b.disconnectProvider("codex");
     const bundle = await b.prepareSourceBundle(HW, "analyze_materials");
-    await expect(b.runMaterialAnalysis(HW, bundle.id)).rejects.toMatchObject({ code: "provider_unavailable" });
+    const started = await b.runMaterialAnalysis(HW, bundle.id);
+    await expect(b.prepareAiJob(started.id, "material_analysis", "cli")).rejects.toMatchObject({ code: "provider_unavailable" });
+    const job = await b.prepareAiJob(started.id, "material_analysis");
+    expect(job.transport).toBe("manual_handoff");
+    await expect(b.sendAiJob(job.id)).rejects.toMatchObject({ code: "blocked" });
+    const pasted = await b.submitAiResponse(job.id, "Готово:\n```json\n{\"summary\": \"Итог\", \"promptText\": \"Промт\"}\n```");
+    expect(pasted).toMatchObject({ status: "response_ready", parseStatus: "valid", responseSource: "paste" });
+    const corrupt = await b.submitAiResponse(job.id, "не могу");
+    expect(corrupt.parseStatus).toBe("corrupt");
+    await expect(b.importAiResponseFile(job.id)).rejects.toMatchObject({ code: "backend_unavailable" });
   });
 
   it("сид сценария: v01 → ошибки → v02 → комментарии, одно требование не выполнено", async () => {

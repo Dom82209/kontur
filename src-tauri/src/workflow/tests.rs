@@ -1192,15 +1192,26 @@ fn dashboard_is_built_without_extraction_text_or_absolute_paths() {
             Ok(())
         })
         .unwrap();
-    let dashboard = projections::dashboard(&database, now).unwrap();
+    // Этап 9: статусы провайдеров вычисляет AiService; без подключённого CLI —
+    // ручная передача (CLI не ищется в системных каталогах теста).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runtime = crate::ai::ProviderRuntime::for_tests(
+        tmp.path().to_path_buf(),
+        crate::ai::locate::CliLocator::with_dirs(Vec::new(), Vec::new(), None),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let providers = crate::ai::AiService::new(&database, &runtime)
+        .statuses()
+        .unwrap();
+    let dashboard = projections::dashboard(&database, now, providers).unwrap();
     assert_eq!(dashboard.academic_week.number, 8);
     assert_eq!(dashboard.active_homework.len(), 1);
     assert_eq!(dashboard.inbox.total, 1);
     assert_eq!(dashboard.providers.len(), 2);
-    assert!(dashboard
-        .providers
-        .iter()
-        .all(|provider| provider.adapter == super::dto::ProviderAdapterDto::Unavailable));
+    assert!(dashboard.providers.iter().all(|provider| provider.adapter
+        == super::dto::ProviderAdapterDto::ManualHandoff
+        && provider.availability == crate::ai::model::ProviderAvailability::Manual));
     let serialized = serde_json::to_string(&dashboard).unwrap();
     assert!(
         !serialized.contains("Постройте модель процесса"),

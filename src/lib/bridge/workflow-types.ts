@@ -461,6 +461,8 @@ export interface SubmissionReceipt {
 
 export interface WorkflowSettings {
   roles: Record<WorkflowRole, ProviderId>;
+  /** Этап 9: провайдер каждой AI-задачи — независимо от имён этапов. */
+  tasks: Record<import("./ai-types").AiTask, ProviderId>;
   /** Порог расхождения с личным стилем, 0…10. По умолчанию 4. */
   styleThreshold: number;
   styleProfilePath: string;
@@ -533,6 +535,8 @@ export interface HomeworkWorkflow {
   iterations: HomeworkIteration[];
   submissionPackage: SubmissionPackage | null;
   submissionReceipt: SubmissionReceipt | null;
-  /** manual_handoff — AI-адаптеров нет, каждый AI-шаг выполняется вручную (Tauri, этап 8); mock — демонстрационный адаптер. */
-  providerMode: "manual_handoff" | "mock";
+  /** Задания передачи провайдерам (этап 9) — без текстов промта и ответа. */
+  aiJobs: import("./ai-types").AiJob[];
+  /** ai_jobs — AI-шаги идут через задания передачи с подтверждением результата пользователем (этап 9). */
+  providerMode: "ai_jobs";
 }

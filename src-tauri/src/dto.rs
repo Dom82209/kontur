@@ -347,7 +347,7 @@ pub struct OperationDto {
     pub homework_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
     Codex,
@@ -392,10 +392,47 @@ pub struct WorkflowRolesDto {
     pub reviewer: ProviderId,
 }
 
+/// Провайдер каждой AI-задачи (этап 9). Задачи настраиваются независимо от
+/// исторических имён этапов `codex_analysis`/`claude_solving`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiTaskProvidersDto {
+    pub material_analysis: ProviderId,
+    pub initial_prompt: ProviderId,
+    pub solution_review: ProviderId,
+    pub revision_prompt: ProviderId,
+    pub teacher_review: ProviderId,
+}
+
+impl AiTaskProvidersDto {
+    /// Для настроек, сохранённых до этапа 9: задачи наследуют прежние роли.
+    pub fn from_roles(roles: &WorkflowRolesDto) -> Self {
+        Self {
+            material_analysis: roles.analyst,
+            initial_prompt: roles.analyst,
+            solution_review: roles.reviewer,
+            revision_prompt: roles.reviewer,
+            teacher_review: roles.reviewer,
+        }
+    }
+
+    pub fn provider(&self, task: crate::ai::model::AiTask) -> ProviderId {
+        use crate::ai::model::AiTask;
+        match task {
+            AiTask::MaterialAnalysis => self.material_analysis,
+            AiTask::InitialPrompt => self.initial_prompt,
+            AiTask::SolutionReview => self.solution_review,
+            AiTask::RevisionPrompt => self.revision_prompt,
+            AiTask::TeacherReview => self.teacher_review,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowSettingsDto {
     pub roles: WorkflowRolesDto,
+    pub tasks: AiTaskProvidersDto,
     pub style_threshold: i64,
     pub style_profile_path: String,
     pub require_teacher_review: bool,
@@ -472,6 +509,13 @@ impl Default for AutomationRulesDto {
                     analyst: ProviderId::Codex,
                     author: ProviderId::Claude,
                     reviewer: ProviderId::Codex,
+                },
+                tasks: AiTaskProvidersDto {
+                    material_analysis: ProviderId::Codex,
+                    initial_prompt: ProviderId::Codex,
+                    solution_review: ProviderId::Codex,
+                    revision_prompt: ProviderId::Codex,
+                    teacher_review: ProviderId::Codex,
                 },
                 style_threshold: 4,
                 style_profile_path: "ПРОФИЛЬ_СТИЛЯ_ДЗ.md".to_owned(),

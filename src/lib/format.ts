@@ -160,3 +160,34 @@ export const STYLE_REASON_LABEL: Record<StyleReasonKind, string> = {
 export const COMMENT_SOURCE_LABEL: Record<TeacherCommentSource, string> = { chat: "Чат", email: "Почта", lms: "Система вуза", in_person: "Устно", other: "Другое" };
 
 export const authorName = (a: VersionAuthor): string => (a === "user" ? "Вы" : providerName(a));
+
+/** Сводное состояние провайдера (этап 9). */
+export const AVAILABILITY_LABEL: Record<"connected" | "manual" | "unavailable" | "error", string> = {
+  connected: "CLI подключён",
+  manual: "ручная передача",
+  unavailable: "CLI недоступен",
+  error: "ошибка CLI",
+};
+
+export const PARSE_STATUS_LABEL: Record<"valid" | "partial" | "corrupt" | "empty", string> = {
+  valid: "ответ распознан полностью",
+  partial: "ответ распознан частично",
+  corrupt: "ответ не распознан",
+  empty: "пустой ответ",
+};
+
+export const JOB_STATUS_LABEL: Record<"prepared" | "running" | "response_ready" | "failed" | "cancelled" | "confirmed" | "discarded", string> = {
+  prepared: "передача подготовлена",
+  running: "выполняется",
+  response_ready: "ответ ждёт проверки",
+  failed: "ошибка",
+  cancelled: "остановлено",
+  confirmed: "подтверждено",
+  discarded: "отклонено",
+};
+
+/** «1:05» из миллисекунд. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}

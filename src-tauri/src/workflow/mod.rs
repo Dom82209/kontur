@@ -17,4 +17,4 @@ pub mod state_machine;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

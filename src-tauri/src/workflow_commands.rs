@@ -1,6 +1,7 @@
 //! Tauri-граница этапа 8: рабочий цикл ДЗ. Команды тонкие: состояние и
 //! переходы меняет только `WorkflowService`, события доставляются после commit.
-//! AI-адаптеров нет — запуски получают `waiting_for_provider`/`manual_handoff`.
+//! Этап 9: запуски ждут задания передачи (`ai_commands`) или ручного ввода;
+//! отмена запуска останавливает его выполняющееся задание.
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -88,6 +89,13 @@ where
         .map_err(|_| AppError::new(ErrorCode::Unknown, "Фоновая задача прервана"))?
 }
 
+pub(crate) fn with_workflow<R: Runtime, T>(
+    app: &AppHandle<R>,
+    action: impl FnOnce(&WorkflowService<'_>) -> T,
+) -> T {
+    with_service(app, action)
+}
+
 fn with_service<R: Runtime, T>(
     app: &AppHandle<R>,
     action: impl FnOnce(&WorkflowService<'_>) -> T,
@@ -117,7 +125,13 @@ pub async fn get_workflow<R: Runtime>(
 
 #[tauri::command]
 pub async fn get_dashboard<R: Runtime>(app: AppHandle<R>) -> Result<DashboardDto, AppError> {
-    blocking(move || with_service(&app, |service| service.dashboard())).await
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let runtime = state.providers();
+        let providers = crate::ai::AiService::new(state.database(), &runtime).statuses()?;
+        with_service(&app, |service| service.dashboard(providers))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -217,6 +231,12 @@ pub async fn cancel_workflow_run<R: Runtime>(
     expected_revision: Option<i64>,
 ) -> Result<OperationResultDto<ReviewRunDto>, AppError> {
     blocking(move || {
+        // Выполняющееся задание провайдера останавливается вместе с запуском.
+        {
+            let state = app.state::<AppState>();
+            let runtime = state.providers();
+            crate::ai::AiService::new(state.database(), &runtime).cancel_for_run(&run_id)?;
+        }
         let result = with_service(&app, |service| {
             service.cancel_run(&meta(operation_id, expected_revision), &run_id)
         });
@@ -738,6 +758,6 @@ mod tests {
         assert_eq!(actual, expected);
         let unique: std::collections::HashSet<_> = registered.iter().collect();
         assert_eq!(unique.len(), registered.len(), "no duplicate registration");
-        assert_eq!(COMMANDS.len(), 64);
+        assert_eq!(COMMANDS.len(), 78);
     }
 }

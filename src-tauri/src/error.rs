@@ -15,6 +15,10 @@ pub enum ErrorCode {
     Blocked,
     Cancelled,
     Database,
+    /// Этап 9: провайдер (официальный CLI) недоступен или не подключён.
+    ProviderUnavailable,
+    /// Этап 9: официальный CLI требует входа — выполняется в самом CLI.
+    ReauthRequired,
     Unknown,
 }
 

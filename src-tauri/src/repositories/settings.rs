@@ -37,11 +37,16 @@ pub(crate) fn load_automation_rules(
             "stored automation rules contain a forbidden secret key",
         ));
     }
+    let saved_tasks = saved.pointer("/workflow/tasks").is_some();
     let mut merged = serde_json::to_value(defaults)
         .map_err(|error| BackendError::database(error.to_string()))?;
     merge_json(&mut merged, saved);
-    let rules: AutomationRulesDto = serde_json::from_value(merged)
+    let mut rules: AutomationRulesDto = serde_json::from_value(merged)
         .map_err(|error| BackendError::database(format!("invalid automation rules: {error}")))?;
+    if !saved_tasks {
+        // Настройки до этапа 9: провайдеры задач берутся из прежних ролей.
+        rules.workflow.tasks = crate::dto::AiTaskProvidersDto::from_roles(&rules.workflow.roles);
+    }
     validate_rules(&rules)?;
     Ok(rules)
 }

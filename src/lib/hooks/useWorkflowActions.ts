@@ -2,8 +2,12 @@ import { useCallback, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import {
+  AI_TASK_LABEL,
   bridge,
   BridgeError,
+  type AiConfirmInput,
+  type AiTask,
+  type TransportPreference,
   type HomeworkWorkflowStage,
   type ManualAnalysisInput,
   type ManualReviewInput,
@@ -40,7 +44,8 @@ export function useWorkflowActions(homeworkId: string, context: WorkflowContext 
   useBridgeEvent("review:completed", ({ run }) => {
     if (run.homeworkId !== homeworkId) return;
     const who = run.provenance === "manual" ? "Вручную" : providerName(run.provider);
-    toast.push({ tone: run.result?.verdict === "needs_fixes" ? "warn" : "ok", title: `${who}: ${RUN_KIND_LABEL[run.kind].toLowerCase()} — сохранено`, text: run.result?.summary });
+    const saved = run.provenance === "provider" ? "подтверждено вами" : "сохранено";
+    toast.push({ tone: run.result?.verdict === "needs_fixes" ? "warn" : "ok", title: `${who}: ${RUN_KIND_LABEL[run.kind].toLowerCase()} — ${saved}`, text: run.result?.summary });
   });
   useBridgeEvent("review:failed", ({ run, error }) => {
     if (run.homeworkId !== homeworkId || error.code === "cancelled") return;
@@ -216,9 +221,57 @@ export function useWorkflowActions(homeworkId: string, context: WorkflowContext 
     [guard, toast],
   );
 
+  // ── Этап 9: задания передачи провайдерам ──
+
+  const prepareJob = useCallback(
+    (runId: string, task: AiTask, transport: TransportPreference = "auto") => guard("ai-prepare", "Передача не подготовлена", () => bridge.prepareAiJob(runId, task, transport)),
+    [guard],
+  );
+
+  const sendJob = useCallback(
+    (jobId: string) =>
+      guard("ai-send", "Отправка не выполнена", async () => {
+        const job = await bridge.sendAiJob(jobId);
+        toast.push({ tone: "info", title: `Отправлено: ${job.adapterLabel ?? providerName(job.provider)}`, text: "Процесс официального CLI запущен. Ответ придёт на проверку — сам он ничего не изменит." });
+        return job;
+      }),
+    [guard, toast],
+  );
+
+  const cancelJob = useCallback((jobId: string) => guard("ai-cancel", "Остановка не выполнена", () => bridge.cancelAiJob(jobId)), [guard]);
+
+  const submitResponse = useCallback((jobId: string, text: string) => guard("ai-response", "Ответ не сохранён", () => bridge.submitAiResponse(jobId, text)), [guard]);
+
+  const importResponse = useCallback((jobId: string) => guard("ai-response", "Файл ответа не импортирован", () => bridge.importAiResponseFile(jobId)), [guard]);
+
+  const discardJob = useCallback((jobId: string) => guard("ai-discard", "Ответ не отклонён", () => bridge.discardAiJob(jobId)), [guard]);
+
+  const confirmAi = useCallback(
+    (jobId: string, task: AiTask, input: AiConfirmInput, supportingJobId?: string | null) =>
+      guard("ai-confirm", "Результат не подтверждён", async () => {
+        const r = await bridge.confirmAiResult(jobId, input, { ...options(), supportingJobId: supportingJobId ?? null });
+        // Анализ и проверки сообщает review:completed; промт исправлений — здесь.
+        if (task === "revision_prompt")
+          toast.push({
+            tone: "ok",
+            title: `${AI_TASK_LABEL[task]}: черновик сохранён`,
+            text: r.value.job.edited ? "С вашими правками — проверьте и зафиксируйте его" : "Проверьте и зафиксируйте его",
+          });
+        return r.value;
+      }),
+    [guard, options, toast],
+  );
+
   return {
     busy,
     options,
+    prepareJob,
+    sendJob,
+    cancelJob,
+    submitResponse,
+    importResponse,
+    discardJob,
+    confirmAi,
     startRun,
     prepareBundle,
     saveAnalysis,

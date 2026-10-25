@@ -80,17 +80,25 @@ export interface TauriIpcClient {
   confirmStyleDivergence: typeof ipc.confirmStyleDivergence;
   markReadyToSubmit: typeof ipc.markReadyToSubmit;
   transitionWorkflow: typeof ipc.transitionWorkflow;
+  getProviderStatuses: typeof ipc.getProviderStatuses;
+  checkProvider: typeof ipc.checkProvider;
+  connectProvider: typeof ipc.connectProvider;
+  disconnectProvider: typeof ipc.disconnectProvider;
+  openProviderApp: typeof ipc.openProviderApp;
+  listAiJobs: typeof ipc.listAiJobs;
+  getAiJob: typeof ipc.getAiJob;
+  prepareAiJob: typeof ipc.prepareAiJob;
+  sendAiJob: typeof ipc.sendAiJob;
+  cancelAiJob: typeof ipc.cancelAiJob;
+  submitAiResponse: typeof ipc.submitAiResponse;
+  importAiResponseFile: typeof ipc.importAiResponseFile;
+  discardAiJob: typeof ipc.discardAiJob;
+  confirmAiResult: typeof ipc.confirmAiResult;
 }
 
 /** Опции команды → аргументы IPC: новый UUID v4, если клиент не задал свой. */
 function command(options?: WorkflowCommandOptions): { operationId: string; revision: number | null } {
   return { operationId: options?.operationId ?? newOperationId(), revision: options?.expectedRevision ?? null };
-}
-
-function providerUnavailable(): Promise<never> {
-  return Promise.reject(
-    new BridgeError("provider_unavailable", "AI-адаптеры ещё не подключены (этап 9): выполните шаг вручную и сохраните результат"),
-  );
 }
 
 type EventSubscriber = typeof listenToBridgeEvent;
@@ -324,15 +332,29 @@ export class TauriDesktopBridge implements DesktopBridge {
   previewRoute: DesktopBridge["previewRoute"] = () => unsupportedBackend("Предпросмотр раскладки");
   routeFiles: DesktopBridge["routeFiles"] = () => unsupportedBackend("Раскладка файлов");
 
-  // ── Провайдеры: адаптеров нет (этап 9). Статус честный — «не подключён», ручной режим. ──
+  // ── Провайдеры и задания передачи (этап 9). Учётные данные не запрашиваются и не передаются. ──
 
+  getProviderStatuses: DesktopBridge["getProviderStatuses"] = () => this.ipcClient.getProviderStatuses();
   getProviderStatus: DesktopBridge["getProviderStatus"] = async (provider) => {
-    const status = (await this.ipcClient.getDashboard()).providers.find((item: ProviderStatus) => item.provider === provider);
+    const status = (await this.ipcClient.getProviderStatuses()).find((item: ProviderStatus) => item.provider === provider);
     if (!status) throw new BridgeError("not_found", "Провайдер не найден");
     return status;
   };
-  connectProvider: DesktopBridge["connectProvider"] = () => providerUnavailable();
-  disconnectProvider: DesktopBridge["disconnectProvider"] = () => providerUnavailable();
-  openProviderApp: DesktopBridge["openProviderApp"] = () => providerUnavailable();
+  checkProvider: DesktopBridge["checkProvider"] = (provider) => this.ipcClient.checkProvider(provider);
+  connectProvider: DesktopBridge["connectProvider"] = (provider) => this.ipcClient.connectProvider(provider);
+  disconnectProvider: DesktopBridge["disconnectProvider"] = (provider) => this.ipcClient.disconnectProvider(provider);
+  openProviderApp: DesktopBridge["openProviderApp"] = (provider) => this.ipcClient.openProviderApp(provider);
+  listAiJobs: DesktopBridge["listAiJobs"] = (homeworkId) => this.ipcClient.listAiJobs(homeworkId);
+  getAiJob: DesktopBridge["getAiJob"] = (jobId) => this.ipcClient.getAiJob(jobId);
+  prepareAiJob: DesktopBridge["prepareAiJob"] = (runId, task, transport = "auto") => this.ipcClient.prepareAiJob(runId, task, transport);
+  sendAiJob: DesktopBridge["sendAiJob"] = (jobId) => this.ipcClient.sendAiJob(jobId);
+  cancelAiJob: DesktopBridge["cancelAiJob"] = (jobId) => this.ipcClient.cancelAiJob(jobId);
+  submitAiResponse: DesktopBridge["submitAiResponse"] = (jobId, text) => this.ipcClient.submitAiResponse(jobId, text);
+  importAiResponseFile: DesktopBridge["importAiResponseFile"] = (jobId) => this.ipcClient.importAiResponseFile(jobId);
+  discardAiJob: DesktopBridge["discardAiJob"] = (jobId) => this.ipcClient.discardAiJob(jobId);
+  confirmAiResult: DesktopBridge["confirmAiResult"] = (jobId, input, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.confirmAiResult(operationId, jobId, options?.supportingJobId ?? null, input, revision);
+  };
   undoOperation: DesktopBridge["undoOperation"] = () => unsupportedBackend("Отмена операции");
 }

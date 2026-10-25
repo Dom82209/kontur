@@ -2100,3 +2100,27 @@
 .prov-badge { font-size: var(--t-xs); }
 .req__add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-width: 0; }
 .req__add .input { flex: 1 1 200px; min-width: 0; }
+
+/* ───────── Этап 9: передача провайдеру ───────── */
+.handoff { display: grid; gap: 14px; min-width: 0; }
+.handoff__tasks { display: flex; flex-wrap: wrap; gap: 6px; }
+.handoff__tasks .btn[data-active="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.handoff__empty { display: grid; gap: 8px; }
+.handoff__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.handoff__h { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-2); text-transform: uppercase; }
+.handoff__files { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.handoff__files li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.handoff__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.handoff__prompt { width: 100%; min-height: 220px; max-height: 42vh; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.handoff__answer { width: 100%; min-height: 120px; }
+.handoff__row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.handoff__consent { margin: 8px 0 0; font-size: 12px; }
+.handoff__issues { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 2px; font-size: 13px; }
+.handoff__raw, .handoff__log { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; background: var(--surface-2); }
+.handoff__raw summary, .handoff__log summary { cursor: pointer; font-size: 13px; }
+.handoff__raw pre { margin: 8px 0 0; max-height: 30vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.handoff__log ol { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; }
+.handoff__log li[data-level="error"] { color: var(--danger); }
+.handoff__log li[data-level="warn"] { color: var(--warn); }
+.runmon__job { margin-top: 6px; font-size: 12px; }
+.runmon[data-status="running"] { border-color: var(--accent-line); background: var(--accent-soft); }

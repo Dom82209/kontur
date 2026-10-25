@@ -16,7 +16,6 @@ const revision = async () => (await b.getWorkflow(HW))!.revision;
 
 beforeEach(async () => {
   b = new MockDesktopBridge({ latency: 0 });
-  // Mock-автор (демонстрационный адаптер) создаёт версию по переданному промту.
   await b.connectProvider("codex").catch(() => undefined); // первая попытка в mock падает
   await b.connectProvider("codex");
   await b.connectProvider("claude");
@@ -28,6 +27,13 @@ afterEach(() => {
   consoleError.mockRestore();
 });
 
+/** Этап 9: автор получает промт вручную; решение добавляется как новая версия. */
+async function handOffAndAddVersion(promptId: string) {
+  await b.sendPromptToAuthor(promptId);
+  const [file] = await b.getHomeworkCandidates(HW);
+  return (await b.createHomeworkVersion(HW, file!.id, { promptId })).value;
+}
+
 async function manualAnalysis() {
   const bundle = await b.prepareSourceBundle(HW, "analyze_materials", null);
   return b.runMaterialAnalysis(HW, bundle.id, { mode: "manual" });
@@ -38,6 +44,7 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
     const workflow = await b.getWorkflow(HW);
     expect(Object.keys(workflow!).sort()).toEqual(
       [
+        "aiJobs",
         "bundles",
         "homework",
         "iterations",
@@ -56,6 +63,7 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
       ].sort(),
     );
     expect(workflow!.stage).toBe(workflow!.homework.workflowStage);
+    expect(workflow!.providerMode).toBe("ai_jobs");
     expect(workflow!.readiness.revision).toBe(workflow!.revision);
     expect(await b.getWorkflow("missing")).toBeNull();
   });
@@ -89,11 +97,8 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
     await b.saveManualAnalysis(run.id, { summary: "итог", promptText: "промт" });
     const [prompt] = await b.getPrompts(HW);
     await b.commitPrompt(prompt!.id);
-    await b.sendPromptToAuthor(prompt!.id);
-
-    const workflow = (await b.getWorkflow(HW))!;
-    expect(workflow.stage).toBe("codex_review");
-    const version = workflow.homework.versions.at(-1)!;
+    const version = await handOffAndAddVersion(prompt!.id);
+    expect((await b.getWorkflow(HW))!.stage).toBe("codex_review");
     const bundle = await b.prepareSourceBundle(HW, "review_version", version.id);
     const review = await b.runVersionReview(HW, version.id, bundle.id, { mode: "manual" });
     expect(review.status).toBe("manual_handoff");
@@ -131,8 +136,7 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
     await b.saveManualAnalysis(run.id, { summary: "итог", promptText: "промт" });
     const [prompt] = await b.getPrompts(HW);
     await b.commitPrompt(prompt!.id);
-    await b.sendPromptToAuthor(prompt!.id);
-    const version = (await b.getWorkflow(HW))!.homework.versions.at(-1)!;
+    const version = await handOffAndAddVersion(prompt!.id);
     const bundle = await b.prepareSourceBundle(HW, "review_version", version.id);
     const review = await b.runVersionReview(HW, version.id, bundle.id, { mode: "manual" });
     await b.saveManualReviewResult(review.id, { verdict: "pass", summary: "Верно", correctness: "pass", taskFit: "pass", courseGrounding: "pass", teacher: "na", styleScore: 8 });

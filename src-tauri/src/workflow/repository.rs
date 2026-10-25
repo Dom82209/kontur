@@ -783,6 +783,23 @@ pub fn complete_run_manually(
     connection: &Connection,
     completion: &ManualCompletion<'_>,
 ) -> Result<(), AppError> {
+    complete_run(
+        connection,
+        completion,
+        Provenance::Manual,
+        "Результат сохранён вручную",
+    )
+}
+
+/// Завершение запуска результатом, который подтвердил пользователь.
+/// `provenance = provider` — результат получен от провайдера (CLI или ручная
+/// передача ответа) и подтверждён пользователем; `manual` — введён вручную.
+pub fn complete_run(
+    connection: &Connection,
+    completion: &ManualCompletion<'_>,
+    provenance: Provenance,
+    step: &str,
+) -> Result<(), AppError> {
     let result = json_text(completion.result, "review_runs.result_json")?;
     let missing = json_text(&completion.result.missing, "review_runs.missing_json")?;
     let critical = json_text(&completion.result.critical, "review_runs.critical_json")?;
@@ -792,8 +809,8 @@ pub fn complete_run_manually(
     )?;
     let changed = connection
         .execute(
-            "UPDATE review_runs SET status = 'completed', progress = 100, step = 'Результат сохранён вручную',
-                    finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), provenance = 'manual',
+            "UPDATE review_runs SET status = 'completed', progress = 100, step = ?12,
+                    finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), provenance = ?13,
                     verdict = ?2, correctness = ?3, task_fit = ?4, course_grounding = ?5,
                     teacher_status = ?6, style_score = ?7, missing_json = ?8, critical_json = ?9,
                     unsupported_json = ?10, result_json = ?11, error_message = NULL
@@ -810,6 +827,8 @@ pub fn complete_run_manually(
                 critical,
                 unsupported,
                 result,
+                step,
+                provenance.as_db_str(),
             ],
         )
         .map_err(|error| map_write_error(error, "Завершённый запуск неизменяем"))?;
@@ -1056,6 +1075,15 @@ pub fn insert_draft_prompt(
     connection: &Connection,
     prompt: &NewPrompt<'_>,
 ) -> Result<(), AppError> {
+    insert_draft_prompt_with(connection, prompt, Provenance::Manual)
+}
+
+/// Черновик промта с указанным происхождением текста.
+pub fn insert_draft_prompt_with(
+    connection: &Connection,
+    prompt: &NewPrompt<'_>,
+    provenance: Provenance,
+) -> Result<(), AppError> {
     let addresses = json_text(&prompt.addresses, "revision_prompts.addresses_json")?;
     let sources = json_text(&prompt.sources, "revision_prompts.sources_json")?;
     connection
@@ -1063,7 +1091,7 @@ pub fn insert_draft_prompt(
             "INSERT INTO revision_prompts(
                 id, homework_id, kind, text, created_by, provenance, status, based_on_version_id,
                 review_run_id, addresses_json, sources_json, sent_at, committed_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'manual', 'draft', ?6, ?7, ?8, ?9, NULL, NULL,
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?10, 'draft', ?6, ?7, ?8, ?9, NULL, NULL,
                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             params![
                 prompt.id,
@@ -1075,6 +1103,7 @@ pub fn insert_draft_prompt(
                 prompt.review_run_id,
                 addresses,
                 sources,
+                provenance.as_db_str(),
             ],
         )
         .map_err(|error| {
@@ -1630,9 +1659,11 @@ pub struct WorkflowSnapshot {
     pub style_confirmations: Vec<StyleConfirmationDto>,
     pub submission_package: Option<SubmissionPackageDto>,
     pub submission_receipt: Option<SubmissionReceiptDto>,
+    /// Задания передачи провайдерам (этап 9), без текстов.
+    pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
 }
 
-/// Фиксированная серия запросов (13), не зависящая от числа версий и запусков.
+/// Фиксированная серия запросов (14), не зависящая от числа версий и запусков.
 pub fn load_snapshot(
     connection: &Connection,
     homework_id: &str,
@@ -1647,6 +1678,7 @@ pub fn load_snapshot(
         style_confirmations: style_confirmations(connection, homework_id)?,
         submission_package: submission_package(connection, homework_id)?,
         submission_receipt: submission_receipt(connection, homework_id)?,
+        ai_jobs: crate::ai::store::jobs_for_homework(connection, homework_id)?,
         homework,
         bundles,
         bundle_changes,

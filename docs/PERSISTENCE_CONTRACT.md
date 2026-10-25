@@ -1,6 +1,6 @@
 # Контракт постоянного хранения
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, Rust DTO и SQLite schema version 6. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, `ai-types.ts`, Rust DTO и SQLite schema version 7. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей
 
@@ -28,7 +28,10 @@
 | `ExtractionBatchReport` | `ExtractionBatchReport` | v5 `extraction_batches.report_json` | — | весь отчёт | `replayed` при повторе | immutable row `extraction_batches` |
 | `CorpusSelection`, `CorpusPreview` | `CorpusSelectionDto`, `CorpusPreviewDto` | v5 `corpus_selections`, `corpus_selection_items` | `homeworkId` (общая подборка), `updatedAt` | — | `ready`, `problem`, корпус | обе таблицы + `extractions` |
 | `ExtractionSettings` | `ExtractionSettingsDto` | `app_settings.extraction = { ocrEnabled }` | — | весь тип | `ocr` и `limits` вычисляются | `app_settings` |
-| `StyleProfile`, `ProviderStatus` | пока JSON-настройки/будущий service DTO | `app_settings` хранит только безопасные preference/metadata | контрактные nullable-поля | профиль и безопасная metadata | runtime connection state не восстанавливается как подключённый | settings + будущий provider service |
+| `StyleProfile` | пока JSON-настройки | `app_settings` хранит только безопасные preference/metadata | контрактные nullable-поля | профиль | — | settings |
+| `ProviderStatus` | `workflow::dto::ProviderStatusDto` (+ `ai::model::ProviderCliDto`, `ProviderHandoffDto`) | v7: `app_settings.ai_providers = { codex: { cliEnabled }, claude: { cliEnabled } }` | — | только флаг | `availability`, `state`, `cli`, `handoff`, `tasks`, `roles` вычисляются при каждом запросе из флага, поиска CLI и кэша проверки в памяти | `app_settings` + `ProviderRuntime` (память процесса) |
+| `AiJob` | `ai::model::AiJobDto` | v7 `ai_jobs` | ответ, разбор, черновик, ошибка, времена, `edited`, `prompt_id` до соответствующего шага | `context_json`, `draft_json`, `issues_json`, `log_json` | `responseChars`; тексты не выдаются в списках | `ai_jobs` |
+| `WorkflowSettings.tasks` | `AiTaskProvidersDto` | `app_settings.automation_rules.workflow.tasks` | — | часть правил | у настроек до этапа 9 выводятся из ролей | `app_settings` |
 
 ## Enum-преобразования
 
@@ -160,3 +163,13 @@ v1 уже неизменяема. v2 добавляет недостающие �
 Мутации каждой сущности выполняются только командами `workflow_commands` поверх `WorkflowService`: SourceBundle — `create_source_bundle`; ReviewRun — `start_workflow_run`, `save_manual_analysis`, `save_manual_review`, `cancel_workflow_run`, `pin_workflow_run`; RevisionPrompt — `create_revision_prompt`, `update_prompt_draft`, `commit_prompt`, `hand_off_prompt` (и черновик первичного промта из `save_manual_analysis`); HomeworkVersion — `create_homework_version`, `select_homework_version`; TeacherComment/TeacherRequirement — `add_teacher_comments`, `add_teacher_requirement`, `resolve_teacher_requirement`; StyleConfirmation — `confirm_style_divergence`; Homework.workflowStage — только через state machine (`mark_ready_to_submit`, `transition_workflow` и переходы внутри команд). Чтение — `get_workflow`, `get_iterations`, `compare_versions`, `get_homework_candidates`, `get_dashboard`. SubmissionPackage и SubmissionReceipt на этапе 8 только читаются в составе агрегата.
 
 `operations.kind` дополнен `workflow_transition` и `confirm_style` (колонка без CHECK, миграция не нужна).
+
+## Задания передачи провайдерам (schema v7, этап 9)
+
+- v7 — одна транзакционная миграция; v1–v6 не изменялись. Единственная новая таблица — `ai_jobs`: аналога в старой схеме нет.
+- Колонки: `id`, `homework_id` (FK, `ON DELETE CASCADE`), `run_id` (FK на `review_runs`; триггер — запуск того же ДЗ), `task` (5 значений), `provider` (`codex`/`claude`), `transport` (`cli`/`manual_handoff`), `adapter_label` (≤ 120), `status` (7 значений), `include_prompt`, `prompt_text` (ровно показанный пользователю текст), `prompt_sha256` (64 hex), `prompt_chars`, `context_json` (`ContextSourceDto[]`: метка, id источника, имя, вид, SHA-256, объём, обрезка — без путей), `context_truncated`, `limit_chars`, `response_text`, `response_source` (`cli`/`paste`/`file`), `response_file_name` (только имя, без `/` и `\`), `response_sha256`, `response_truncated`, `parse_status`, `draft_json`, `issues_json`, `log_json`, `error_code`, `error_message` (≤ 2000), `exit_code`, `duration_ms`, `sent_at`, `finished_at`, `confirmed_at`, `edited`, `prompt_id` (FK на `revision_prompts`, `ON DELETE SET NULL`), `created_at`, `updated_at`.
+- CHECK: `confirmed_at` задан ровно у `confirmed`; у `response_ready` есть ответ; `response_source = cli` только у `transport = cli`.
+- Индексы: по ДЗ и времени, по запуску и статусу; частичный уникальный индекс — не больше одного `running` на запуск.
+- Триггеры: переданный текст, состав и привязки неизменяемы; закрытое задание (`confirmed`, `discarded`, `cancelled`, `failed`) неизменяемо; абсолютные пути (`/…`, `\…`, `~/`, `file:`, `/../`) запрещены в составе, пути `/Users/…`, `/home/…`, `file:` — в журнале, замечаниях и сообщении об ошибке; новые задания у отправленной работы запрещены.
+- Ответ провайдера и текст передачи — учебное содержание; хранятся только в локальной SQLite (как извлечённый текст этапа 7), не в Git и не в хранилище. Учётных данных провайдеров нет нигде.
+- `review_runs.provenance = provider` и `revision_prompts.provenance = provider` (значения существовали с v6) ставятся только командой `confirm_ai_result`; промт получает `provider`, только если его текст вернул провайдер.

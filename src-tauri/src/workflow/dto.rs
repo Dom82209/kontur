@@ -728,23 +728,33 @@ pub enum ProviderStateDto {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderAdapterDto {
+    /// Официальный CLI, явно подключённый пользователем.
     Cli,
     DesktopApp,
     Mock,
-    /// Адаптер ещё не реализован (этап 9): доступна только ручная передача.
+    /// Ручная передача: промт копируется пользователем, ответ вставляется.
+    ManualHandoff,
+    /// CLI подключён, но сейчас недоступен (удалён, не поддерживается).
     Unavailable,
 }
 
+/// Runtime-проекция состояния провайдера (этап 9). Не содержит секретов,
+/// аккаунта и абсолютных путей.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatusDto {
     pub provider: ProviderId,
     pub state: ProviderStateDto,
+    /// Отображаемая метка клиента («Codex CLI · 0.47.0»), никогда не аккаунт и не токен.
     pub account_label: Option<String>,
     pub last_checked_at: String,
     pub error_message: Option<String>,
     pub adapter: ProviderAdapterDto,
     pub roles: Vec<WorkflowRole>,
+    pub availability: crate::ai::model::ProviderAvailability,
+    pub tasks: Vec<crate::ai::model::AiTask>,
+    pub cli: crate::ai::model::ProviderCliDto,
+    pub handoff: crate::ai::model::ProviderHandoffDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -804,12 +814,15 @@ pub struct HomeworkWorkflowDto {
     pub iterations: Vec<HomeworkIterationDto>,
     pub submission_package: Option<SubmissionPackageDto>,
     pub submission_receipt: Option<SubmissionReceiptDto>,
-    /// На этапе 8 AI-адаптеров нет: каждый AI-шаг выполняется вручную.
+    /// Задания передачи провайдерам (этап 9) — без текстов промта и ответа.
+    pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
+    /// Этап 9: AI-шаги выполняются через задания передачи (официальный CLI
+    /// после явного подключения или ручная передача) с подтверждением результата.
     pub provider_mode: ProviderModeDto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderModeDto {
-    ManualHandoff,
+    AiJobs,
 }

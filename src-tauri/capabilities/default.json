@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder и внешний браузер (только allowlist LMS) вызываются только из Rust-команд «Контура». Извлечение текста (этап 7) читает материалы только в Rust. Рабочий цикл ДЗ (этап 8) меняется только командами backend; AI-адаптеры не подключены.",
+  "description": "Минимальные права главного окна. Файловая система, dialog и opener не открыты frontend: системные диалоги, Finder, внешний браузер (только allowlist LMS) и официальные приложения/сайты провайдеров вызываются только из Rust-команд «Контура». Извлечение текста (этап 7) читает материалы только в Rust. Рабочий цикл ДЗ (этап 8) меняется только командами backend. Этап 9: официальный CLI провайдера запускается только Rust-командой после явного подключения и отправки пользователем; shell и process-права окну не выдаются.",
   "windows": [
     "main"
   ],
@@ -71,6 +71,20 @@
     "allow-resolve-teacher-requirement",
     "allow-confirm-style-divergence",
     "allow-mark-ready-to-submit",
-    "allow-transition-workflow"
+    "allow-transition-workflow",
+    "allow-get-provider-statuses",
+    "allow-check-provider",
+    "allow-connect-provider",
+    "allow-disconnect-provider",
+    "allow-open-provider-app",
+    "allow-list-ai-jobs",
+    "allow-get-ai-job",
+    "allow-prepare-ai-job",
+    "allow-send-ai-job",
+    "allow-cancel-ai-job",
+    "allow-submit-ai-response",
+    "allow-import-ai-response-file",
+    "allow-discard-ai-job",
+    "allow-confirm-ai-result"
   ]
 }

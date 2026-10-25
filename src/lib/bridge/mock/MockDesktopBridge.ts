@@ -46,12 +46,14 @@ import {
   finalName,
   kindFromName,
   makeFile,
+  mockAvailability,
   nextFileId,
   pad2,
   subjectName,
   weekFolder,
   weekRange,
 } from "./data";
+import { AI_TASKS } from "../ai-types";
 import { plural } from "../../format";
 import { lmsUrlProblem } from "../../lmsLinks";
 import { newOperationId } from "../intake";
@@ -665,14 +667,31 @@ export class MockDesktopBridge implements DesktopBridge {
         return clone(s);
       }
     }
-    this.setProvider(s, { state: "connected", errorMessage: null, accountLabel: provider === "codex" ? "Codex CLI · локально" : "Claude (desktop)" });
+    this.setProvider(s, {
+      state: "connected",
+      errorMessage: null,
+      accountLabel: provider === "codex" ? "Codex CLI · демо" : "Claude Code CLI · демо",
+      cli: { ...s.cli, enabled: true, loggedIn: true, checkedAt: new Date().toISOString() },
+    });
     return clone(s);
+  }
+
+  async checkProvider(provider: ProviderId): Promise<ProviderStatus> {
+    const s = this.providers.find((p) => p.provider === provider)!;
+    await this.wait(300);
+    this.setProvider(s, { cli: { ...s.cli, checkedAt: new Date().toISOString() } });
+    return clone(s);
+  }
+
+  async getProviderStatuses(): Promise<ProviderStatus[]> {
+    await this.wait(100);
+    return clone(this.providers);
   }
 
   async disconnectProvider(provider: ProviderId): Promise<ProviderStatus> {
     const s = this.providers.find((p) => p.provider === provider)!;
     await this.wait((400));
-    this.setProvider(s, { state: "disconnected", accountLabel: null, errorMessage: null });
+    this.setProvider(s, { state: "disconnected", accountLabel: null, errorMessage: null, cli: { ...s.cli, enabled: false } });
     return clone(s);
   }
 
@@ -698,7 +717,8 @@ export class MockDesktopBridge implements DesktopBridge {
       this.rules = clone(next);
       for (const p of this.providers) {
         const roles = (Object.entries(this.rules.workflow.roles) as [keyof AutomationRules["workflow"]["roles"], ProviderId][]).filter(([, prov]) => prov === p.provider).map(([role]) => role);
-        if (roles.join() !== p.roles.join()) this.setProvider(p, { roles });
+        const tasks = AI_TASKS.filter((task) => this.rules.workflow.tasks[task] === p.provider);
+        if (roles.join() !== p.roles.join() || tasks.join() !== p.tasks.join()) this.setProvider(p, { roles, tasks });
       }
     };
     const op = await this.runOp(
@@ -780,6 +800,15 @@ export class MockDesktopBridge implements DesktopBridge {
   setPackageCheck: DesktopBridge["setPackageCheck"] = (...a) => this.workflow.setPackageCheck(...a);
   confirmSubmission: DesktopBridge["confirmSubmission"] = (...a) => this.workflow.confirmSubmission(...a);
   getSubmissionReceipt: DesktopBridge["getSubmissionReceipt"] = (...a) => this.workflow.getSubmissionReceipt(...a);
+  listAiJobs: DesktopBridge["listAiJobs"] = (...a) => this.workflow.listAiJobs(...a);
+  getAiJob: DesktopBridge["getAiJob"] = (...a) => this.workflow.getAiJob(...a);
+  prepareAiJob: DesktopBridge["prepareAiJob"] = (...a) => this.workflow.prepareAiJob(...a);
+  sendAiJob: DesktopBridge["sendAiJob"] = (...a) => this.workflow.sendAiJob(...a);
+  cancelAiJob: DesktopBridge["cancelAiJob"] = (...a) => this.workflow.cancelAiJob(...a);
+  submitAiResponse: DesktopBridge["submitAiResponse"] = (...a) => this.workflow.submitAiResponse(...a);
+  importAiResponseFile: DesktopBridge["importAiResponseFile"] = () => this.workflow.importAiResponseFile();
+  discardAiJob: DesktopBridge["discardAiJob"] = (...a) => this.workflow.discardAiJob(...a);
+  confirmAiResult: DesktopBridge["confirmAiResult"] = (...a) => this.workflow.confirmAiResult(...a);
 
   async revealInFinder(relativePath: string): Promise<void> {
     await this.wait(80);
@@ -868,6 +897,7 @@ export class MockDesktopBridge implements DesktopBridge {
 
   private setProvider(s: ProviderStatus, patch: Partial<ProviderStatus>): void {
     Object.assign(s, patch, { lastCheckedAt: new Date().toISOString() });
+    s.availability = mockAvailability(s.state);
     this.emitter.emit("provider:status-changed", { status: clone(s) });
   }
 

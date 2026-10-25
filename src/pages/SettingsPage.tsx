@@ -1,4 +1,4 @@
-import { BrainCircuit, Gauge, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun } from "lucide-react";
+import { BrainCircuit, Gauge, MessagesSquare, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun, Wand2, FileText } from "lucide-react";
 import { usePrefs } from "../app/preferences";
 import { DownloadsWatcherToggle } from "../components/domain/DownloadsWatcher";
 import { ExtractionSettingsPanel } from "../components/domain/ExtractionSettingsPanel";
@@ -7,7 +7,7 @@ import { ProviderCard } from "../components/domain/ProviderCard";
 import { SaveBar } from "../components/ui/SaveBar";
 import { Segmented } from "../components/ui/Segmented";
 import { ErrorState, SkeletonRows } from "../components/ui/States";
-import { bridge } from "../lib/bridge";
+import { bridge, type AiTask } from "../lib/bridge";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useRulesDraft } from "../lib/hooks/useRulesDraft";
 import { NAME_TOKENS, applyNamePattern } from "../lib/naming";
@@ -20,7 +20,7 @@ const PROVIDERS = [
 export function SettingsPage() {
   const prefs = usePrefs();
   const { rules, error, reload, dirty, saving, update, save, reset } = useRulesDraft();
-  const providers = useBridgeQuery(() => Promise.all([bridge.getProviderStatus("codex"), bridge.getProviderStatus("claude")]), [], ["provider:status-changed"]);
+  const providers = useBridgeQuery(() => bridge.getProviderStatuses(), [], ["provider:status-changed"]);
 
   if (error && !rules) return <ErrorState message={error} onRetry={() => void reload()} />;
 
@@ -131,7 +131,12 @@ export function SettingsPage() {
 
         <section className="settings__group">
           <h2 className="settings__h">Нейросети</h2>
-          <div className="settings__fields">{providers.data ? providers.data.map((p) => <ProviderCard key={p.provider} status={p} />) : <SkeletonRows count={2} />}</div>
+          <div className="settings__fields">
+            {providers.data ? providers.data.map((p) => <ProviderCard key={p.provider} status={p} />) : <SkeletonRows count={2} />}
+            <p className="field__hint">
+              Официальный CLI подключается только кнопкой «Подключить CLI» и только если он установлен и поддерживает безопасный неинтерактивный режим. Вход — в самом CLI (Терминал). Без CLI каждый шаг выполняется ручной передачей: промт копируется по кнопке, ответ вставляется в «Контур».
+            </p>
+          </div>
         </section>
 
         <section className="settings__group settings__group--wide">
@@ -144,11 +149,13 @@ export function SettingsPage() {
             <div className="workflow-settings">
               <div className="workflow-settings__roles">
                 {([
-                  ["analyst", "Анализ материалов", "Аналитик изучает материалы и создаёт первоначальный промт.", BrainCircuit],
-                  ["author", "Создание решения", "Автор создаёт решение по подготовленному промту.", PenLine],
-                  ["reviewer", "Проверка решения", "Проверяющий проверяет решение и формирует исправления.", ScanSearch],
-                ] as const).map(([role, label, hint, Icon]) => (
-                  <label className="workflow-role" key={role}>
+                  ["material_analysis", "Анализ материалов", "Изучает условие и материалы курса.", BrainCircuit],
+                  ["initial_prompt", "Первичный промт", "Составляет промт для автора по итогам анализа.", FileText],
+                  ["solution_review", "Проверка решения", "Проверяет версию по условию, материалам и стилю.", ScanSearch],
+                  ["revision_prompt", "Промт исправлений", "Формулирует исправления только по найденным проблемам.", Wand2],
+                  ["teacher_review", "Проверка комментариев преподавателя", "Сверяет версию с требованиями преподавателя.", MessagesSquare],
+                ] as const).map(([task, label, hint, Icon]) => (
+                  <label className="workflow-role" key={task}>
                     <span className="workflow-role__icon" aria-hidden><Icon /></span>
                     <span className="workflow-role__copy">
                       <span className="field__label">{label}</span>
@@ -157,13 +164,28 @@ export function SettingsPage() {
                     <select
                       className="select workflow-role__select"
                       aria-label={`${label}: провайдер`}
-                      value={rules.workflow.roles[role]}
-                      onChange={(e) => update((r) => ({ ...r, workflow: { ...r.workflow, roles: { ...r.workflow.roles, [role]: e.target.value as "codex" | "claude" } } }))}
+                      value={rules.workflow.tasks[task as AiTask]}
+                      onChange={(e) => update((r) => ({ ...r, workflow: { ...r.workflow, tasks: { ...r.workflow.tasks, [task]: e.target.value as "codex" | "claude" } } }))}
                     >
                       {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                     </select>
                   </label>
                 ))}
+                <label className="workflow-role">
+                  <span className="workflow-role__icon" aria-hidden><PenLine /></span>
+                  <span className="workflow-role__copy">
+                    <span className="field__label">Создание решения</span>
+                    <span className="field__hint">Решение создаётся в официальном приложении автора; «Контур» передаёт промт вручную и принимает файл как новую версию.</span>
+                  </span>
+                  <select
+                    className="select workflow-role__select"
+                    aria-label="Создание решения: провайдер"
+                    value={rules.workflow.roles.author}
+                    onChange={(e) => update((r) => ({ ...r, workflow: { ...r.workflow, roles: { ...r.workflow.roles, author: e.target.value as "codex" | "claude" } } }))}
+                  >
+                    {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                </label>
               </div>
               <label className="style-threshold">
                 <span className="style-threshold__copy">
@@ -192,7 +214,10 @@ export function SettingsPage() {
           </h2>
           <ul className="security">
             <li>
-              <strong>Пароли, cookies, токены и API-ключи «Контур» не хранит и не запрашивает.</strong> Вход в Codex и Claude выполняется в их официальных клиентах; приложение получает только статус подключения.
+              <strong>Пароли, cookies, токены и API-ключи «Контур» не хранит и не запрашивает.</strong> Вход в Codex и Claude выполняется в их официальных клиентах; приложение получает только статус подключения (код выхода проверки входа CLI, без её вывода).
+            </li>
+            <li>Учебные материалы уходят провайдеру только по вашей кнопке «Отправить» или «Скопировать промт» — после показа полного текста и списка файлов. Ответ AI применяется только после вашей проверки и подтверждения.</li>
+            <li>Официальный CLI запускается без shell, в пустом рабочем каталоге, с очищенным окружением; журнал запуска хранится без секретов, адресов почты и абсолютных путей.
             </li>
             <li>Веб-интерфейсы claude.ai и ChatGPT не встраиваются в приложение.</li>
             <li>Все файлы остаются в вашем хранилище Obsidian. Frontend не обращается к файловой системе напрямую — только через типизированный мост.</li>

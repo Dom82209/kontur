@@ -957,3 +957,9 @@
   box-shadow: var(--shadow-3);
   font-size: var(--t-sm);
 }
+
+/* Этап 9: состояние официального CLI в карточке провайдера; действия — отдельной строкой. */
+.provider__cli { margin-top: 4px; font-size: 12px; }
+.provider__action { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.provider:not(.provider--compact) { flex-wrap: wrap; }
+.provider:not(.provider--compact) .provider__action { flex: 1 1 100%; justify-content: flex-start; padding-left: 46px; }

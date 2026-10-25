@@ -32,6 +32,7 @@ const rules: AutomationRules = {
   confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false },
   workflow: {
     roles: { analyst: "codex", author: "claude", reviewer: "codex" },
+    tasks: { material_analysis: "codex", initial_prompt: "codex", solution_review: "codex", revision_prompt: "codex", teacher_review: "codex" },
     styleThreshold: 4,
     styleProfilePath: "ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
     requireTeacherReview: true,

@@ -1,4 +1,11 @@
 import type {
+  AiConfirmation,
+  AiConfirmInput,
+  AiJob,
+  AiTask,
+  ProviderId,
+  ProviderStatus,
+  TransportPreference,
   AssignmentLinkTarget,
   Dashboard,
   FileRef,
@@ -524,6 +531,94 @@ export function transitionWorkflow(
   expectedRevision: Revision,
 ): Promise<OperationResult<Homework>> {
   return call("transition_workflow", { operationId, homeworkId, to, reason, expectedRevision });
+}
+
+// ───────────── Этап 9: провайдеры и задания передачи ─────────────
+
+export function getProviderStatuses(): Promise<ProviderStatus[]> {
+  return call("get_provider_statuses");
+}
+
+export function checkProvider(provider: ProviderId): Promise<ProviderStatus> {
+  return call("check_provider", { provider });
+}
+
+export function connectProvider(provider: ProviderId): Promise<ProviderStatus> {
+  return call("connect_provider", { provider });
+}
+
+export function disconnectProvider(provider: ProviderId): Promise<ProviderStatus> {
+  return call("disconnect_provider", { provider });
+}
+
+export function openProviderApp(provider: ProviderId): Promise<void> {
+  return call("open_provider_app", { provider });
+}
+
+export function listAiJobs(homeworkId: string): Promise<AiJob[]> {
+  return call("list_ai_jobs", { homeworkId });
+}
+
+export function getAiJob(jobId: string): Promise<AiJob> {
+  return call("get_ai_job", { jobId });
+}
+
+export function prepareAiJob(runId: string, task: AiTask, transport: TransportPreference): Promise<AiJob> {
+  return call("prepare_ai_job", { runId, task, transport });
+}
+
+export function sendAiJob(jobId: string): Promise<AiJob> {
+  return call("send_ai_job", { jobId });
+}
+
+export function cancelAiJob(jobId: string): Promise<boolean> {
+  return call("cancel_ai_job", { jobId });
+}
+
+export function submitAiResponse(jobId: string, text: string): Promise<AiJob> {
+  return call("submit_ai_response", { jobId, text });
+}
+
+export function importAiResponseFile(jobId: string): Promise<AiJob | null> {
+  return call("import_ai_response_file", { jobId });
+}
+
+export function discardAiJob(jobId: string): Promise<AiJob> {
+  return call("discard_ai_job", { jobId });
+}
+
+export function confirmAiResult(
+  operationId: string,
+  jobId: string,
+  supportingJobId: string | null,
+  input: AiConfirmInput,
+  expectedRevision: Revision,
+): Promise<OperationResult<AiConfirmation>> {
+  return call("confirm_ai_result", { operationId, jobId, supportingJobId, input: confirmInputIpc(input), expectedRevision });
+}
+
+/** Точная форма подтверждения: необязательные поля ручного ввода заполняются явно. */
+function confirmInputIpc(input: AiConfirmInput): AiConfirmInput {
+  if (input.kind === "analysis") return { kind: "analysis", value: { summary: input.value.summary, promptText: input.value.promptText } };
+  if (input.kind === "prompt") return { kind: "prompt", value: { text: input.value.text } };
+  const v = input.value;
+  return {
+    kind: "review",
+    value: {
+      verdict: v.verdict,
+      summary: v.summary,
+      correctness: v.correctness,
+      taskFit: v.taskFit,
+      courseGrounding: v.courseGrounding,
+      teacher: v.teacher,
+      styleScore: v.styleScore,
+      styleReasons: v.styleReasons ?? [],
+      critical: (v.critical ?? []).map((f) => ({ criterion: f.criterion, text: f.text, location: f.location, evidence: f.evidence ?? [] })),
+      remarks: (v.remarks ?? []).map((f) => ({ criterion: f.criterion, text: f.text, location: f.location, evidence: f.evidence ?? [] })),
+      unsupportedClaims: v.unsupportedClaims ?? [],
+      missing: v.missing ?? [],
+    },
+  };
 }
 
 /** Преобразует DroppedItem в аргумент IPC; без sourcePath импорт не начинается. */

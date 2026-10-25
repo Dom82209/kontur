@@ -5,7 +5,7 @@ use crate::{
     domain::HomeworkWorkflowStage,
     dto::{
         ClassificationDto, HomeworkVersionDto, InboxFileDto, InboxStatus, OperationDto,
-        OperationKind, ProviderId,
+        OperationKind,
     },
     error::{AppError, ErrorCode},
     workflow::dto::{ReviewRunDto, SubmissionReceiptDto},
@@ -40,11 +40,16 @@ pub mod names {
     /// Этап 8: готовность к сдаче пересчитана после мутации.
     pub const HOMEWORK_READINESS_UPDATED: &str = "homework:readiness-updated";
 
+    /// Этап 9: прогресс задания передачи провайдеру (фаза, время, объём вывода).
+    pub const AI_JOB_PROGRESS: &str = "ai-job:progress";
+    /// Этап 9: задание изменилось (ответ получен, ошибка, отмена) — перечитать.
+    pub const AI_JOB_UPDATED: &str = "ai-job:updated";
+
     /// Служебные события native intake (не входят в `BridgeEvents`, слушает только Tauri adapter).
     pub const INTAKE_NATIVE_DROP: &str = "intake:native-drop";
     pub const INTAKE_DRAG_STATE: &str = "intake:drag-state";
 
-    pub const ALL: [&str; 20] = [
+    pub const ALL: [&str; 22] = [
         INBOX_FILE_ADDED,
         INBOX_CLASSIFICATION_UPDATED,
         OPERATION_PROGRESS,
@@ -65,6 +70,8 @@ pub mod names {
         HOMEWORK_UPDATED,
         HOMEWORK_REVISION_PROMPT_CREATED,
         HOMEWORK_READINESS_UPDATED,
+        AI_JOB_PROGRESS,
+        AI_JOB_UPDATED,
     ];
 }
 
@@ -178,48 +185,10 @@ pub struct OperationFailedPayload {
     pub error: AppError,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Error,
-    ReauthRequired,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderAdapter {
-    Cli,
-    DesktopApp,
-    Mock,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowRole {
-    Analyst,
-    Author,
-    Reviewer,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderStatusDto {
-    pub provider: ProviderId,
-    pub state: ProviderState,
-    pub account_label: Option<String>,
-    pub last_checked_at: String,
-    pub error_message: Option<String>,
-    pub adapter: ProviderAdapter,
-    pub roles: Vec<WorkflowRole>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatusChangedPayload {
-    pub status: ProviderStatusDto,
+    pub status: crate::workflow::dto::ProviderStatusDto,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -347,6 +316,8 @@ mod tests {
                 "homework:updated",
                 "homework:revision-prompt-created",
                 "homework:readiness-updated",
+                "ai-job:progress",
+                "ai-job:updated",
             ]
         );
         assert_eq!(names::INTAKE_NATIVE_DROP, "intake:native-drop");

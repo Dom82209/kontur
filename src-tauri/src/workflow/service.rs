@@ -23,6 +23,10 @@ use uuid::Uuid;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
+    ai::{
+        self,
+        model::{AiJobDto, AiTask, JobStatus, Transport},
+    },
     db::Database,
     domain::{HomeworkStage, HomeworkWorkflowStage as Stage, RequirementStatus, VersionAuthor},
     dto::{
@@ -41,13 +45,13 @@ use super::{
     bundle::{prepare_snapshot, write_snapshot, ContentVerifier},
     dto::{
         CriterionId, CriterionStatus, DashboardDto, EvidenceReferenceDto, FindingSeverity,
-        HomeworkIterationDto, HomeworkWorkflowDto, PromptKind, PromptStatus, ProviderModeDto,
-        ReadinessCheckId, ReadinessDto, RecommendedActionDto, RecommendedActionKind,
-        ReviewCriterionDto, ReviewFindingDto, ReviewMissingItemDto, ReviewRunDto, ReviewRunStatus,
-        ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto, StoredReviewResult,
-        StyleConfirmationDto, StyleDivergenceDto, StyleReasonDto, TeacherCommentDto,
-        TeacherCommentSource, TeacherRequirementDto, UnsupportedClaimDto, VersionComparisonDto,
-        WorkflowRole,
+        HomeworkIterationDto, HomeworkWorkflowDto, PromptKind, PromptStatus, Provenance,
+        ProviderModeDto, ReadinessCheckId, ReadinessDto, RecommendedActionDto,
+        RecommendedActionKind, ReviewCriterionDto, ReviewFindingDto, ReviewMissingItemDto,
+        ReviewRunDto, ReviewRunStatus, ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto,
+        StoredReviewResult, StyleConfirmationDto, StyleDivergenceDto, StyleReasonDto,
+        TeacherCommentDto, TeacherCommentSource, TeacherRequirementDto, UnsupportedClaimDto,
+        VersionComparisonDto, WorkflowRole,
     },
     projections,
     repository::{self, WorkflowSnapshot},
@@ -200,6 +204,7 @@ enum EntityRef {
     Comments { ids: Vec<String> },
     Requirement { id: String },
     Confirmation { id: String },
+    AiJob { id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +222,7 @@ enum Target<'a> {
     Prompt(&'a str),
     Version(&'a str),
     Requirement(&'a str),
+    AiJob(&'a str),
 }
 
 struct Spec {
@@ -322,11 +328,12 @@ fn role_for(kind: RunKind) -> WorkflowRole {
     }
 }
 
-fn provider_for(rules: &AutomationRulesDto, role: WorkflowRole) -> crate::dto::ProviderId {
-    match role {
-        WorkflowRole::Analyst => rules.workflow.roles.analyst,
-        WorkflowRole::Author => rules.workflow.roles.author,
-        WorkflowRole::Reviewer => rules.workflow.roles.reviewer,
+/// Основная AI-задача запуска: по ней выбирается провайдер (этап 9).
+pub fn task_for_run(kind: RunKind) -> AiTask {
+    match kind {
+        RunKind::AnalyzeMaterials => AiTask::MaterialAnalysis,
+        RunKind::ReviewVersion | RunKind::RevisionPrompt => AiTask::SolutionReview,
+        RunKind::ReviewTeacher => AiTask::TeacherReview,
     }
 }
 
@@ -454,6 +461,11 @@ fn resolve_homework(connection: &Connection, target: &Target<'_>) -> Result<Stri
             *id,
             "Требование не найдено",
         ),
+        Target::AiJob(id) => (
+            "SELECT homework_id FROM ai_jobs WHERE id = ?1",
+            *id,
+            "Задание не найдено",
+        ),
     };
     connection
         .query_row(sql, [id], |row| row.get(0))
@@ -522,8 +534,12 @@ impl<'a> WorkflowService<'a> {
         })
     }
 
-    pub fn dashboard(&self) -> Result<DashboardDto, AppError> {
-        projections::dashboard(self.database, time::OffsetDateTime::now_utc())
+    /// Главная. Статусы провайдеров вычисляет `AiService` (этап 9).
+    pub fn dashboard(
+        &self,
+        providers: Vec<super::dto::ProviderStatusDto>,
+    ) -> Result<DashboardDto, AppError> {
+        projections::dashboard(self.database, time::OffsetDateTime::now_utc(), providers)
     }
 
     // ── Общий транзакционный исполнитель ──
@@ -963,7 +979,7 @@ impl<'a> WorkflowService<'a> {
                         homework_id: &context.homework_id,
                         kind,
                         role,
-                        provider: provider_for(&context.rules, role),
+                        provider: context.rules.workflow.tasks.provider(task_for_run(kind)),
                         version_id,
                         source_bundle_id: bundle_id,
                         sources_used: &sources,
@@ -1038,84 +1054,7 @@ impl<'a> WorkflowService<'a> {
             &(run_id, input),
             Target::Run(run_id),
             |context| {
-                text_field(&input.summary, "Итог анализа", 20_000, true)?;
-                text_field(&input.prompt_text, "Промт для автора", 100_000, true)?;
-                let run = repository::run(context.connection, run_id)?;
-                if run.kind != RunKind::AnalyzeMaterials {
-                    return Err(BackendError::conflict("Этот запуск — не анализ материалов"));
-                }
-                if !run.status.is_open() {
-                    return Err(BackendError::conflict("Запуск уже завершён или отменён"));
-                }
-                let bundle_id = run
-                    .source_bundle_id
-                    .clone()
-                    .ok_or_else(|| BackendError::database("analysis run has no bundle"))?;
-                let (bundle, _) = repository::bundle(context.connection, &bundle_id)?;
-                let missing: Vec<&str> = bundle
-                    .missing
-                    .iter()
-                    .map(|item| item.label.as_str())
-                    .collect();
-                let result = StoredReviewResult {
-                    verdict: ReviewVerdict::Pass,
-                    summary: input.summary.trim().to_owned(),
-                    criteria: vec![ReviewCriterionDto {
-                        id: CriterionId::Completeness,
-                        label: "Комплектность материалов".to_owned(),
-                        status: if missing.is_empty() {
-                            CriterionStatus::Pass
-                        } else {
-                            CriterionStatus::Warn
-                        },
-                        note: if missing.is_empty() {
-                            "Все материалы на месте".to_owned()
-                        } else {
-                            missing.join(", ")
-                        },
-                    }],
-                    critical: Vec::new(),
-                    remarks: Vec::new(),
-                    unsupported_claims: Vec::new(),
-                    style: None,
-                    teacher_requirements: Vec::new(),
-                    recommended_action: RecommendedActionDto {
-                        kind: RecommendedActionKind::SendPromptToAuthor,
-                        label: "Зафиксировать промт и передать автору".to_owned(),
-                    },
-                    missing: Vec::new(),
-                };
-                repository::complete_run_manually(
-                    context.connection,
-                    &repository::ManualCompletion {
-                        run_id,
-                        result: &result,
-                        correctness: CriterionStatus::Na,
-                        task_fit: CriterionStatus::Na,
-                        course_grounding: CriterionStatus::Na,
-                        teacher: CriterionStatus::Na,
-                        style_score: None,
-                    },
-                )?;
-                let prompt_id = Uuid::new_v4().to_string();
-                repository::insert_draft_prompt(
-                    context.connection,
-                    &repository::NewPrompt {
-                        id: &prompt_id,
-                        homework_id: &context.homework_id,
-                        kind: PromptKind::Initial,
-                        text: input.prompt_text.trim(),
-                        created_by: VersionAuthor::User,
-                        based_on_version_id: None,
-                        review_run_id: Some(run_id),
-                        addresses: &[],
-                        sources: &run.sources_used,
-                    },
-                )?;
-                context
-                    .pending
-                    .push(Pending::ReviewCompleted(run_id.to_owned()));
-                context.pending.push(Pending::PromptCreated(prompt_id));
+                apply_analysis(context, run_id, input, &ResultOrigin::manual())?;
                 Ok(EntityRef::Run {
                     id: run_id.to_owned(),
                 })
@@ -1141,75 +1080,7 @@ impl<'a> WorkflowService<'a> {
             &(run_id, input),
             Target::Run(run_id),
             |context| {
-                validate_review_input(input)?;
-                let run = repository::run(context.connection, run_id)?;
-                if run.kind == RunKind::AnalyzeMaterials {
-                    return Err(BackendError::conflict(
-                        "Для анализа материалов сохраните итог анализа",
-                    ));
-                }
-                if !run.status.is_open() {
-                    return Err(BackendError::conflict("Запуск уже завершён или отменён"));
-                }
-                let version_id = run
-                    .version_id
-                    .clone()
-                    .ok_or_else(|| BackendError::database("review run has no version"))?;
-                let snapshot = context.snapshot()?;
-                let version = snapshot
-                    .homework
-                    .versions
-                    .iter()
-                    .find(|item| item.id == version_id)
-                    .ok_or_else(|| BackendError::database("review version is missing"))?;
-                let result =
-                    build_review_result(input, &run, version, &snapshot.teacher_requirements);
-                repository::complete_run_manually(
-                    context.connection,
-                    &repository::ManualCompletion {
-                        run_id,
-                        result: &result,
-                        correctness: input.correctness,
-                        task_fit: input.task_fit,
-                        course_grounding: input.course_grounding,
-                        teacher: input.teacher,
-                        style_score: input.style_score,
-                    },
-                )?;
-                context
-                    .pending
-                    .push(Pending::ReviewCompleted(run_id.to_owned()));
-                let needs_fixes = matches!(
-                    input.verdict,
-                    ReviewVerdict::NeedsFixes | ReviewVerdict::Blocked
-                );
-                let is_current =
-                    snapshot.homework.final_version_id.as_deref() == Some(version_id.as_str());
-                match (run.kind, needs_fixes, is_current) {
-                    (RunKind::ReviewVersion, true, true) => context.transition(
-                        Stage::NeedsFixes,
-                        &format!("Проверка {}: нужны исправления", version.label),
-                        false,
-                    )?,
-                    (RunKind::ReviewVersion, false, true)
-                        if context.rules.workflow.require_teacher_review =>
-                    {
-                        context.transition(
-                            Stage::TeacherReview,
-                            &format!(
-                                "Проверка {} пройдена — сверьте с комментариями преподавателя",
-                                version.label
-                            ),
-                            false,
-                        )?
-                    }
-                    (RunKind::ReviewTeacher, true, true) => context.transition(
-                        Stage::NeedsFixes,
-                        "Требования преподавателя выполнены не полностью",
-                        false,
-                    )?,
-                    _ => {}
-                }
+                apply_review(context, run_id, input, &ResultOrigin::manual())?;
                 Ok(EntityRef::Run {
                     id: run_id.to_owned(),
                 })
@@ -1237,68 +1108,174 @@ impl<'a> WorkflowService<'a> {
             &(review_run_id, edited_text),
             Target::Run(review_run_id),
             |context| {
-                let run = repository::run(context.connection, review_run_id)?;
-                if run.kind == RunKind::AnalyzeMaterials || run.status != ReviewRunStatus::Completed {
-                    return Err(BackendError::blocked("Промт исправлений создаётся по завершённой проверке"));
-                }
-                let version_id = run
-                    .version_id
-                    .clone()
-                    .ok_or_else(|| BackendError::database("review run has no version"))?;
-                let snapshot = context.snapshot()?;
-                if snapshot.homework.final_version_id.as_deref() != Some(version_id.as_str()) {
-                    return Err(BackendError::conflict(
-                        "Проверка относится не к текущей версии — выберите версию или проверьте её заново",
-                    ));
-                }
-                let version = snapshot
-                    .homework
-                    .versions
-                    .iter()
-                    .find(|item| item.id == version_id)
-                    .ok_or_else(|| BackendError::database("review version is missing"))?;
-                let stage = snapshot.homework.workflow_stage;
-                if !matches!(stage, Stage::NeedsFixes | Stage::TeacherReview) {
-                    return Err(BackendError::blocked(format!(
-                        "Промт исправлений недоступен на этапе «{}»",
-                        state_machine::stage_label(stage)
-                    )));
-                }
-                let (text, addresses) = revision_text(&run, version, &snapshot.teacher_requirements)?;
-                let text = match edited_text {
-                    Some(edited) => {
-                        text_field(edited, "Промт исправлений", 100_000, true)?;
-                        edited.trim().to_owned()
-                    }
-                    None => text,
-                };
-                let kind = if run.kind == RunKind::ReviewTeacher {
-                    PromptKind::Teacher
-                } else {
-                    PromptKind::Revision
-                };
-                let id = Uuid::new_v4().to_string();
-                repository::insert_draft_prompt(
-                    context.connection,
-                    &repository::NewPrompt {
-                        id: &id,
-                        homework_id: &context.homework_id,
-                        kind,
-                        text: &text,
-                        created_by: VersionAuthor::User,
-                        based_on_version_id: Some(&version_id),
-                        review_run_id: Some(review_run_id),
-                        addresses: &addresses,
-                        sources: &run.sources_used,
-                    },
+                let id = apply_revision_prompt(
+                    context,
+                    review_run_id,
+                    edited_text,
+                    VersionAuthor::User,
+                    Provenance::Manual,
                 )?;
-                if stage == Stage::TeacherReview {
-                    context.transition(Stage::NeedsFixes, "Создан промт исправлений по требованиям преподавателя", false)?;
-                }
-                context.pending.push(Pending::PromptCreated(id.clone()));
                 Ok(EntityRef::Prompt { id })
             },
             read_prompt,
+        )
+    }
+
+    // ── Подтверждение результата провайдера (этап 9) ──
+
+    /// Пользователь проверил ответ провайдера (возможно, поправил) и
+    /// подтверждает его. Результат применяется теми же проверками, что и
+    /// ручной ввод, но с provenance `provider`; задание закрывается с отметкой
+    /// о правке. Без этого шага ответ AI ничего не меняет в рабочем цикле.
+    pub fn confirm_ai_result(
+        &self,
+        meta: &CommandMeta,
+        job_id: &str,
+        supporting_job_id: Option<&str>,
+        input: &AiConfirmInput,
+    ) -> WorkflowResult<AiConfirmationDto> {
+        self.execute(
+            meta,
+            Spec {
+                command: "confirm_ai_result",
+                kind: OperationKind::AiRun,
+                title: "Результат провайдера подтверждён".to_owned(),
+            },
+            &(job_id, supporting_job_id, input),
+            Target::AiJob(job_id),
+            |context| {
+                let (job, include_prompt) = ai::store::job_with_flags(context.connection, job_id)?;
+                if job.status != JobStatus::ResponseReady {
+                    return Err(BackendError::conflict(
+                        "Подтвердить можно только полученный ответ, который ещё не применён",
+                    ));
+                }
+                let author = |provider: crate::dto::ProviderId| match provider {
+                    crate::dto::ProviderId::Codex => VersionAuthor::Codex,
+                    crate::dto::ProviderId::Claude => VersionAuthor::Claude,
+                };
+                let step = match job.transport {
+                    Transport::Cli => "Ответ провайдера (CLI) подтверждён пользователем",
+                    Transport::ManualHandoff => "Ответ провайдера (ручная передача) подтверждён пользователем",
+                };
+                let draft = job.draft.clone().unwrap_or(Value::Null);
+                let mut confirmed: Vec<(String, bool)> = Vec::new();
+                let mut prompt_id: Option<String> = None;
+                match (job.task, input) {
+                    (AiTask::MaterialAnalysis, AiConfirmInput::Analysis(analysis)) => {
+                        let supporting = match supporting_job_id {
+                            Some(id) => {
+                                let other = ai::store::job(context.connection, id)?;
+                                if other.run_id != job.run_id
+                                    || other.task != AiTask::InitialPrompt
+                                    || other.status != JobStatus::ResponseReady
+                                {
+                                    return Err(BackendError::conflict(
+                                        "Промт должен быть полученным ответом задачи «Первичный промт» того же запуска",
+                                    ));
+                                }
+                                Some(other)
+                            }
+                            None => None,
+                        };
+                        let (prompt_author, prompt_provenance, prompt_draft) = match &supporting {
+                            Some(other) => (
+                                author(other.provider),
+                                Provenance::Provider,
+                                other.draft.clone().unwrap_or(Value::Null),
+                            ),
+                            // Промт приписывается провайдеру, только если он его действительно вернул.
+                            None if draft
+                                .get("promptText")
+                                .and_then(Value::as_str)
+                                .is_some_and(|text| !text.trim().is_empty()) =>
+                            {
+                                (author(job.provider), Provenance::Provider, draft.clone())
+                            }
+                            None => (VersionAuthor::User, Provenance::Manual, Value::Null),
+                        };
+                        apply_analysis(
+                            context,
+                            &job.run_id,
+                            analysis,
+                            &ResultOrigin {
+                                provenance: Provenance::Provider,
+                                step,
+                                prompt_author,
+                                prompt_provenance,
+                            },
+                        )?;
+                        confirmed.push((
+                            job.id.clone(),
+                            text_differs(&draft, "summary", &analysis.summary),
+                        ));
+                        if let Some(other) = supporting {
+                            confirmed.push((
+                                other.id,
+                                text_differs(&prompt_draft, "promptText", &analysis.prompt_text),
+                            ));
+                        } else if include_prompt {
+                            confirmed[0].1 |= text_differs(&draft, "promptText", &analysis.prompt_text);
+                        }
+                    }
+                    (AiTask::SolutionReview | AiTask::TeacherReview, AiConfirmInput::Review(review)) => {
+                        if supporting_job_id.is_some() {
+                            return Err(BackendError::conflict("Для проверки дополнительный ответ не используется"));
+                        }
+                        apply_review(
+                            context,
+                            &job.run_id,
+                            review,
+                            &ResultOrigin {
+                                provenance: Provenance::Provider,
+                                step,
+                                prompt_author: VersionAuthor::User,
+                                prompt_provenance: Provenance::Manual,
+                            },
+                        )?;
+                        confirmed.push((job.id.clone(), review_differs(&draft, review)));
+                    }
+                    (AiTask::RevisionPrompt, AiConfirmInput::Prompt { text }) => {
+                        if supporting_job_id.is_some() {
+                            return Err(BackendError::conflict("Для промта дополнительный ответ не используется"));
+                        }
+                        let id = apply_revision_prompt(
+                            context,
+                            &job.run_id,
+                            Some(text),
+                            author(job.provider),
+                            Provenance::Provider,
+                        )?;
+                        prompt_id = Some(id);
+                        confirmed.push((job.id.clone(), text_differs(&draft, "text", text)));
+                    }
+                    (AiTask::InitialPrompt, _) => {
+                        return Err(BackendError::conflict(
+                            "Первичный промт подтверждается вместе с итогом анализа материалов",
+                        ))
+                    }
+                    _ => {
+                        return Err(BackendError::conflict(
+                            "Формат подтверждения не соответствует задаче",
+                        ))
+                    }
+                }
+                if prompt_id.is_none() && matches!(job.task, AiTask::MaterialAnalysis) {
+                    prompt_id = repository::prompts(context.connection, &context.homework_id)?
+                        .into_iter()
+                        .find(|prompt| prompt.review_run_id.as_deref() == Some(job.run_id.as_str()))
+                        .map(|prompt| prompt.id);
+                }
+                for (id, edited) in &confirmed {
+                    ai::store::confirm_job(context.connection, id, *edited, prompt_id.as_deref())?;
+                }
+                if job.task != AiTask::RevisionPrompt {
+                    let keep: Vec<&str> = confirmed.iter().map(|(id, _)| id.as_str()).collect();
+                    ai::store::close_other_jobs(context.connection, &job.run_id, &keep)?;
+                }
+                Ok(EntityRef::AiJob { id: job.id })
+            },
+            read_confirmation_outcome,
         )
     }
 
@@ -1930,6 +1907,355 @@ pub struct RevisionPromptCreatedPayload {
     pub based_on_version_id: Option<String>,
 }
 
+// ───────────────────────── Подтверждение ответа AI ─────────────────────────
+
+/// Что подтверждает пользователь: те же поля, что у ручного ввода.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum AiConfirmInput {
+    Analysis(ManualAnalysisInput),
+    Review(ManualReviewInput),
+    Prompt { text: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfirmationDto {
+    pub job: AiJobDto,
+    pub run: ReviewRunDto,
+    pub prompt: Option<RevisionPromptDto>,
+}
+
+fn read_confirmation_outcome(
+    connection: &Connection,
+    entity: &EntityRef,
+) -> Result<AiConfirmationDto, AppError> {
+    let EntityRef::AiJob { id } = entity else {
+        return Err(BackendError::database("unexpected entity"));
+    };
+    let job = ai::store::job(connection, id)?;
+    let run = repository::run(connection, &job.run_id)?;
+    let prompt = match &job.prompt_id {
+        Some(prompt_id) => Some(repository::prompt(connection, prompt_id)?),
+        None => None,
+    };
+    Ok(AiConfirmationDto { job, run, prompt })
+}
+
+/// Поправил ли пользователь текстовое поле черновика.
+fn text_differs(draft: &Value, field: &str, value: &str) -> bool {
+    draft.get(field).and_then(Value::as_str).map(str::trim) != Some(value.trim())
+}
+
+/// Поправил ли пользователь проверку: сравниваются все поля ручного ввода.
+fn review_differs(draft: &Value, input: &ManualReviewInput) -> bool {
+    let Ok(Value::Object(confirmed)) = serde_json::to_value(input) else {
+        return true;
+    };
+    confirmed.iter().any(|(key, value)| {
+        let original = draft.get(key).cloned().unwrap_or(Value::Null);
+        let empty = |item: &Value| match item {
+            Value::Null => true,
+            Value::Array(items) => items.is_empty(),
+            _ => false,
+        };
+        if empty(value) && empty(&original) {
+            return false;
+        }
+        match (value, &original) {
+            (Value::Array(left), Value::Array(right)) => {
+                // Сравниваются тексты: служебные поля (evidence) черновик не содержит.
+                let texts = |items: &Vec<Value>| -> Vec<String> {
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.get("text")
+                                .or_else(|| item.get("label"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .trim()
+                                .to_owned()
+                        })
+                        .collect()
+                };
+                texts(left) != texts(right)
+            }
+            (Value::String(left), Value::String(right)) => left.trim() != right.trim(),
+            _ => value != &original,
+        }
+    })
+}
+
+// ───────────────────────── Применение результатов ─────────────────────────
+
+/// Откуда пришёл результат шага: введён вручную или получен от провайдера и
+/// подтверждён пользователем (этап 9).
+pub(crate) struct ResultOrigin {
+    pub provenance: Provenance,
+    pub step: &'static str,
+    /// Кто написал текст первичного промта и его происхождение.
+    pub prompt_author: VersionAuthor,
+    pub prompt_provenance: Provenance,
+}
+
+impl ResultOrigin {
+    pub(crate) fn manual() -> Self {
+        Self {
+            provenance: Provenance::Manual,
+            step: "Результат сохранён вручную",
+            prompt_author: VersionAuthor::User,
+            prompt_provenance: Provenance::Manual,
+        }
+    }
+}
+
+fn apply_analysis(
+    context: &mut TxContext<'_>,
+    run_id: &str,
+    input: &ManualAnalysisInput,
+    origin: &ResultOrigin,
+) -> Result<(), AppError> {
+    text_field(&input.summary, "Итог анализа", 20_000, true)?;
+    text_field(&input.prompt_text, "Промт для автора", 100_000, true)?;
+    let run = repository::run(context.connection, run_id)?;
+    if run.kind != RunKind::AnalyzeMaterials {
+        return Err(BackendError::conflict("Этот запуск — не анализ материалов"));
+    }
+    if !run.status.is_open() {
+        return Err(BackendError::conflict("Запуск уже завершён или отменён"));
+    }
+    let bundle_id = run
+        .source_bundle_id
+        .clone()
+        .ok_or_else(|| BackendError::database("analysis run has no bundle"))?;
+    let (bundle, _) = repository::bundle(context.connection, &bundle_id)?;
+    let missing: Vec<&str> = bundle
+        .missing
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    let result = StoredReviewResult {
+        verdict: ReviewVerdict::Pass,
+        summary: input.summary.trim().to_owned(),
+        criteria: vec![ReviewCriterionDto {
+            id: CriterionId::Completeness,
+            label: "Комплектность материалов".to_owned(),
+            status: if missing.is_empty() {
+                CriterionStatus::Pass
+            } else {
+                CriterionStatus::Warn
+            },
+            note: if missing.is_empty() {
+                "Все материалы на месте".to_owned()
+            } else {
+                missing.join(", ")
+            },
+        }],
+        critical: Vec::new(),
+        remarks: Vec::new(),
+        unsupported_claims: Vec::new(),
+        style: None,
+        teacher_requirements: Vec::new(),
+        recommended_action: RecommendedActionDto {
+            kind: RecommendedActionKind::SendPromptToAuthor,
+            label: "Зафиксировать промт и передать автору".to_owned(),
+        },
+        missing: Vec::new(),
+    };
+    repository::complete_run(
+        context.connection,
+        &repository::ManualCompletion {
+            run_id,
+            result: &result,
+            correctness: CriterionStatus::Na,
+            task_fit: CriterionStatus::Na,
+            course_grounding: CriterionStatus::Na,
+            teacher: CriterionStatus::Na,
+            style_score: None,
+        },
+        origin.provenance,
+        origin.step,
+    )?;
+    let prompt_id = Uuid::new_v4().to_string();
+    repository::insert_draft_prompt_with(
+        context.connection,
+        &repository::NewPrompt {
+            id: &prompt_id,
+            homework_id: &context.homework_id,
+            kind: PromptKind::Initial,
+            text: input.prompt_text.trim(),
+            created_by: origin.prompt_author,
+            based_on_version_id: None,
+            review_run_id: Some(run_id),
+            addresses: &[],
+            sources: &run.sources_used,
+        },
+        origin.prompt_provenance,
+    )?;
+    context
+        .pending
+        .push(Pending::ReviewCompleted(run_id.to_owned()));
+    context.pending.push(Pending::PromptCreated(prompt_id));
+    Ok(())
+}
+
+fn apply_review(
+    context: &mut TxContext<'_>,
+    run_id: &str,
+    input: &ManualReviewInput,
+    origin: &ResultOrigin,
+) -> Result<(), AppError> {
+    validate_review_input(input)?;
+    let run = repository::run(context.connection, run_id)?;
+    if run.kind == RunKind::AnalyzeMaterials {
+        return Err(BackendError::conflict(
+            "Для анализа материалов сохраните итог анализа",
+        ));
+    }
+    if !run.status.is_open() {
+        return Err(BackendError::conflict("Запуск уже завершён или отменён"));
+    }
+    let version_id = run
+        .version_id
+        .clone()
+        .ok_or_else(|| BackendError::database("review run has no version"))?;
+    let snapshot = context.snapshot()?;
+    let version = snapshot
+        .homework
+        .versions
+        .iter()
+        .find(|item| item.id == version_id)
+        .ok_or_else(|| BackendError::database("review version is missing"))?;
+    let result = build_review_result(input, &run, version, &snapshot.teacher_requirements);
+    repository::complete_run(
+        context.connection,
+        &repository::ManualCompletion {
+            run_id,
+            result: &result,
+            correctness: input.correctness,
+            task_fit: input.task_fit,
+            course_grounding: input.course_grounding,
+            teacher: input.teacher,
+            style_score: input.style_score,
+        },
+        origin.provenance,
+        origin.step,
+    )?;
+    context
+        .pending
+        .push(Pending::ReviewCompleted(run_id.to_owned()));
+    let needs_fixes = matches!(
+        input.verdict,
+        ReviewVerdict::NeedsFixes | ReviewVerdict::Blocked
+    );
+    let is_current = snapshot.homework.final_version_id.as_deref() == Some(version_id.as_str());
+    match (run.kind, needs_fixes, is_current) {
+        (RunKind::ReviewVersion, true, true) => context.transition(
+            Stage::NeedsFixes,
+            &format!("Проверка {}: нужны исправления", version.label),
+            false,
+        )?,
+        (RunKind::ReviewVersion, false, true) if context.rules.workflow.require_teacher_review => {
+            context.transition(
+                Stage::TeacherReview,
+                &format!(
+                    "Проверка {} пройдена — сверьте с комментариями преподавателя",
+                    version.label
+                ),
+                false,
+            )?
+        }
+        (RunKind::ReviewTeacher, true, true) => context.transition(
+            Stage::NeedsFixes,
+            "Требования преподавателя выполнены не полностью",
+            false,
+        )?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn apply_revision_prompt(
+    context: &mut TxContext<'_>,
+    review_run_id: &str,
+    edited_text: Option<&str>,
+    created_by: VersionAuthor,
+    provenance: Provenance,
+) -> Result<String, AppError> {
+    let run = repository::run(context.connection, review_run_id)?;
+    if run.kind == RunKind::AnalyzeMaterials || run.status != ReviewRunStatus::Completed {
+        return Err(BackendError::blocked(
+            "Промт исправлений создаётся по завершённой проверке",
+        ));
+    }
+    let version_id = run
+        .version_id
+        .clone()
+        .ok_or_else(|| BackendError::database("review run has no version"))?;
+    let snapshot = context.snapshot()?;
+    if snapshot.homework.final_version_id.as_deref() != Some(version_id.as_str()) {
+        return Err(BackendError::conflict(
+            "Проверка относится не к текущей версии — выберите версию или проверьте её заново",
+        ));
+    }
+    let version = snapshot
+        .homework
+        .versions
+        .iter()
+        .find(|item| item.id == version_id)
+        .ok_or_else(|| BackendError::database("review version is missing"))?;
+    let stage = snapshot.homework.workflow_stage;
+    if !matches!(stage, Stage::NeedsFixes | Stage::TeacherReview) {
+        return Err(BackendError::blocked(format!(
+            "Промт исправлений недоступен на этапе «{}»",
+            state_machine::stage_label(stage)
+        )));
+    }
+    let (text, addresses) = revision_text(&run, version, &snapshot.teacher_requirements)?;
+    let text = match edited_text {
+        Some(edited) => {
+            text_field(edited, "Промт исправлений", 100_000, true)?;
+            edited.trim().to_owned()
+        }
+        None => text,
+    };
+    let kind = if run.kind == RunKind::ReviewTeacher {
+        PromptKind::Teacher
+    } else {
+        PromptKind::Revision
+    };
+    let id = Uuid::new_v4().to_string();
+    repository::insert_draft_prompt_with(
+        context.connection,
+        &repository::NewPrompt {
+            id: &id,
+            homework_id: &context.homework_id,
+            kind,
+            text: &text,
+            created_by,
+            based_on_version_id: Some(&version_id),
+            review_run_id: Some(review_run_id),
+            addresses: &addresses,
+            sources: &run.sources_used,
+        },
+        provenance,
+    )?;
+    if stage == Stage::TeacherReview {
+        context.transition(
+            Stage::NeedsFixes,
+            "Создан промт исправлений по требованиям преподавателя",
+            false,
+        )?;
+    }
+    context.pending.push(Pending::PromptCreated(id.clone()));
+    Ok(id)
+}
+
 // ───────────────────────── Сборка результатов ─────────────────────────
 
 fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> HomeworkWorkflowDto {
@@ -1960,7 +2286,8 @@ fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> Home
         style_confirmations: snapshot.style_confirmations,
         submission_package: snapshot.submission_package,
         submission_receipt: snapshot.submission_receipt,
-        provider_mode: ProviderModeDto::ManualHandoff,
+        ai_jobs: snapshot.ai_jobs,
+        provider_mode: ProviderModeDto::AiJobs,
     }
 }
 

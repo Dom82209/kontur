@@ -13,6 +13,7 @@ const EVENTS: BridgeEventName[] = [
   "homework:readiness-updated",
   "homework:revision-prompt-created",
   "submission:confirmed",
+  "ai-job:updated",
 ];
 
 /**
@@ -42,8 +43,8 @@ export function useHomeworkWorkflow(homeworkId: string) {
     pkg: part((w) => w.submissionPackage),
     receipt: part((w) => w.submissionReceipt),
     revision: workflow.data?.revision,
-    /** true — AI-адаптеров нет, каждый шаг выполняется вручную (Tauri, этап 8). */
-    manual: workflow.data?.providerMode === "manual_handoff",
+    /** Задания передачи провайдерам (этап 9), без текстов. */
+    aiJobs: part((w) => w.aiJobs),
     reloadAll: () => workflow.reload(),
   };
 }

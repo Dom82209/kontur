@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use crate::{
     domain::{HomeworkStage, HomeworkWorkflowStage, RequirementStatus},
-    dto::{AutomationRulesDto, HomeworkVersionDto, ProviderId},
+    dto::{AutomationRulesDto, HomeworkVersionDto},
     error::{AppError, BackendError},
     repositories::{hydrate_file, load_homeworks, ReadRepository},
 };
@@ -17,11 +17,10 @@ use super::{
     dto::{
         AcademicWeekDto, AutomationState, CriterionStatus, DashboardAutomationDto, DashboardDto,
         DashboardInboxDto, DeadlineDto, DoneTotalDto, GroundingComparisonDto, HomeworkIterationDto,
-        IterationStatus, ProviderAdapterDto, ProviderStateDto, ProviderStatusDto,
-        ReadinessCheckDto, ReadinessCheckId, ReadinessDto, ReviewFindingDto, ReviewRunDto,
-        ReviewRunStatus, ReviewVerdict, RunKind, SectionComparisonDto, SectionDiff,
-        StyleComparisonDto, TeacherComparisonDto, VersionComparisonDto, WeekProgressDto,
-        WeekProgressItemDto, WorkflowRole,
+        IterationStatus, ProviderStatusDto, ReadinessCheckDto, ReadinessCheckId, ReadinessDto,
+        ReviewFindingDto, ReviewRunDto, ReviewRunStatus, ReviewVerdict, RunKind,
+        SectionComparisonDto, SectionDiff, StyleComparisonDto, TeacherComparisonDto,
+        VersionComparisonDto, WeekProgressDto, WeekProgressItemDto,
     },
     repository::WorkflowSnapshot,
 };
@@ -533,39 +532,11 @@ pub fn academic_week(
     })
 }
 
-pub fn provider_statuses(rules: &AutomationRulesDto, now: &str) -> Vec<ProviderStatusDto> {
-    [ProviderId::Codex, ProviderId::Claude]
-        .into_iter()
-        .map(|provider| {
-            let roles = [
-                (WorkflowRole::Analyst, rules.workflow.roles.analyst),
-                (WorkflowRole::Author, rules.workflow.roles.author),
-                (WorkflowRole::Reviewer, rules.workflow.roles.reviewer),
-            ]
-            .into_iter()
-            .filter(|(_, assigned)| *assigned == provider)
-            .map(|(role, _)| role)
-            .collect();
-            ProviderStatusDto {
-                provider,
-                state: ProviderStateDto::Disconnected,
-                account_label: None,
-                last_checked_at: now.to_owned(),
-                error_message: Some(
-                    "AI-адаптер ещё не подключён: шаги выполняются вручную и сохраняются с отметкой «вручную»"
-                        .to_owned(),
-                ),
-                adapter: ProviderAdapterDto::Unavailable,
-                roles,
-            }
-        })
-        .collect()
-}
-
 /// Главная: фиксированный набор запросов, без извлечённого текста.
 pub fn dashboard(
     database: &crate::db::Database,
     now: time::OffsetDateTime,
+    providers: Vec<ProviderStatusDto>,
 ) -> Result<DashboardDto, AppError> {
     let today = format_time(now)?;
     let repository = ReadRepository::new(database);
@@ -648,7 +619,7 @@ pub fn dashboard(
             last_run_at: last_run.unwrap_or_else(|| today.clone()),
             pending: pending_inbox.len() as u32,
         },
-        providers: provider_statuses(&rules, &today),
+        providers,
     })
 }
 

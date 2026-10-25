@@ -183,12 +183,13 @@ describe("TauriDesktopBridge рабочего цикла", () => {
   it("не подменяет ошибки mock-данными и не делает fallback", async () => {
     const conflict = new BridgeError("conflict", "Данные ДЗ изменились — перечитайте состояние и повторите действие");
     const getWorkflow = vi.fn(async () => Promise.reject(conflict));
-    const bridge = new TauriDesktopBridge(client({ getWorkflow, commitPrompt: async () => Promise.reject(conflict) }));
+    const unavailable = new BridgeError("provider_unavailable", "Codex: официальный CLI не найден");
+    const bridge = new TauriDesktopBridge(client({ getWorkflow, commitPrompt: async () => Promise.reject(conflict), connectProvider: async () => Promise.reject(unavailable) }));
     await expect(bridge.commitPrompt("prompt", { expectedRevision: 1 })).rejects.toBe(conflict);
     await expect(bridge.getReviewRuns("hw")).rejects.toBe(conflict);
     await expect(bridge.getWorkflow("hw")).rejects.toBe(conflict);
     await expect(bridge.setSourceIncluded("b", "i", false)).rejects.toMatchObject({ code: "immutable" });
-    await expect(bridge.connectProvider("codex")).rejects.toMatchObject({ code: "provider_unavailable" });
+    await expect(bridge.connectProvider("codex")).rejects.toBe(unavailable);
     await expect(bridge.buildSubmissionPackage("hw")).rejects.toMatchObject({ code: "backend_unavailable" });
     await expect(bridge.importTeacherTranscript("hw", { text: "x", source: "chat", date: "2026-10-21" })).rejects.toMatchObject({ code: "backend_unavailable" });
   });
@@ -219,13 +220,11 @@ describe("TauriDesktopBridge рабочего цикла", () => {
     expect(getWorkflow).toHaveBeenCalledTimes(3);
   });
 
-  it("статус провайдера честный: адаптер недоступен, без mock", async () => {
-    const getDashboard = vi.fn(async () => ({
-      providers: [{ provider: "codex", state: "disconnected", accountLabel: null, lastCheckedAt: "now", errorMessage: "AI-адаптер ещё не подключён", adapter: "unavailable", roles: ["reviewer"] }],
-    }) as never);
-    const bridge = new TauriDesktopBridge(client({ getDashboard }));
+  it("статус провайдера берётся из backend-проекции, без mock", async () => {
+    const getProviderStatuses = vi.fn(async () => [{ provider: "codex", state: "disconnected", availability: "manual", adapter: "manual_handoff" }] as never);
+    const bridge = new TauriDesktopBridge(client({ getProviderStatuses }));
     const status = await bridge.getProviderStatus("codex");
-    expect(status).toMatchObject({ state: "disconnected", adapter: "unavailable" });
+    expect(status).toMatchObject({ availability: "manual", adapter: "manual_handoff" });
     await expect(bridge.getProviderStatus("claude")).rejects.toMatchObject({ code: "not_found" });
   });
 });

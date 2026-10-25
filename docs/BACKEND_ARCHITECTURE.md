@@ -1,8 +1,11 @@
 # Архитектура Rust backend
 
-Статус документа: этап 8B. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 9. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Рабочий цикл ДЗ (этап 8) и задания передачи провайдерам AI (этап 9) подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
 
 ## Модули
+
+- `ai` — этап 9 без зависимости от GUI: `locate` (поиск официального CLI в фиксированных каталогах с проверкой канонического пути, прав и владельца), `process` (запуск argv без shell, очищенное окружение, пустой рабочий каталог, stdin, лимиты вывода, тайм-аут и отмена группы процессов), `adapters` (Codex CLI `codex exec`, Claude Code `claude -p`: проверка версии/флагов/входа, аргументы, разбор вывода; трейты `AiAdapter`/`AdapterFactory` для fake-адаптеров в тестах), `context` (текст передачи с лимитом и пометками обрезки), `response` (разбор ответа в черновик: valid/partial/corrupt/empty), `redact` (журнал без секретов, почты и путей), `store` (SQL `ai_jobs` v7 и `app_settings.ai_providers`), `service` (`ProviderRuntime` в памяти процесса и `AiService`: статусы, подключение, подготовка, отправка в фоне, ручные ответы, отмена, восстановление после перезапуска).
+- `ai_commands` — тонкие Tauri-команды этапа 9, `AiEventSink` поверх `AppHandle`, фоновый поток отправки, диалог файла ответа и открытие официального приложения/сайта через `tauri-plugin-opener`.
 
 - `app_state` — безопасные долгоживущие зависимости приложения: каталог данных, домашний каталог (для политики корней), соединение SQLite, in-memory `IntakeGrants`, mutex последовательных импортов, in-memory `CandidateRegistry` и `WatcherService` (этап 6), флаги отмены `ExtractionJobs`, лимиты извлечения и лениво найденный OCR-движок (этап 7).
 - `commands` — тонкие Tauri-команды; они получают managed `AppState`, делегируют чтение query-слою и DB-only записи mutation-слою, а после commit доставляют события.
@@ -11,7 +14,7 @@
 - `domain` — доменные enum и входные структуры persistence.
 - `dto` — точные сериализуемые read-модели frontend-контракта с `camelCase`.
 - `error` — единый сериализуемый ответ `{ code, message }`.
-- `events` — константы 17 bridge-событий (12 исходных, 3 этапов 5–6, 2 этапа 7), camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
+- `events` — константы 22 bridge-событий (12 исходных, 3 этапов 5–6, 2 этапа 7, 3 этапа 8, 2 этапа 9), camelCase payload DTO и общий helper эмита через `tauri::Emitter`; DB-only команды используют его после commit.
 - `file_service` — типизированная граница безопасных roots/paths, hashing, read-only planning, atomic copy (в том числе компенсируемый `atomic_copy_committed`), read-only `inspect_stored_file`, backup и undo validation; все операции внутри корней fd-relative (`fd.rs`), test-only race hooks в `hooks.rs`; не зависит от GUI.
 - `intake` — этап 5 без зависимости от GUI: управляемые каталоги (`RootsService`), безопасные имена и MIME, `IntakeGrants`, `InboxImporter` с дедупликацией, компенсацией и идемпотентностью, абстракция `FilePicker`, SQL-граница `store`.
 - `lms` — этап 6 без зависимости от GUI: `zip_safe` (строгий парсер ZIP и ограниченная распаковка), `classify` (классификация по путям), `export` (предпросмотр и импорт экспорта через `InboxImporter`), `watcher` (чистый `DownloadScanner`, `WatcherCore`, фоновый `WatcherService`), `candidates`, `links` (allowlist LMS), `store` (SQL этапа 6).
@@ -32,7 +35,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `6`. Неизменяемые v1–v5 и добавочная v6 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `7`. Неизменяемые v1–v6 и добавочная v7 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
 
 Схема содержит таблицы:
 
@@ -46,7 +49,8 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `operations`, `operation_results` (v3);
 - `download_seen` (v4);
 - `extractions`, `material_extractions`, `extraction_batches`, `corpus_selections`, `corpus_selection_items` (v5);
-- `style_confirmations` (v6).
+- `style_confirmations` (v6);
+- `ai_jobs` (v7).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 
@@ -189,7 +193,7 @@ Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` ге
 
 Каждая мутация: UUID v4 `operationId` и SHA-256 отпечаток запроса → повтор с тем же id и запросом возвращает сохранённый итог (`operation_results.kind = workflow`) без действий и событий, тот же id с другим запросом — `conflict`, id завершившейся ошибкой операции — `conflict` → транзакция: операция `running` с `homework_id` → проверка «не отправлено» и `expectedRevision` (устаревшая — `conflict` с просьбой перечитать) → проверки состояния и state machine → запись → `revision + 1` → итог → `completed`. Любая ошибка откатывает всю транзакцию и записывает одну отдельную `failed`-операцию (без секретов и путей). Одновременные команды на одной ревизии дают одного победителя. События строятся только после commit из перечитанного состояния.
 
-Реальных AI-адаптеров нет. Запуск получает `waiting_for_provider` (режим `provider`) или `manual_handoff` (режим `manual`); результат сохраняет пользователь с provenance `manual`. Одновременно у ДЗ может быть только один незавершённый запуск. Набор источников запуска должен быть того же вида, полным и неизменившимся; проверяется только текущая выбранная версия. Применённый порог стиля берётся из текущих настроек и сохраняется в запуске.
+Запуск получает `waiting_for_provider` (режим `provider`) или `manual_handoff` (режим `manual`); результат либо вводит пользователь (provenance `manual`), либо он приходит заданием передачи этапа 9 и применяется командой `confirm_ai_result` после подтверждения (provenance `provider`). Провайдер запуска определяется задачей (`AutomationRules.workflow.tasks`). Одновременно у ДЗ может быть только один незавершённый запуск. Набор источников запуска должен быть того же вида, полным и неизменившимся; проверяется только текущая выбранная версия. Применённый порог стиля берётся из текущих настроек и сохраняется в запуске.
 
 ### IPC-команды этапа 8
 
@@ -216,11 +220,29 @@ Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` ге
 | `mark_ready_to_submit { operationId, homeworkId, noTeacherComments, expectedRevision }` | `markReadyToSubmit` | переход через state machine |
 | `transition_workflow { operationId, homeworkId, to, reason, expectedRevision }` | `transitionWorkflow` | допустимый переход (кроме «Готово к сдаче» и «Отправлено») |
 
-Capability содержит ровно 64 команды; тесты сверяют `ipc_commands::COMMANDS` с capability и с `generate_handler!`.
+Capability содержит ровно 78 команд (64 до этапа 9 + 14 этапа 9); тесты сверяют `ipc_commands::COMMANDS` с capability и с `generate_handler!`.
 
 ### События
 
 После commit, в порядке: доменные (`homework:version-created`, `review:completed`, `homework:revision-prompt-created`), `workflow:stage-changed` для каждого перехода, `homework:updated { homeworkId, revision, stage, reason, operationId }`, `homework:readiness-updated { homeworkId, ready, blockers, revision }`, `operation:progress`, `operation:completed`. Ошибка — только `operation:failed`. Повтор — без событий. Имена `workflow:stage-changed`, `review:completed` и `homework:version-created` существовали в контракте и сохранены (вместо `homework:workflow-stage-changed` и `homework:review-completed`). Payload — camelCase, только ID и короткие поля, без абсолютных путей и текста извлечения. Ошибка доставки события не откатывает сохранённое: команда возвращает `unknown` с просьбой перечитать состояние.
+
+## Провайдеры AI — этап 9
+
+| Команда | Назначение |
+|---|---|
+| `get_provider_statuses` | Runtime-проекция обоих провайдеров (лениво проверяет уже подключённый CLI один раз за сеанс) |
+| `check_provider { provider }` | Проверка CLI: версия, флаги, вход (код выхода) → `provider:status-changed` |
+| `connect_provider { provider }`, `disconnect_provider { provider }` | Явное подключение/отключение официального CLI (флаг `cliEnabled`) |
+| `open_provider_app { provider }` | Открыть официальное приложение (если установлено) или сайт — фиксированные адреса |
+| `list_ai_jobs { homeworkId }`, `get_ai_job { jobId }` | Задания ДЗ без текстов / задание целиком |
+| `prepare_ai_job { runId, task, transport }` | Текст передачи и состав (ничего не отправляет) |
+| `send_ai_job { jobId }` | Явная отправка в подключённый CLI; процесс в фоне, события `ai-job:progress`/`ai-job:updated` |
+| `cancel_ai_job { jobId }` | Остановка (убивается группа процессов) |
+| `submit_ai_response { jobId, text }`, `import_ai_response_file { jobId }` | Ответ ручной передачи: вставка или файл (≤ 2 МБ, UTF-8, без symlink) |
+| `discard_ai_job { jobId }` | Отклонить ответ |
+| `confirm_ai_result { operationId, jobId, supportingJobId, input, expectedRevision }` | Транзакция `WorkflowService`: подтверждённый результат с provenance `provider` |
+
+`cancel_workflow_run` сначала останавливает задания шага. При старте приложения `recover_interrupted` помечает «выполняющиеся» задания `failed` (`interrupted`). Ревизию ДЗ меняет только подтверждение; промежуточные статусы запуска (`running` во время CLI) ревизию не меняют. Подробно — `IMPLEMENTATION_STATUS.md`, раздел этапа 9.
 
 ## Health check
 
@@ -236,4 +258,4 @@ Tauri-команда `backend_health` проверяет доступность 
 
 React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` по умолчанию создаёт `MockDesktopBridge`; `TauriDesktopBridge` целиком включается только флагом разработчика `VITE_KONTUR_BRIDGE=tauri`. Hybrid bridge запрещён.
 
-Дальше — классификация обычных файлов и раскладка по предметам, применение backup/undo, provider adapters и построение `SourceBundle` из подборки этапа 7, AI-интеграции и immutable submission snapshot. Отправка работ в LMS остаётся ручной.
+Дальше — классификация обычных файлов и раскладка по предметам, применение backup/undo и immutable submission snapshot (этап 10). Отправка работ в LMS остаётся ручной.

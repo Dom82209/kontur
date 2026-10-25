@@ -1,12 +1,12 @@
 import { motion } from "motion/react";
-import { ArrowLeft, ArrowRight, BrainCircuit, ClipboardPen, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, Pin, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, BrainCircuit, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, Pin, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
 import { useOps } from "../app/operations";
 import { useToast } from "../app/toasts";
 import { IterationChain } from "../components/domain/IterationChain";
-import { ManualResultDialog } from "../components/domain/ManualResultDialog";
+import { AiStepActions } from "../components/domain/AiStepActions";
 import { PromptBox } from "../components/domain/PromptBox";
 import { ReviewResultView } from "../components/domain/ReviewResultView";
 import { isOpenRun, RunMonitor } from "../components/domain/RunMonitor";
@@ -35,7 +35,7 @@ const DEFAULT_REASON: Record<HomeworkWorkflowStage, string> = {
   materials_collected: "Проверьте материалы и запустите анализ — получится первичный промт.",
   codex_analysis: "Идёт анализ материалов.",
   prompt_ready: "Промт готов — передайте его автору или скопируйте.",
-  claude_solving: "Автор создаёт решение. Версия появится в «02 Работа».",
+  claude_solving: "Промт передан автору. Получите решение в официальном приложении и добавьте его как новую версию.",
   codex_review: "Новая версия ждёт проверки.",
   needs_fixes: "Проверка нашла проблемы — нужен промт исправлений.",
   teacher_review: "Проверка пройдена. Сверьте работу с комментариями преподавателя.",
@@ -52,12 +52,11 @@ export function HomeworkDetailPage() {
   const wf = useHomeworkWorkflow(homeworkId);
   const actions = useWorkflowActions(homeworkId, { revision: wf.revision, reload: wf.reloadAll });
   const rules = useBridgeQuery(() => bridge.getAutomationRules(), [], ["operation:completed"]);
-  const providers = useBridgeQuery(() => Promise.all([bridge.getProviderStatus("codex"), bridge.getProviderStatus("claude")]), [], ["provider:status-changed", "operation:completed"]);
+  const providers = useBridgeQuery(() => bridge.getProviderStatuses(), [], ["provider:status-changed", "operation:completed"]);
   const h = wf.homework.data;
 
   const [tab, setTabState] = useState<Tab | null>((params.get("tab") as Tab | null) ?? null);
   const [reason, setReason] = useState<string | null>(null);
-  const [manualRun, setManualRun] = useState<ReviewRun | null>(null);
   const [promptEdit, setPromptEdit] = useState<string | null>(null);
   const [compare, setCompare] = useState<string[]>([]);
   const [reviewVersion, setReviewVersion] = useState<string | null>(null);
@@ -71,18 +70,21 @@ export function HomeworkDetailPage() {
   });
 
   // Снимки источников живут в агрегате. Только демонстрационный mock собирает
-  // набор при первом открытии; в Tauri снимок создаётся явным действием.
+  // набор при первом открытии; в desktop-режиме снимок создаётся явным действием.
+  const demo = bridge.kind === "mock";
   const bundles = wf.workflow.data?.bundles ?? [];
   const bundle = [...bundles].reverse().find((b) => b.purpose === "analyze_materials") ?? bundles[bundles.length - 1] ?? null;
   const prepared = useRef<string | null>(null);
   useEffect(() => {
-    if (!wf.workflow.data || wf.manual || bundles.length > 0 || prepared.current === homeworkId) return;
+    if (!wf.workflow.data || !demo || bundles.length > 0 || prepared.current === homeworkId) return;
     prepared.current = homeworkId;
     void bridge.prepareSourceBundle(homeworkId, "analyze_materials").catch(() => undefined);
-  }, [homeworkId, wf.workflow.data, wf.manual, bundles.length]);
+  }, [homeworkId, wf.workflow.data, demo, bundles.length]);
 
   const runs = wf.runs.data ?? [];
   const activeRun = runs.find(isOpenRun) ?? null;
+  const jobs = wf.aiJobs.data ?? [];
+  const activeJob = activeRun ? [...jobs].reverse().find((j) => j.runId === activeRun.id) ?? null : null;
   const latest = h?.versions[h.versions.length - 1] ?? null;
   const current = h?.versions.find((v) => v.id === h.finalVersionId) ?? latest;
   const selectedVersionId = reviewVersion ?? current?.id ?? null;
@@ -109,17 +111,18 @@ export function HomeworkDetailPage() {
   const locked = h.workflowStage === "submitted";
   const deadline = formatDeadline(h.deadline);
   const author = rules.data ? providerName(rules.data.workflow.roles.author) : "автор";
-  const reviewer = rules.data ? providerName(rules.data.workflow.roles.reviewer) : "проверяющий";
-  const analyst = rules.data ? providerName(rules.data.workflow.roles.analyst) : "аналитик";
-  const roleConnected = (role: "analyst" | "author" | "reviewer") => {
-    const provider = rules.data?.workflow.roles[role];
-    return !!provider && providers.data?.find((p) => p.provider === provider)?.state === "connected";
-  };
-  /** Без подключённого провайдера шаг выполняется вручную (manual_handoff), а не изображается AI. */
-  const manual = wf.manual;
-  const modeFor = (role: "analyst" | "author" | "reviewer") => (manual || !roleConnected(role) ? "manual" : "provider");
-  const run = (kind: RunKind, role: "analyst" | "reviewer", versionId: string | null, b = kind === "analyze_materials" ? bundle : null) =>
-    actions.startRun(kind, versionId, b && b.complete && b.purpose === kind && (kind === "analyze_materials" || b.versionId === versionId) ? b : null, modeFor(role));
+  const reviewer = rules.data ? providerName(rules.data.workflow.tasks.solution_review) : "проверяющий";
+  const analyst = rules.data ? providerName(rules.data.workflow.tasks.material_analysis) : "аналитик";
+  /**
+   * Этап 9: шаг всегда начинается одинаково — запуск фиксирует снимок источников и
+   * ждёт; передача провайдеру (CLI или вручную) или ручной ввод выбираются в мониторе.
+   */
+  const run = (kind: RunKind, versionId: string | null, b = kind === "analyze_materials" ? bundle : null) =>
+    actions.startRun(kind, versionId, b && b.complete && b.purpose === kind && (kind === "analyze_materials" || b.versionId === versionId) ? b : null, "provider");
+  const afterSaved = (r: ReviewRun) => setTab(r.kind === "analyze_materials" ? "cycle" : r.kind === "review_teacher" ? "teacher" : "review");
+  const stepActions = (r: ReviewRun) => (
+    <AiStepActions run={r} jobs={jobs} rules={rules.data} providers={providers.data} actions={actions} onSaved={afterSaved} />
+  );
   const transitions = (wf.workflow.data?.transitions ?? []).filter((t) => t.allowed && t.to !== "ready_to_submit" && t.to !== "submitted");
   const finalExt = (finalTarget?.files[0]?.name ?? latest?.fileName ?? ".pdf").split(".").pop();
   const cycle = Math.max(1, h.versions.length);
@@ -168,11 +171,7 @@ export function HomeworkDetailPage() {
     }
   };
 
-  const handoff = activeRun && (activeRun.status === "waiting_for_provider" || activeRun.status === "manual_handoff") ? (
-    <button className="btn btn--sm btn--primary" disabled={!!actions.busy} onClick={() => setManualRun(activeRun)}>
-      <ClipboardPen /> Ввести результат вручную
-    </button>
-  ) : undefined;
+  const handoff = activeRun && activeJob?.status !== "running" && (activeRun.status === "waiting_for_provider" || activeRun.status === "manual_handoff") ? stepActions(activeRun) : undefined;
 
   const promptActions = (p: NonNullable<typeof pendingPrompt>) =>
     p.status === "draft" ? (
@@ -188,10 +187,10 @@ export function HomeworkDetailPage() {
       </>
     ) : (
       <>
-        <button className="btn btn--primary btn--sm" disabled={!!actions.busy || !!activeRun} onClick={() => void actions.sendPrompt(p.id, modeFor("author") === "manual")}>
-          <Send /> {modeFor("author") === "manual" ? "Отметить: передан автору" : `Передать ${author}`}
+        <button className="btn btn--primary btn--sm" disabled={!!actions.busy || !!activeRun} onClick={() => void actions.sendPrompt(p.id, true)}>
+          <Send /> Отметить: передан автору
         </button>
-        {!manual && rules.data && (
+        {rules.data && (
           <button className="btn btn--sm" onClick={() => void actions.openApp(rules.data!.workflow.roles.author)}>
             <ExternalLink /> Открыть {author}
           </button>
@@ -210,8 +209,8 @@ export function HomeworkDetailPage() {
     switch (h.workflowStage) {
       case "materials_collected":
         return (
-          <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("analyze_materials", "analyst", null)}>
-            <BrainCircuit /> {modeFor("analyst") === "manual" ? "Начать анализ вручную" : `Анализ · ${analyst}`}
+          <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("analyze_materials", null)}>
+            <BrainCircuit /> Анализ · {analyst}
           </button>
         );
       case "codex_analysis":
@@ -220,13 +219,26 @@ export function HomeworkDetailPage() {
         if (pendingPrompt) return pendingPrompt.status === "draft" ? <button className="btn btn--primary" onClick={() => setTab("cycle")}>Проверить и зафиксировать промт <ArrowRight /></button> : promptActions(pendingPrompt);
         if (h.workflowStage === "needs_fixes" && fixSource)
           return (
-            <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void actions.createPrompt(fixSource.id)}>
-              <Wand2 /> Создать промт исправлений
-            </button>
+            <>
+              <AiStepActions
+                run={fixSource}
+                task="revision_prompt"
+                handoffOnly
+                label={`Промт исправлений · ${rules.data ? providerName(rules.data.workflow.tasks.revision_prompt) : "провайдер"}`}
+                jobs={jobs}
+                rules={rules.data}
+                providers={providers.data}
+                actions={actions}
+                onSaved={() => setTab("cycle")}
+              />
+              <button className="btn btn--sm" disabled={!!actions.busy} onClick={() => void actions.createPrompt(fixSource.id)}>
+                <Wand2 /> Собрать из замечаний
+              </button>
+            </>
           );
         if (h.workflowStage === "codex_analysis")
           return (
-            <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("analyze_materials", "analyst", null)}>
+            <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("analyze_materials", null)}>
               <BrainCircuit /> Повторить анализ
             </button>
           );
@@ -239,8 +251,8 @@ export function HomeworkDetailPage() {
         );
       case "codex_review":
         return current ? (
-          <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("review_version", "reviewer", current.id).then(() => setTab("review"))}>
-            <ScanSearch /> {modeFor("reviewer") === "manual" ? `Проверить ${current.label} вручную` : `Проверить ${current.label} · ${reviewer}`}
+          <button className="btn btn--primary" disabled={!!actions.busy} onClick={() => void run("review_version", current.id).then(() => setTab("review"))}>
+            <ScanSearch /> Проверить {current.label} · {reviewer}
           </button>
         ) : null;
       case "teacher_review":
@@ -325,10 +337,10 @@ export function HomeworkDetailPage() {
             ))}
           </div>
         )}
-        <RunMonitor run={activeRun} handoff={handoff} onCancel={(id) => void actions.cancelRun(id)} />
-        {h.workflowStage === "claude_solving" && !activeRun && !manual && (
+        <RunMonitor run={activeRun} job={activeJob} handoff={handoff} onCancel={(id) => void actions.cancelRun(id)} onCancelJob={(id) => void actions.cancelJob(id)} />
+        {h.workflowStage === "claude_solving" && !activeRun && (
           <div className="faint wf__solving">
-            <span className="scanline" aria-hidden /> {author} создаёт решение — прогресс в заголовке окна
+            Решение создаёт автор ({author}) в официальном приложении — «Контур» не управляет им. Получите файл и добавьте его как новую версию.
           </div>
         )}
       </section>
@@ -353,7 +365,7 @@ export function HomeworkDetailPage() {
             <div className="panel__head">
               <h2 className="panel__title">Исходные материалы</h2>
               <div className="panel__meta">
-                <span className="faint">{manual ? "Снимок подборки материалов; изменить состав — в подборке на экране «Материалы»" : "Снимите отметку, чтобы не передавать файл"}</span>
+                <span className="faint">{!demo ? "Снимок подборки материалов; изменить состав — в подборке на экране «Материалы»" : "Снимите отметку, чтобы не передавать файл"}</span>
                 {!locked && (
                   <button className="btn btn--sm" disabled={!!actions.busy} onClick={() => void actions.prepareBundle("analyze_materials", null)}>
                     <Layers /> Новый снимок из подборки
@@ -375,7 +387,7 @@ export function HomeworkDetailPage() {
                 <SourceList
                   bundle={bundle}
                   busy={locked}
-                  onToggle={locked || manual ? undefined : (id, inc) => void bridge.setSourceIncluded(bundle.id, id, inc).then(() => wf.reloadAll(), (e: unknown) => reportError(e))}
+                  onToggle={locked || !demo ? undefined : (id, inc) => void bridge.setSourceIncluded(bundle.id, id, inc).then(() => wf.reloadAll(), (e: unknown) => reportError(e))}
                 />
               )}
             </div>
@@ -403,7 +415,7 @@ export function HomeworkDetailPage() {
                   <div className="hw__pending">
                     <div className="eyebrow">{pendingPrompt.status === "draft" ? "Черновик промта — проверьте и зафиксируйте" : "Ожидает передачи автору"}</div>
                     <PromptBox prompt={pendingPrompt} editable={pendingPrompt.status === "draft"} onChange={setPromptEdit} actions={promptActions(pendingPrompt)} compact />
-                    {pendingPrompt.status === "committed" && manual && <p className="faint">Скопируйте промт и передайте автору сами. Когда решение будет готово, добавьте его как новую версию.</p>}
+                    {pendingPrompt.status === "committed" && <p className="faint">Скопируйте промт и передайте автору сами. Когда решение будет готово, добавьте его как новую версию.</p>}
                   </div>
                 )}
                 {!wf.iterations.data ? (
@@ -457,9 +469,9 @@ export function HomeworkDetailPage() {
                     className="btn btn--sm btn--primary"
                     title={selectedVersionId !== current?.id ? "Проверяется только текущая выбранная версия" : undefined}
                     disabled={!!activeRun || !!actions.busy || locked || h.workflowStage !== "codex_review" || selectedVersionId !== current?.id}
-                    onClick={() => void run("review_version", "reviewer", selectedVersionId)}
+                    onClick={() => void run("review_version", selectedVersionId)}
                   >
-                    <ScanSearch /> {reviewRun ? "Проверить снова" : "Проверить"} ({modeFor("reviewer") === "manual" ? "вручную" : reviewer})
+                    <ScanSearch /> {reviewRun ? "Проверить снова" : "Проверить"} ({reviewer})
                   </button>
                 )}
               </div>
@@ -549,10 +561,10 @@ export function HomeworkDetailPage() {
               comments={comments}
               requirements={reqs}
               locked={locked}
-              manual={manual}
+              manual={!demo}
               running={!!activeRun}
               canReview={!!current && h.workflowStage === "teacher_review"}
-              onReview={() => current && void run("review_teacher", "reviewer", current.id)}
+              onReview={() => current && void run("review_teacher", current.id)}
               onChanged={() => void wf.reloadAll()}
               commandOptions={actions.options}
               onAddRequirement={(input) => actions.addRequirement(input).then((r) => r !== null)}
@@ -569,7 +581,7 @@ export function HomeworkDetailPage() {
             receipt={wf.receipt.data}
             commentsCount={comments.length}
             onChanged={() => void wf.reloadAll()}
-            manual={manual}
+            manual={!demo}
             readyAllowed={wf.workflow.data?.transitions.find((t) => t.to === "ready_to_submit")?.allowed ?? false}
             commandOptions={actions.options}
           />
@@ -616,7 +628,7 @@ export function HomeworkDetailPage() {
           </>
         }
       >
-        <p className="muted">{manual ? "Версия станет текущей проверяемой. Копия в «03 На сдачу» появится при сборке комплекта под именем:" : "Копия ляжет в «03 На сдачу» под именем:"}</p>
+        <p className="muted">{!demo ? "Версия станет текущей проверяемой. Копия в «03 На сдачу» появится при сборке комплекта под именем:" : "Копия ляжет в «03 На сдачу» под именем:"}</p>
         <div className="path mono">
           03 На сдачу/
           {rules.data && finalTarget ? applyNamePattern(rules.data.finalNamePattern, { ...rules.data.studentName, week: h.weekNumber, subject: names(h.subjectId), version: finalTarget.label }, finalExt) : "…"}
@@ -628,13 +640,6 @@ export function HomeworkDetailPage() {
           </div>
         )}
       </Dialog>
-      <ManualResultDialog
-        run={manualRun}
-        busy={actions.busy === "manual"}
-        onClose={() => setManualRun(null)}
-        onAnalysis={(input) => manualRun && void actions.saveAnalysis(manualRun.id, input).then((r) => r && (setManualRun(null), setTab("cycle")))}
-        onReview={(input) => manualRun && void actions.saveReview(manualRun.id, input).then((r) => r && (setManualRun(null), setTab(r.kind === "review_teacher" ? "teacher" : "review")))}
-      />
     </div>
   );
 }

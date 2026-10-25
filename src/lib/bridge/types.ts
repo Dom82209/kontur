@@ -35,8 +35,21 @@ import type {
   WorkflowSettings,
   PackageCheckId,
 } from "./workflow-types";
+import type {
+  AiConfirmation,
+  AiConfirmInput,
+  AiJob,
+  AiJobStatus,
+  AiParseStatus,
+  AiTask,
+  ProviderAvailability,
+  ProviderCli,
+  ProviderHandoff,
+  TransportPreference,
+} from "./ai-types";
 
 export * from "./workflow-types";
+export * from "./ai-types";
 
 // ───────────────────────── Базовые сущности ─────────────────────────
 
@@ -623,14 +636,24 @@ export interface Homework {
 export interface ProviderStatus {
   provider: ProviderId;
   state: ProviderState;
-  /** Отображаемое имя аккаунта/клиента. Никогда не токен. */
+  /** Отображаемая метка клиента («Codex CLI · 0.47.0»). Никогда не аккаунт и не токен. */
   accountLabel: string | null;
   lastCheckedAt: ISODate;
   errorMessage: string | null;
-  /** Через что backend работает с провайдером. «mock» — демонстрационный адаптер; «unavailable» — адаптера ещё нет, только ручная передача. */
-  adapter: "cli" | "desktop_app" | "mock" | "unavailable";
+  /**
+   * Через что backend работает с провайдером: «cli» — официальный CLI, явно подключённый
+   * пользователем; «manual_handoff» — ручная передача (копировать промт, вставить ответ);
+   * «unavailable» — CLI подключён, но сейчас не работает; «mock» — демонстрационный адаптер.
+   */
+  adapter: "cli" | "desktop_app" | "mock" | "manual_handoff" | "unavailable";
   /** Роли, назначенные провайдеру в настройках рабочего цикла. */
   roles: WorkflowRole[];
+  /** Этап 9: сводное состояние — подключён / ручная передача / недоступен / ошибка. */
+  availability: ProviderAvailability;
+  /** AI-задачи, назначенные провайдеру. */
+  tasks: AiTask[];
+  cli: ProviderCli;
+  handoff: ProviderHandoff;
 }
 
 /** Синоним для контракта рабочего цикла. */
@@ -768,6 +791,10 @@ export interface BridgeEvents {
   "homework:revision-prompt-created": { homeworkId: string; promptId: string; kind: RevisionPrompt["kind"]; status: RevisionPrompt["status"]; reviewRunId: string | null; basedOnVersionId: string | null };
   /** Готовность к сдаче пересчитана после мутации. */
   "homework:readiness-updated": { homeworkId: string; ready: boolean; blockers: Readiness["checks"][number]["id"][]; revision: number };
+  /** Этап 9: прогресс выполняющегося задания (фаза, время, объём вывода — без содержимого). */
+  "ai-job:progress": { jobId: string; runId: string; homeworkId: string; phase: "started" | "running" | "parsing"; elapsedMs: number; outputBytes: number };
+  /** Этап 9: задание изменилось (подготовлено, отправлено, ответ получен, ошибка, отмена, подтверждение). */
+  "ai-job:updated": { jobId: string; runId: string; homeworkId: string; status: AiJobStatus; parseStatus: AiParseStatus | null };
 }
 
 export type BridgeEventName = keyof BridgeEvents;
@@ -957,9 +984,36 @@ export interface DesktopBridge {
   /** Открыть официальное приложение провайдера (backend). Вход — только там. */
   openProviderApp(provider: ProviderId): Promise<void>;
 
+  /** Явное подключение официального CLI. Найденный CLI сам не включается; пароли и токены не запрашиваются. */
   connectProvider(provider: ProviderId): Promise<ProviderStatus>;
   disconnectProvider(provider: ProviderId): Promise<ProviderStatus>;
   getProviderStatus(provider: ProviderId): Promise<ProviderStatus>;
+
+  // ── Провайдеры и задания передачи (этап 9) ──
+  getProviderStatuses(): Promise<ProviderStatus[]>;
+  /** Повторная проверка CLI: версия, флаги неинтерактивного режима, вход (только код выхода). */
+  checkProvider(provider: ProviderId): Promise<ProviderStatus>;
+  /** Задания ДЗ без текстов. */
+  listAiJobs(homeworkId: string): Promise<AiJob[]>;
+  /** Задание целиком: полный текст передачи, ответ, черновик, журнал. */
+  getAiJob(jobId: string): Promise<AiJob>;
+  /** Подготовка передачи: ровно тот текст, который получит провайдер. Ничего не отправляет. */
+  prepareAiJob(runId: string, task: AiTask, transport?: TransportPreference): Promise<AiJob>;
+  /** Явная отправка подготовленного задания в подключённый официальный CLI. */
+  sendAiJob(jobId: string): Promise<AiJob>;
+  /** false — задание не выполняется. */
+  cancelAiJob(jobId: string): Promise<boolean>;
+  /** Ответ, вставленный пользователем после ручной передачи. */
+  submitAiResponse(jobId: string, text: string): Promise<AiJob>;
+  /** Системный выбор файла ответа (txt/md/json, ≤ 2 МБ). Отмена — null. */
+  importAiResponseFile(jobId: string): Promise<AiJob | null>;
+  discardAiJob(jobId: string): Promise<AiJob>;
+  /** Подтверждение проверенного (и, возможно, исправленного) результата. Только оно меняет рабочий цикл. */
+  confirmAiResult(
+    jobId: string,
+    input: AiConfirmInput,
+    options?: WorkflowCommandOptions & { supportingJobId?: string | null },
+  ): Promise<OperationResult<AiConfirmation>>;
 
   getAutomationRules(): Promise<AutomationRules>;
   updateAutomationRules(rules: AutomationRules): Promise<OperationResult<AutomationRules>>;

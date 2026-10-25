@@ -619,6 +619,7 @@ fn aggregate_lists_transitions_computed_by_backend() {
     assert_eq!(
         keys,
         [
+            "aiJobs",
             "bundles",
             "homework",
             "iterations",
@@ -636,7 +637,8 @@ fn aggregate_lists_transitions_computed_by_backend() {
             "transitions"
         ]
     );
-    assert_eq!(value["providerMode"], "manual_handoff");
+    assert_eq!(value["providerMode"], "ai_jobs");
+    assert_eq!(value["aiJobs"], serde_json::json!([]));
 }
 
 // ───────────────────────── Идемпотентность и конфликты ─────────────────────────

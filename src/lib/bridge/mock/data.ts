@@ -254,17 +254,41 @@ export const DEMO_DROP: { name: string; sizeBytes: number }[] = [
   { name: "IMG_2041.HEIC", sizeBytes: 2_850_000 },
 ];
 
+/** Сводное состояние демонстрационного провайдера (как проекция backend этапа 9). */
+export function mockAvailability(state: ProviderStatus["state"]): ProviderStatus["availability"] {
+  if (state === "connected") return "connected";
+  if (state === "error" || state === "reauth_required") return "error";
+  return "manual";
+}
+
 export function buildProviders(): ProviderStatus[] {
+  const checked = at(0, 9, 12);
   return [
-    { provider: "codex", state: "disconnected", accountLabel: null, lastCheckedAt: at(0, 9, 12), errorMessage: null, adapter: "mock", roles: ["analyst", "reviewer"] },
+    {
+      provider: "codex",
+      state: "disconnected",
+      accountLabel: null,
+      lastCheckedAt: checked,
+      errorMessage: null,
+      adapter: "mock",
+      roles: ["analyst", "reviewer"],
+      availability: "manual",
+      tasks: ["material_analysis", "initial_prompt", "solution_review", "revision_prompt", "teacher_review"],
+      cli: { enabled: false, detected: true, executable: "codex", version: "codex-cli (демо)", supported: true, missingFlags: [], loggedIn: null, checkedAt: null },
+      handoff: { appInstalled: false, webUrl: "https://chatgpt.com/" },
+    },
     {
       provider: "claude",
       state: "reauth_required",
-      accountLabel: "Claude (desktop)",
-      lastCheckedAt: at(0, 9, 12),
-      errorMessage: "Сессия истекла. Войдите заново в официальном приложении Claude.",
+      accountLabel: "Claude Code CLI (демо)",
+      lastCheckedAt: checked,
+      errorMessage: "Войдите в официальном CLI: выполните `claude auth login` в Терминале, затем «Проверить».",
       adapter: "mock",
       roles: ["author"],
+      availability: "error",
+      tasks: [],
+      cli: { enabled: true, detected: true, executable: "~/.local/bin/claude", version: "2.1.0 (Claude Code, демо)", supported: true, missingFlags: [], loggedIn: false, checkedAt: checked },
+      handoff: { appInstalled: true, webUrl: "https://claude.ai/new" },
     },
   ];
 }
@@ -298,6 +322,7 @@ export function buildRules(): AutomationRules {
     confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false },
     workflow: {
       roles: { analyst: "codex", author: "claude", reviewer: "codex" },
+      tasks: { material_analysis: "codex", initial_prompt: "codex", solution_review: "codex", revision_prompt: "codex", teacher_review: "codex" },
       styleThreshold: 4,
       styleProfilePath: "~/Documents/Obsidian/Учёба/ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
       requireTeacherReview: true,

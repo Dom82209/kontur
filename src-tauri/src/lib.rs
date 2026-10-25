@@ -1,3 +1,5 @@
+pub mod ai;
+mod ai_commands;
 mod app_state;
 mod commands;
 pub mod db;
@@ -37,6 +39,10 @@ pub fn run() {
 
             let database = Database::open_file(app_data_dir.join("kontur.sqlite3"))?;
             database.migrate()?;
+            // Этап 9: задания, выполнявшиеся при закрытии, честно завершаются ошибкой.
+            database.with_transaction(|transaction| {
+                ai::store::recover_interrupted(transaction).map(|_| ())
+            })?;
             app.manage(AppState::new(app_data_dir, home_dir, database));
             // Watcher загрузок запускается только если пользователь включил его ранее.
             lms_commands::resume_watcher(app.handle());
@@ -111,7 +117,21 @@ pub fn run() {
             workflow_commands::resolve_teacher_requirement,
             workflow_commands::confirm_style_divergence,
             workflow_commands::mark_ready_to_submit,
-            workflow_commands::transition_workflow
+            workflow_commands::transition_workflow,
+            ai_commands::get_provider_statuses,
+            ai_commands::check_provider,
+            ai_commands::connect_provider,
+            ai_commands::disconnect_provider,
+            ai_commands::open_provider_app,
+            ai_commands::list_ai_jobs,
+            ai_commands::get_ai_job,
+            ai_commands::prepare_ai_job,
+            ai_commands::send_ai_job,
+            ai_commands::cancel_ai_job,
+            ai_commands::submit_ai_response,
+            ai_commands::import_ai_response_file,
+            ai_commands::discard_ai_job,
+            ai_commands::confirm_ai_result
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kontur");

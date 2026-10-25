@@ -1,6 +1,6 @@
 # Контур — frontend handoff
 
-Документ фиксирует frontend-контракт и границу этапа 7. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS; этап 7 — локальное извлечение текста и структуры, просмотр результата, cache по SHA-256 и подборку материалов для будущего анализа.
+Документ фиксирует frontend-контракт и границу этапа 9. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS; этап 7 — локальное извлечение текста и структуры, просмотр результата, cache по SHA-256 и подборку материалов для будущего анализа; этап 8 — рабочий цикл ДЗ; этап 9 — задания передачи провайдерам (официальный CLI после явного подключения или ручная передача) с подтверждением результата.
 
 ## 1. Граница архитектуры
 
@@ -33,7 +33,7 @@ React pages/components
 | `/homework` | Домашние задания | доска по папочному `Homework.stage`; подробный workflow в карточках |
 | `/ai` | AI Workspace | source bundle, запуск анализа/проверок, результаты, промты и история |
 | `/automation` | Автоматизация | правила классификации/именования, подтверждения, журнал и undo |
-| `/settings` | Настройки | пути, имя, тема, роли AI, порог стиля, статусы провайдеров |
+| `/settings` | Настройки | пути, имя, тема, провайдер каждой AI-задачи, порог стиля, состояние и подключение официальных CLI |
 
 Детальный маршрут `/homework/:homeworkId` содержит вкладки «Исходные материалы», «Рабочий цикл», «Результат проверки», «Комментарии преподавателя» и «Комплект на сдачу». Переход с Главной ведёт на вкладку, соответствующую ближайшему действию.
 
@@ -42,16 +42,16 @@ React pages/components
 Порядок `WORKFLOW_STAGE_ORDER`:
 
 1. `materials_collected` — Материалы.
-2. `codex_analysis` — Анализ (имя типа историческое; фактический провайдер берётся из роли `analyst`).
+2. `codex_analysis` — Анализ (имя типа историческое; фактический провайдер берётся из задачи `material_analysis`).
 3. `prompt_ready` — Промт.
-4. `claude_solving` — Решение (фактический провайдер роли `author`).
-5. `codex_review` — Проверка (фактический провайдер роли `reviewer`).
+4. `claude_solving` — Решение (провайдер роли `author`; решение создаётся вне «Контура»).
+5. `codex_review` — Проверка (фактический провайдер задачи `solution_review`).
 6. `needs_fixes` — Исправления.
 7. `teacher_review` — Преподаватель.
 8. `ready_to_submit` — К сдаче.
 9. `submitted` — Отправлено.
 
-Имена `codex_analysis` и `claude_solving` сохраняются ради совместимости типов, но UI и backend обязаны опираться на роли, а не на имя этапа.
+Имена `codex_analysis` и `claude_solving` сохраняются ради совместимости типов, но UI и backend опираются на задачи (`AiTask`) и роли, а не на имя этапа.
 
 ### `Homework.stage` и `Homework.workflowStage`
 
@@ -62,7 +62,7 @@ React pages/components
 
 ## 4. Актуальные workflow types
 
-- `WorkflowSettings`: `roles: { analyst, author, reviewer }`, `styleThreshold` (целое 0–10, по умолчанию 4), `styleProfilePath`, `requireTeacherReview`.
+- `WorkflowSettings`: `roles: { analyst, author, reviewer }`, `tasks: { material_analysis, initial_prompt, solution_review, revision_prompt, teacher_review }` (этап 9: провайдер каждой задачи; у настроек до этапа 9 backend выводит задачи из ролей), `styleThreshold` (целое 0–10, по умолчанию 4), `styleProfilePath`, `requireTeacherReview`.
 - `SourceBundle`: подборка `SourceItem[]`, `missing[]`, `complete`, purpose и optional version. Обязательный исключённый источник делает bundle неполным.
 - `ReviewRun`: kind, role, фактический provider, version, bundle, полный `sourcesUsed`, очередь/прогресс/результат/ошибка. Новый запуск берёт роли и style threshold из актуальных настроек.
 - `ReviewResult`: verdict, критерии, critical/normal findings, unsupported claims, style divergence с порогом, teacher requirements, recommended action и optional prompt.
@@ -137,9 +137,13 @@ React pages/components
 
 `getReadiness`, `markReadyToSubmit`, `buildSubmissionPackage`, `getSubmissionPackage`, `setPackageCheck`, `confirmSubmission`, `getSubmissionReceipt`.
 
-### Система, провайдеры, правила и журнал
+### Провайдеры и задания передачи (этап 9)
 
-`revealInFinder`, `openProviderApp`, `connectProvider`, `disconnectProvider`, `getProviderStatus`, `getAutomationRules`, `updateAutomationRules`, `getActivityLog`, `undoOperation`, `on`.
+`getProviderStatuses`, `getProviderStatus`, `checkProvider`, `connectProvider`, `disconnectProvider`, `openProviderApp`, `listAiJobs`, `getAiJob`, `prepareAiJob`, `sendAiJob`, `cancelAiJob`, `submitAiResponse`, `importAiResponseFile`, `discardAiJob`, `confirmAiResult`.
+
+### Система, правила и журнал
+
+`revealInFinder`, `getAutomationRules`, `updateAutomationRules`, `getActivityLog`, `undoOperation`, `on`.
 
 Сигнатуры и payload находятся в `DesktopBridge`. Источники, запуски и сдача обслуживаются только перечисленными актуальными методами; сдача подтверждается `confirmSubmission`.
 
@@ -163,6 +167,8 @@ React pages/components
 | `homework:revision-prompt-created` | `{ homeworkId, promptId, kind, status, reviewRunId, basedOnVersionId }` — новый черновик промта |
 | `homework:readiness-updated` | `{ homeworkId, ready, blockers, revision }` — пересчитана готовность |
 | `inbox:updated` | `{ reason: "import", fileIds }` — список «Входящих» изменился, перечитать `getInboxFiles` |
+| `ai-job:progress` | `{ jobId, runId, homeworkId, phase: started \| running \| parsing, elapsedMs, outputBytes }` — работа официального CLI (без содержимого вывода, без процентов) (этап 9) |
+| `ai-job:updated` | `{ jobId, runId, homeworkId, status, parseStatus }` — задание изменилось, перечитать `getAiJob`/`getWorkflow` (этап 9) |
 | `downloads:watcher-updated` | `{ watcher: DownloadsWatcher }` — состояние watcher и список кандидатов |
 | `cu-import:progress` | `{ operationId, phase: inspect \| extract \| import \| cleanup, completed, total, entryName }` — фазы импорта экспорта ЦУ |
 | `extraction:progress` | `{ operationId, completed, total, material, name, outcome }` — прогресс пакетного извлечения текста |
@@ -199,7 +205,9 @@ start operation
 
 Команды этапа 8 (рабочий цикл ДЗ): чтение — `get_workflow { homeworkId }`, `get_dashboard`, `get_iterations { homeworkId }`, `compare_versions { fromVersionId, toVersionId }`, `get_homework_candidates { homeworkId }`; мутации (все с `operationId` и `expectedRevision`, результат `OperationResult<T>`) — `create_source_bundle { homeworkId, purpose, versionId }`, `start_workflow_run { request: { homeworkId, kind, versionId, bundleId, mode } }`, `cancel_workflow_run { runId }`, `pin_workflow_run { runId }`, `save_manual_analysis { runId, input: { summary, promptText } }`, `save_manual_review { runId, input }`, `create_revision_prompt { reviewRunId, text }`, `update_prompt_draft { promptId, text }`, `commit_prompt { promptId }`, `hand_off_prompt { promptId }`, `create_homework_version { homeworkId, input: { fileId, attachmentFileIds, author, promptId, note } }`, `select_homework_version { versionId }`, `add_teacher_comments { homeworkId, comments }`, `add_teacher_requirement { homeworkId, input }`, `resolve_teacher_requirement { requirementId, status, note }`, `confirm_style_divergence { reviewRunId }`, `mark_ready_to_submit { homeworkId, noTeacherComments }`, `transition_workflow { homeworkId, to, reason }`.
 
-`TauriDesktopBridge` подключает к ним методы рабочего цикла напрямую, без гибридного bridge и без mock fallback. Списочные геттеры (`getReviewRuns`, `getPrompts`, `getTeacherComments`, `getTeacherRequirements`, `getReadiness`, `getSubmissionPackage`, `getSubmissionReceipt`) читают части одного `get_workflow`; `not_found` → `null` только в `getWorkflow`. `setSourceIncluded` отвечает `immutable`: набор источников — неизменяемый снимок, состав меняется в подборке этапа 7 и новым снимком. AI-адаптеров нет (этап 9): `getProviderStatus` берётся из `get_dashboard` с `adapter: "unavailable"`, `connectProvider`/`disconnectProvider`/`openProviderApp` отвечают `provider_unavailable`, а UI в Tauri-режиме (`HomeworkWorkflow.providerMode = "manual_handoff"`) запускает шаги с `mode: "manual"` и предлагает ввести результат вручную — он сохраняется с provenance `manual`, ложного успеха AI нет.
+`TauriDesktopBridge` подключает к ним методы рабочего цикла напрямую, без гибридного bridge и без mock fallback. Списочные геттеры (`getReviewRuns`, `getPrompts`, `getTeacherComments`, `getTeacherRequirements`, `getReadiness`, `getSubmissionPackage`, `getSubmissionReceipt`) читают части одного `get_workflow`; `not_found` → `null` только в `getWorkflow`. `setSourceIncluded` отвечает `immutable`: набор источников — неизменяемый снимок, состав меняется в подборке этапа 7 и новым снимком.
+
+Команды этапа 9: `get_provider_statuses`, `check_provider { provider }`, `connect_provider { provider }`, `disconnect_provider { provider }`, `open_provider_app { provider }`, `list_ai_jobs { homeworkId }`, `get_ai_job { jobId }`, `prepare_ai_job { runId, task, transport }`, `send_ai_job { jobId }`, `cancel_ai_job { jobId }`, `submit_ai_response { jobId, text }`, `import_ai_response_file { jobId }`, `discard_ai_job { jobId }`, `confirm_ai_result { operationId, jobId, supportingJobId, input, expectedRevision }`. `TauriDesktopBridge` подключает к ним одноимённые методы напрямую; `prepareAiJob` без `transport` передаёт `auto`; `confirmAiResult` без `operationId` генерирует UUID v4 и передаёт `expectedRevision`; `input` — `{ kind: "analysis" | "review" | "prompt", value }` с явно заполненными необязательными полями ручного ввода. `getProviderStatus` читает `get_provider_statuses`. Ошибки (`provider_unavailable`, `reauth_required`, `blocked`, `conflict`) пробрасываются, mock fallback нет.
 
 Пока unsupported (`backend_unavailable`):
 
@@ -252,11 +260,22 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - `CorpusSelection` — явный выбор пользователя (общий или для ДЗ): элементы с `ready`/`problem`. `setCorpusSelection` принимает только материалы с извлечённым текстом (`complete`/`partial`) и неизменённым содержимым, иначе `blocked`; подборку отправленной работы — `immutable`. `previewCorpus` — ровно тот текст, который получит будущий анализ (лимит `limitChars`, список `excluded`). Построение `SourceBundle` и запуск анализа — будущий этап.
 - UI: «Материалы» (`MaterialsPage`, `ExtractionViewer`, `CorpusPanel`), кнопка «Текст и структура» в панели файла «Входящих», «Настройки → Извлечение текста» (`ExtractionSettingsPanel`).
 
+## 8c. Провайдеры и задания передачи (этап 9)
+
+- Учётные данные провайдеров не запрашиваются, не читаются и не хранятся; вход — только в официальном CLI (`codex login`, `claude auth login`) или приложении. GUI провайдеров, браузера и LMS не автоматизируется. Официальной интеграции нет — используются публичные неинтерактивные режимы официальных CLI.
+- `ProviderStatus` (runtime-проекция backend): `availability: connected | manual | unavailable | error`, `cli { enabled, detected, executable, version, supported, missingFlags, loggedIn, checkedAt }` (без абсолютных путей), `handoff { appInstalled, webUrl }`, `tasks: AiTask[]`, а также `state`, `adapter` (`cli | manual_handoff | unavailable | mock | desktop_app`), `roles`, `accountLabel` (метка клиента, не аккаунт). Найденный CLI не подключается сам — только `connectProvider` по кнопке «Подключить CLI».
+- `AiJob`: `task`, `provider`, `transport: cli | manual_handoff`, `status: prepared | running | response_ready | failed | cancelled | confirmed | discarded`, полный `promptText` и состав `context[] { label, name, kind, charsTotal, charsIncluded, truncated }` (в `getWorkflow.aiJobs` и `listAiJobs` тексты — `null`), `responseText`, `responseSource: cli | paste | file`, `responseFileName` (только имя), `parseStatus: valid | partial | corrupt | empty`, `draft` (поля ручного ввода, любые могут отсутствовать), `issues`, `log` (без секретов и путей), `errorCode/errorMessage`, `exitCode`, `durationMs`, `edited`, `promptId`.
+- Поток: шаг стартует как раньше (`run*` с `mode: "provider"` → `waiting_for_provider`) → `prepareAiJob(runId, task)` (ничего не отправляет; UI показывает весь текст и список файлов) → CLI: `sendAiJob` (только по кнопке) → `ai-job:progress` … `ai-job:updated` → `response_ready`; ручная передача: копирование по кнопке, `openProviderApp` по кнопке, `submitAiResponse`/`importAiResponseFile` → `response_ready` → пользователь проверяет и правит черновик в форме → `confirmAiResult`. Без подтверждения рабочий цикл не меняется; provenance результата — `provider`, ручной ввод (`saveManual*`) остаётся `manual`.
+- Анализ материалов и первичный промт — разные задачи: если им назначены разные провайдеры, анализ просит только итог, а промт готовится отдельным заданием `initial_prompt` по черновику анализа; подтверждаются вместе (`supportingJobId`). Промт исправлений можно получить заданием `revision_prompt` по завершённой проверке (`{ kind: "prompt" }`) или собрать локально `createRevisionPrompt`.
+- `cancelAiJob` останавливает выполняющийся CLI; `cancelRun` останавливает задания шага. `discardAiJob` отклоняет ответ.
+- UI: `AiStepActions` (кнопки «Передать …» и «Ввести результат вручную»), `AiHandoffDialog`, `ManualResultDialog` с `initial`/`confirming`, `RunMonitor` с `job` и `onCancelJob`, `ProviderCard` с подключением CLI; копирование — `lib/clipboard.ts` (Clipboard API с запасным выделением текста).
+- Mock реализует тот же контракт: демо-«CLI» отвечает только после `sendAiJob`, ответ ждёт подтверждения; `importAiResponseFile` в браузере — `backend_unavailable`.
+
 ## 9. Инварианты workflow и сдачи
 
-- Роли `analyst`, `author`, `reviewer` независимо назначаются Codex или Claude. ProviderCard получает роли из `ProviderStatus.roles`; сохранение правил эмитит `provider:status-changed`.
+- Пять AI-задач и роль `author` независимо назначаются Codex или Claude. ProviderCard получает задачи из `ProviderStatus.tasks`; сохранение правил эмитит `provider:status-changed` (mock).
 - Порог стиля 0–10 применяется к новым результатам проверки и к readiness. Сохранённый `ReviewRun` не переписывается при последующей смене порога.
-- Кнопка не активна без полного source bundle, нужной версии либо при уже активном запуске; без подключённого провайдера шаг выполняется вручную (`manual_handoff`). Переходы между этапами предлагаются только из `HomeworkWorkflow.transitions` (решение backend state machine), «Готово к сдаче» — только при пройденной readiness, «Отправлено» — только подтверждением отправки.
+- Кнопка не активна без полного source bundle, нужной версии либо при уже активном запуске; без подключённого CLI шаг передаётся провайдеру вручную (`manual_handoff`) или результат вводится сам. Переходы между этапами предлагаются только из `HomeworkWorkflow.transitions` (решение backend state machine), «Готово к сдаче» — только при пройденной readiness, «Отправлено» — только подтверждением отправки.
 - Промт: черновик правится (`updatePromptText`), затем фиксируется (`commitPrompt`) и после этого неизменяем; передать автору можно только зафиксированный промт.
 - Расхождение со стилем выше порога блокирует готовность до явного подтверждения пользователем (`confirmStyleDivergence`); это эвристика сравнения со стилем 0–10, не определение авторства.
 - `markReadyToSubmit` возможен только при всех readiness checks; отсутствие комментариев при обязательной teacher review требует явного подтверждения.
@@ -288,16 +307,17 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - безопасные файловые операции, резервирование, атомарный commit и полный undo;
 - наблюдение входящих, классификация, создание структуры и дедупликация;
 - хранение метаданных, хэширование версий и submitted snapshot;
-- адаптеры Codex/Claude, прогресс, отмена и формирование результатов;
+- адаптеры официальных CLI Codex/Claude, прогресс, отмена, разбор ответа и применение только подтверждённого результата;
 - сборка комплекта, но не отправка в LMS.
 
 ## 11. Секреты и авторизация
 
 - «Контур» не запрашивает и не хранит пароли, cookies, session tokens или API keys Codex/Claude.
 - Нельзя автоматизировать браузерный вход, встраивать страницы авторизации или извлекать пользовательские cookies.
-- Авторизация выполняется только в официальном CLI/desktop-приложении провайдера. В bridge возвращаются состояние, безопасный `accountLabel`, adapter и роли — никогда секрет.
+- Авторизация выполняется только в официальном CLI/desktop-приложении провайдера. В bridge возвращаются состояние, безопасный `accountLabel`, adapter, задачи и роли — никогда секрет. Вход проверяется только по коду выхода `codex login status`/`claude auth status`; их вывод не читается.
+- CLI запускается без shell, с очищенным окружением (переменные с ключами не передаются), в пустом каталоге; промт — через stdin, не в командной строке.
 - Настройки frontend хранят только правила workflow, пути, имя, тему и motion preference.
 
 ## 12. Что остаётся backend-этапу
 
-Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов, этап 8 — persistence, state machine, команды и события рабочего цикла ДЗ с ручным режимом вместо AI. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, открытие официальных приложений провайдеров, provider adapters, пакеты и immutable snapshot. UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов, этап 8 — persistence, state machine, команды и события рабочего цикла ДЗ, этап 9 — задания передачи провайдерам с подтверждением результата. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, пакеты и immutable snapshot (этап 10). UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.

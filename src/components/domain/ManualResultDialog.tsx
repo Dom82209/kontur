@@ -1,7 +1,7 @@
 import { ClipboardCheck } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { CriterionId, CriterionStatus, ManualAnalysisInput, ManualReviewInput, ReviewRun, ReviewVerdict } from "../../lib/bridge";
-import { CRITERION_STATUS_LABEL, RUN_KIND_LABEL } from "../../lib/format";
+import type { AiDraft, AiJob, CriterionId, CriterionStatus, ManualAnalysisInput, ManualReviewInput, ReviewRun, ReviewVerdict } from "../../lib/bridge";
+import { CRITERION_STATUS_LABEL, PARSE_STATUS_LABEL, providerName, RUN_KIND_LABEL } from "../../lib/format";
 import { Dialog } from "../ui/Dialog";
 
 const VERDICTS: { value: ReviewVerdict; label: string }[] = [
@@ -25,19 +25,33 @@ const claim = (line: string) => {
   return { text: text!.trim(), location: rest.join(" — ").trim() || "место не указано" };
 };
 
+/** «Текст — место» → замечание; место необязательно. */
+const located = (line: string) => {
+  const [text, ...rest] = line.split(" — ");
+  return { text: text!.trim(), location: rest.join(" — ").trim() || null };
+};
+
+const join = (items: { text: string; location?: string | null }[] | undefined) => (items ?? []).map((i) => (i.location ? `${i.text} — ${i.location}` : i.text)).join("\n");
+
 interface Props {
   run: ReviewRun | null;
   busy: boolean;
   onClose: () => void;
   onAnalysis: (input: ManualAnalysisInput) => void;
   onReview: (input: ManualReviewInput) => void;
+  /** Этап 9: черновик из ответа провайдера — форма предзаполняется для проверки. */
+  initial?: AiDraft | null;
+  /** Этап 9: подтверждается ответ провайдера (а не ручной ввод). */
+  confirming?: { job: AiJob; supporting: AiJob | null } | null;
 }
 
 /**
- * Ручной результат шага, для которого AI-адаптера нет (этап 8). Результат
- * сохраняется с отметкой «вручную» — приложение не выдаёт его за ответ AI.
+ * Результат шага: ручной ввод или проверка ответа провайдера (этап 9). Ручной
+ * результат сохраняется с отметкой «вручную»; ответ провайдера — с отметкой
+ * «получен от провайдера и подтверждён пользователем». Без нажатия «Подтвердить»
+ * ничего не сохраняется.
  */
-export function ManualResultDialog({ run, busy, onClose, onAnalysis, onReview }: Props) {
+export function ManualResultDialog({ run, busy, onClose, onAnalysis, onReview, initial, confirming }: Props) {
   const [summary, setSummary] = useState("");
   const [promptText, setPromptText] = useState("");
   const [verdict, setVerdict] = useState<ReviewVerdict>("needs_fixes");
@@ -54,20 +68,23 @@ export function ManualResultDialog({ run, busy, onClose, onAnalysis, onReview }:
   const [missing, setMissing] = useState("");
 
   useEffect(() => {
-    setSummary("");
-    setPromptText("");
-    setCritical("");
-    setRemarks("");
-    setClaims("");
-    setMissing("");
-    setStyle("");
-  }, [run?.id]);
+    const d = initial ?? {};
+    setSummary(d.summary ?? "");
+    setPromptText(d.promptText ?? "");
+    setVerdict(d.verdict ?? "needs_fixes");
+    setCriteria({ correctness: d.correctness ?? "pass", taskFit: d.taskFit ?? "pass", courseGrounding: d.courseGrounding ?? "pass", teacher: d.teacher ?? "na" });
+    setCritical(join(d.critical));
+    setRemarks(join(d.remarks));
+    setClaims(join(d.unsupportedClaims));
+    setMissing((d.missing ?? []).map((m) => m.label).join("\n"));
+    setStyle(d.styleScore === null || d.styleScore === undefined ? "" : String(d.styleScore));
+  }, [run?.id, initial]);
 
   if (!run) return null;
   const analysis = run.kind === "analyze_materials";
   const styleScore = style.trim() === "" ? null : Number(style);
   const styleInvalid = styleScore !== null && (!Number.isInteger(styleScore) || styleScore < 0 || styleScore > 10);
-  const finding = (criterion: CriterionId) => (text: string) => ({ criterion, text, location: null });
+  const finding = (criterion: CriterionId) => (line: string) => ({ criterion, ...located(line) });
   const invalid = !summary.trim() || (analysis ? !promptText.trim() : styleInvalid);
 
   const submit = () => {
@@ -96,15 +113,19 @@ export function ManualResultDialog({ run, busy, onClose, onAnalysis, onReview }:
       open={!!run}
       onClose={onClose}
       wide
-      title={`Ручной результат: ${RUN_KIND_LABEL[run.kind].toLowerCase()}`}
-      description="AI-адаптер ещё не подключён. Выполните шаг сами (или в официальном приложении) и перенесите итог — он сохранится с отметкой «вручную»."
+      title={confirming ? `Проверка ответа ${providerName(confirming.job.provider)}: ${RUN_KIND_LABEL[run.kind].toLowerCase()}` : `Ручной результат: ${RUN_KIND_LABEL[run.kind].toLowerCase()}`}
+      description={
+        confirming
+          ? `${confirming.job.parseStatus ? PARSE_STATUS_LABEL[confirming.job.parseStatus].replace(/^./, (c) => c.toUpperCase()) : "Ответ получен"}. Проверьте и исправьте поля: сохранится только то, что вы подтвердите, с отметкой «получено от ${providerName(confirming.job.provider)}, подтверждено пользователем».`
+          : "Выполните шаг сами (или в официальном приложении) и перенесите итог — он сохранится с отметкой «вручную»."
+      }
       footer={
         <>
           <button className="btn btn--ghost" onClick={onClose}>
             Отмена
           </button>
           <button className="btn btn--primary" onClick={submit} disabled={busy || invalid}>
-            <ClipboardCheck /> Сохранить результат
+            <ClipboardCheck /> {confirming ? "Подтвердить результат" : "Сохранить результат"}
           </button>
         </>
       }
@@ -159,11 +180,11 @@ export function ManualResultDialog({ run, busy, onClose, onAnalysis, onReview }:
               </label>
             </div>
             <label className="field">
-              <span className="field__label">Критические ошибки — по одной в строке</span>
+              <span className="field__label">Критические ошибки — по одной в строке, «текст — место»</span>
               <textarea className="textarea" value={critical} onChange={(e) => setCritical(e.target.value)} />
             </label>
             <label className="field">
-              <span className="field__label">Замечания — по одному в строке</span>
+              <span className="field__label">Замечания — по одному в строке, «текст — место»</span>
               <textarea className="textarea" value={remarks} onChange={(e) => setRemarks(e.target.value)} />
             </label>
             <label className="field">

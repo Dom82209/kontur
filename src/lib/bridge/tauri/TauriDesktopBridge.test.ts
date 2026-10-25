@@ -67,6 +67,7 @@ const rules: AutomationRules = {
   },
   workflow: {
     roles: { analyst: "codex", author: "claude", reviewer: "codex" },
+    tasks: { material_analysis: "codex", initial_prompt: "codex", solution_review: "codex", revision_prompt: "codex", teacher_review: "codex" },
     styleThreshold: 4,
     styleProfilePath: "ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
     requireTeacherReview: true,
@@ -163,6 +164,20 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     confirmStyleDivergence: unexpected("confirmStyleDivergence"),
     markReadyToSubmit: unexpected("markReadyToSubmit"),
     transitionWorkflow: unexpected("transitionWorkflow"),
+    getProviderStatuses: unexpected("getProviderStatuses"),
+    checkProvider: unexpected("checkProvider"),
+    connectProvider: unexpected("connectProvider"),
+    disconnectProvider: unexpected("disconnectProvider"),
+    openProviderApp: unexpected("openProviderApp"),
+    listAiJobs: unexpected("listAiJobs"),
+    getAiJob: unexpected("getAiJob"),
+    prepareAiJob: unexpected("prepareAiJob"),
+    sendAiJob: unexpected("sendAiJob"),
+    cancelAiJob: unexpected("cancelAiJob"),
+    submitAiResponse: unexpected("submitAiResponse"),
+    importAiResponseFile: unexpected("importAiResponseFile"),
+    discardAiJob: unexpected("discardAiJob"),
+    confirmAiResult: unexpected("confirmAiResult"),
     ...overrides,
   };
 }
