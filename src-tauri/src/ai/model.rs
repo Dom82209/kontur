@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::isolation::{IsolationCapability, IsolationReport, ProviderExecutionPolicy};
 use crate::dto::ProviderId;
 
 macro_rules! ai_enum {
@@ -256,4 +257,15 @@ pub struct ProviderHandoffDto {
     /// Официальное приложение установлено в /Applications.
     pub app_installed: bool,
     pub web_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderIsolationDto {
+    pub capability: IsolationCapability,
+    pub report: Option<IsolationReport>,
+    pub consent_profile_version: Option<u32>,
+    pub consent_valid: bool,
+    pub execution_policy: ProviderExecutionPolicy,
+    pub blocking_reason: Option<String>,
 }

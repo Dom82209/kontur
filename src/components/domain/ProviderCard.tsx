@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { ExternalLink, Plug, RefreshCw, Unplug } from "lucide-react";
+import { ExternalLink, Plug, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
 import { useState } from "react";
 import { AI_TASK_LABEL, bridge, type ProviderStatus } from "../../lib/bridge";
 import { useOps } from "../../app/operations";
@@ -42,8 +42,9 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
   const connect = () => act(() => bridge.connectProvider(status.provider));
   const disconnect = () => act(() => bridge.disconnectProvider(status.provider));
   const check = () => act(() => bridge.checkProvider(status.provider));
+  const checkIsolation = () => act(() => bridge.runAiIsolationSelfTest());
   const openApp = () => act(() => bridge.openProviderApp(status.provider));
-  const { cli } = status;
+  const { cli, isolation } = status;
 
   const action = cli.enabled ? (
     <>
@@ -54,7 +55,7 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
         <Unplug /> Отключить CLI
       </button>
     </>
-  ) : cli.detected ? (
+  ) : cli.detected && status.provider !== "claude" ? (
     <button className="btn btn--sm" onClick={connect} disabled={busy}>
       <Plug /> {status.state === "connecting" ? "Проверка…" : "Подключить CLI"}
     </button>
@@ -111,9 +112,27 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
           </div>
         )}
         {!compact && status.errorMessage && <div className="provider__error">{status.errorMessage}</div>}
+        {!compact && (
+          <div className="provider__cli faint">
+            OS isolation: {isolation.report?.passed ? "проверена" : "не подтверждена"}
+            {` · профиль v${isolation.capability.profileVersion}`}
+            {isolation.report?.checkedAt ? ` · ${formatRelative(isolation.report.checkedAt)}` : ""}
+            {isolation.blockingReason ? ` · ${isolation.blockingReason}` : ""}
+          </div>
+        )}
+        {!compact && (
+          <div className="provider__cli faint">
+            Изолированный режим ограничивает файловый доступ внешнего CLI. Сеть и обработка переданного текста остаются на стороне провайдера.
+          </div>
+        )}
         {!compact && cli.checkedAt && <div className="provider__checked faint">Проверено {formatRelative(cli.checkedAt)}</div>}
       </div>
       <div className="provider__action" onClick={(e) => e.stopPropagation()}>
+        {!compact && (
+          <button className="btn btn--sm btn--ghost" onClick={checkIsolation} disabled={busy}>
+            <ShieldCheck /> Проверить изоляцию
+          </button>
+        )}
         {action}
         {!compact && (
           <button className="btn btn--sm btn--ghost" onClick={openApp} disabled={busy} title={status.handoff.appInstalled ? "Официальное приложение" : status.handoff.webUrl}>

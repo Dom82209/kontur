@@ -116,14 +116,23 @@ describe("ProviderCard", () => {
     availability: "manual",
     tasks: ["teacher_review"],
     cli: { enabled: false, detected: true, executable: "~/.local/bin/claude", version: "2.1.0 (Claude Code)", supported: true, missingFlags: [], loggedIn: null, checkedAt: null },
+    isolation: {
+      capability: { available: true, profileVersion: 1, reason: null },
+      report: null,
+      consentProfileVersion: null,
+      consentValid: false,
+      executionPolicy: "manual_only",
+      blockingReason: "Claude остаётся в ручном режиме: не доказано отключение settings и hooks",
+    },
     handoff: { appInstalled: true, webUrl: "https://claude.ai/new" },
   } as const;
 
   it("найденный CLI не подключён сам — нужна явная кнопка, полей для пароля нет", () => {
     const html = wrap(createElement(ProviderCard, { status: structuredClone(status) as never }));
-    expect(html).toContain("Подключить CLI");
+    expect(html).toContain("Проверить");
     expect(html).toContain("не подключён");
     expect(html).toContain("ручная передача");
+    expect(html).toContain("settings и hooks");
     expect(html).toContain("Проверка по комментариям преподавателя");
     expect(html).not.toMatch(/type="password"|<input/);
   });

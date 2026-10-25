@@ -82,6 +82,7 @@ export interface TauriIpcClient {
   transitionWorkflow: typeof ipc.transitionWorkflow;
   getProviderStatuses: typeof ipc.getProviderStatuses;
   checkProvider: typeof ipc.checkProvider;
+  runAiIsolationSelfTest: typeof ipc.runAiIsolationSelfTest;
   connectProvider: typeof ipc.connectProvider;
   disconnectProvider: typeof ipc.disconnectProvider;
   openProviderApp: typeof ipc.openProviderApp;
@@ -341,6 +342,7 @@ export class TauriDesktopBridge implements DesktopBridge {
     return status;
   };
   checkProvider: DesktopBridge["checkProvider"] = (provider) => this.ipcClient.checkProvider(provider);
+  runAiIsolationSelfTest: DesktopBridge["runAiIsolationSelfTest"] = () => this.ipcClient.runAiIsolationSelfTest();
   connectProvider: DesktopBridge["connectProvider"] = (provider) => this.ipcClient.connectProvider(provider);
   disconnectProvider: DesktopBridge["disconnectProvider"] = (provider) => this.ipcClient.disconnectProvider(provider);
   openProviderApp: DesktopBridge["openProviderApp"] = (provider) => this.ipcClient.openProviderApp(provider);

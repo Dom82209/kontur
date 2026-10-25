@@ -74,6 +74,7 @@
     "allow-transition-workflow",
     "allow-get-provider-statuses",
     "allow-check-provider",
+    "allow-run-ai-isolation-self-test",
     "allow-connect-provider",
     "allow-disconnect-provider",
     "allow-open-provider-app",

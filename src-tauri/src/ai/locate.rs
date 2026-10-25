@@ -40,11 +40,15 @@ impl CliLocator {
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
             PathBuf::from("/opt/local/bin"),
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS"),
+            PathBuf::from("/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS"),
         ];
         let mut prefixes = vec![
             PathBuf::from("/opt/homebrew"),
             PathBuf::from("/usr/local"),
             PathBuf::from("/opt/local"),
+            PathBuf::from("/Applications/ChatGPT.app"),
+            PathBuf::from("/Applications/Codex.app"),
         ];
         if let Some(home) = home {
             dirs.push(home.join(".local/bin"));

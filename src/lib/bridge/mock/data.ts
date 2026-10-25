@@ -263,6 +263,12 @@ export function mockAvailability(state: ProviderStatus["state"]): ProviderStatus
 
 export function buildProviders(): ProviderStatus[] {
   const checked = at(0, 9, 12);
+  const report = {
+    platform: "macos", runnerAvailable: true, profileVersion: 1, passed: true,
+    checks: [{ id: "mock", passed: true, message: "Демонстрационная проверка" }],
+    checkedAt: checked,
+    explanation: "Демонстрационный режим не запускает внешний CLI.",
+  };
   return [
     {
       provider: "codex",
@@ -275,6 +281,7 @@ export function buildProviders(): ProviderStatus[] {
       availability: "manual",
       tasks: ["material_analysis", "initial_prompt", "solution_review", "revision_prompt", "teacher_review"],
       cli: { enabled: false, detected: true, executable: "codex", version: "codex-cli (демо)", supported: true, missingFlags: [], loggedIn: null, checkedAt: null },
+      isolation: { capability: { available: true, profileVersion: 1, reason: null }, report, consentProfileVersion: 1, consentValid: true, executionPolicy: "manual_only", blockingReason: null },
       handoff: { appInstalled: false, webUrl: "https://chatgpt.com/" },
     },
     {
@@ -288,6 +295,7 @@ export function buildProviders(): ProviderStatus[] {
       availability: "error",
       tasks: [],
       cli: { enabled: true, detected: true, executable: "~/.local/bin/claude", version: "2.1.0 (Claude Code, демо)", supported: true, missingFlags: [], loggedIn: false, checkedAt: checked },
+      isolation: { capability: { available: true, profileVersion: 1, reason: null }, report, consentProfileVersion: 1, consentValid: true, executionPolicy: "isolated_automatic", blockingReason: null },
       handoff: { appInstalled: true, webUrl: "https://claude.ai/new" },
     },
   ];

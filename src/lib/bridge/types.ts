@@ -45,6 +45,8 @@ import type {
   ProviderAvailability,
   ProviderCli,
   ProviderHandoff,
+  ProviderIsolation,
+  IsolationReport,
   TransportPreference,
 } from "./ai-types";
 
@@ -653,6 +655,7 @@ export interface ProviderStatus {
   /** AI-задачи, назначенные провайдеру. */
   tasks: AiTask[];
   cli: ProviderCli;
+  isolation: ProviderIsolation;
   handoff: ProviderHandoff;
 }
 
@@ -993,6 +996,8 @@ export interface DesktopBridge {
   getProviderStatuses(): Promise<ProviderStatus[]>;
   /** Повторная проверка CLI: версия, флаги неинтерактивного режима, вход (только код выхода). */
   checkProvider(provider: ProviderId): Promise<ProviderStatus>;
+  /** OS-level self-test; automatic mode stays blocked until it passes. */
+  runAiIsolationSelfTest(): Promise<IsolationReport>;
   /** Задания ДЗ без текстов. */
   listAiJobs(homeworkId: string): Promise<AiJob[]>;
   /** Задание целиком: полный текст передачи, ответ, черновик, журнал. */

@@ -754,6 +754,7 @@ pub struct ProviderStatusDto {
     pub availability: crate::ai::model::ProviderAvailability,
     pub tasks: Vec<crate::ai::model::AiTask>,
     pub cli: crate::ai::model::ProviderCliDto,
+    pub isolation: crate::ai::model::ProviderIsolationDto,
     pub handoff: crate::ai::model::ProviderHandoffDto,
 }
 

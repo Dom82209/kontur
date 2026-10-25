@@ -48,10 +48,15 @@ use super::{
         ProbeReport, RunControl,
     },
     context::{build_context, ContextInput, Section, SourceText, MAX_CONTEXT_CHARS},
+    isolation::{
+        IsolationReport, IsolationRunner, IsolationSelfTest, ProviderExecutionPolicy,
+        ISOLATION_PROFILE_VERSION,
+    },
     locate::{CliLocator, Located},
     model::{
         provider_label, AiIssueDto, AiJobDto, AiTask, JobStatus, LogLevel, ParseStatus,
-        ProviderAvailability, ProviderCliDto, ProviderHandoffDto, ResponseSource, Transport,
+        ProviderAvailability, ProviderCliDto, ProviderHandoffDto, ProviderIsolationDto,
+        ResponseSource, Transport,
     },
     redact::redact,
     response::parse_response,
@@ -122,6 +127,8 @@ pub struct ProviderRuntime {
     factory: Option<Arc<dyn AdapterFactory>>,
     timeout: Duration,
     apps_dir: PathBuf,
+    runner: IsolationRunner,
+    self_test: Mutex<Option<IsolationReport>>,
 }
 
 impl ProviderRuntime {
@@ -134,6 +141,8 @@ impl ProviderRuntime {
             factory: None,
             timeout: DEFAULT_TIMEOUT,
             apps_dir: PathBuf::from("/Applications"),
+            runner: IsolationRunner::system(home),
+            self_test: Mutex::new(None),
         }
     }
 
@@ -144,6 +153,8 @@ impl ProviderRuntime {
         factory: Option<Arc<dyn AdapterFactory>>,
         timeout: Duration,
     ) -> Self {
+        let test_enabled = factory.is_some();
+        let runner = IsolationRunner::system(locator.home());
         Self {
             apps_dir: work_root.join("Applications"),
             locator,
@@ -152,6 +163,16 @@ impl ProviderRuntime {
             running: Mutex::new(HashMap::new()),
             factory,
             timeout,
+            runner,
+            self_test: Mutex::new(Some(IsolationReport {
+                platform: "macos".to_owned(),
+                runner_available: true,
+                profile_version: ISOLATION_PROFILE_VERSION,
+                passed: test_enabled,
+                checks: Vec::new(),
+                checked_at: store::timestamp(),
+                explanation: "Тестовый isolation runner".to_owned(),
+            })),
         }
     }
 
@@ -163,11 +184,9 @@ impl ProviderRuntime {
         self.locator.home()
     }
 
-    fn probe_dir(&self) -> Result<PathBuf, AppError> {
-        let dir = self.work_root.join("probe");
+    fn prepare_work_root(&self) -> Result<PathBuf, AppError> {
         ensure_private_dir(&self.work_root)?;
-        ensure_private_dir(&dir)?;
-        Ok(dir)
+        Ok(self.work_root.clone())
     }
 
     fn cached(&self, provider: ProviderId) -> Option<CachedProbe> {
@@ -183,6 +202,16 @@ impl ProviderRuntime {
                     checked_at: store::timestamp(),
                 },
             );
+        }
+    }
+
+    fn cached_self_test(&self) -> Option<IsolationReport> {
+        self.self_test.lock().ok()?.clone()
+    }
+
+    fn store_self_test(&self, report: IsolationReport) {
+        if let Ok(mut current) = self.self_test.lock() {
+            *current = Some(report);
         }
     }
 
@@ -291,8 +320,8 @@ impl<'a> AiService<'a> {
                 let report = probe(
                     provider,
                     &exe,
-                    &self.runtime.probe_dir()?,
-                    self.runtime.home(),
+                    &self.runtime.prepare_work_root()?,
+                    &self.runtime.runner,
                 );
                 self.runtime.store_probe(provider, report.clone());
                 Ok(Some(report))
@@ -309,6 +338,19 @@ impl<'a> AiService<'a> {
     ) -> ProviderStatusDto {
         let located = self.runtime.locator.find(executable_name(provider));
         let probe = self.runtime.cached(provider);
+        let persisted = self.database.with_connection(store::read_settings).ok();
+        let stored_report = persisted
+            .as_ref()
+            .and_then(|settings| settings.isolation_report.clone());
+        let report_for_policy = self.runtime.cached_self_test().or(stored_report);
+        let capability = self.runtime.runner.capability();
+        let consent_valid = setting.consent_profile_version == Some(ISOLATION_PROFILE_VERSION)
+            && report_for_policy.as_ref().is_some_and(|report| {
+                report.passed && report.profile_version == ISOLATION_PROFILE_VERSION
+            })
+            && capability.available;
+        let provider_proven = provider == ProviderId::Codex || self.runtime.factory.is_some();
+        let effective_enabled = setting.cli_enabled && consent_valid && provider_proven;
         let (apps, web_url) = handoff_target(provider);
         let app_installed = apps
             .iter()
@@ -320,7 +362,7 @@ impl<'a> AiService<'a> {
         };
         let report = probe.as_ref().map(|cached| &cached.report);
         let cli = ProviderCliDto {
-            enabled: setting.cli_enabled,
+            enabled: effective_enabled,
             detected,
             executable,
             version: report.and_then(|report| report.version.clone()),
@@ -335,12 +377,25 @@ impl<'a> AiService<'a> {
             ProviderId::Codex => "codex login",
             ProviderId::Claude => "claude auth login",
         };
-        let (availability, state, adapter, error) = if !setting.cli_enabled {
+        let isolation_reason = if !capability.available {
+            capability.reason.clone()
+        } else if provider == ProviderId::Claude && self.runtime.factory.is_none() {
+            Some("Claude остаётся в ручном режиме: не доказано одновременное отключение пользовательских settings, hooks, MCP и slash-команд".to_owned())
+        } else if report_for_policy.as_ref().is_none_or(|report| {
+            !report.passed || report.profile_version != ISOLATION_PROFILE_VERSION
+        }) {
+            Some("Сначала выполните проверку файловой изоляции".to_owned())
+        } else if setting.consent_profile_version != Some(ISOLATION_PROFILE_VERSION) {
+            Some("После проверки явно включите изолированный автоматический режим".to_owned())
+        } else {
+            None
+        };
+        let (availability, state, adapter, error) = if !effective_enabled {
             (
                 ProviderAvailability::Manual,
                 ProviderStateDto::Disconnected,
                 ProviderAdapterDto::ManualHandoff,
-                None,
+                isolation_reason.clone(),
             )
         } else if !detected {
             (
@@ -369,14 +424,19 @@ impl<'a> AiService<'a> {
                     ProviderAdapterDto::Unavailable,
                     report.error.clone(),
                 ),
-                Some(report) if report.logged_in == Some(false) => (
+                Some(report)
+                    if report.logged_in != Some(true)
+                        && (provider == ProviderId::Codex || self.runtime.factory.is_none()) =>
+                {
+                    (
                     ProviderAvailability::Error,
                     ProviderStateDto::ReauthRequired,
                     ProviderAdapterDto::Cli,
                     Some(format!(
                         "Войдите в официальном CLI: выполните `{login_hint}` в Терминале, затем «Проверить»"
                     )),
-                ),
+                )
+                }
                 Some(_) => (
                     ProviderAvailability::Connected,
                     ProviderStateDto::Connected,
@@ -405,6 +465,18 @@ impl<'a> AiService<'a> {
             availability,
             tasks: Self::tasks_of(rules, provider),
             cli,
+            isolation: ProviderIsolationDto {
+                capability,
+                report: report_for_policy,
+                consent_profile_version: setting.consent_profile_version,
+                consent_valid,
+                execution_policy: if effective_enabled {
+                    ProviderExecutionPolicy::IsolatedAutomatic
+                } else {
+                    ProviderExecutionPolicy::ManualOnly
+                },
+                blocking_reason: isolation_reason,
+            },
             handoff: ProviderHandoffDto {
                 app_installed,
                 web_url: web_url.to_owned(),
@@ -420,7 +492,10 @@ impl<'a> AiService<'a> {
             ))
         })?;
         let setting = settings.get(provider);
-        if setting.cli_enabled && self.runtime.cached(provider).is_none() {
+        if setting.cli_enabled
+            && setting.consent_profile_version == Some(ISOLATION_PROFILE_VERSION)
+            && self.runtime.cached(provider).is_none()
+        {
             // Подключённый ранее CLI проверяется один раз за сеанс приложения.
             self.run_probe(provider)?;
         }
@@ -436,14 +511,55 @@ impl<'a> AiService<'a> {
 
     /// Явная повторная проверка CLI.
     pub fn check(&self, provider: ProviderId) -> Result<ProviderStatusDto, AppError> {
+        if !self.runtime.runner.capability().available {
+            return Err(BackendError::blocked(
+                "OS isolation недоступна; используйте ручную передачу",
+            ));
+        }
         self.run_probe(provider)?;
         self.status(provider)
+    }
+
+    pub fn check_isolation(&self) -> Result<IsolationReport, AppError> {
+        ensure_private_dir(self.runtime.work_root())?;
+        let report = IsolationSelfTest::new(&self.runtime.runner).run();
+        self.runtime.store_self_test(report.clone());
+        self.database.with_transaction(|transaction| {
+            let mut settings = store::read_settings(transaction)?;
+            settings.isolation_report = Some(report.clone());
+            if !report.passed || report.profile_version != ISOLATION_PROFILE_VERSION {
+                for provider in [ProviderId::Codex, ProviderId::Claude] {
+                    let mut setting = settings.get(provider);
+                    setting.cli_enabled = false;
+                    setting.consent_profile_version = None;
+                    settings.set(provider, setting);
+                }
+            }
+            store::write_settings(transaction, &settings)
+        })?;
+        Ok(report)
     }
 
     /// Явное подключение официального CLI пользователем. Включается только
     /// найденный и поддерживаемый CLI; иначе — ошибка без изменения настроек.
     pub fn connect(&self, provider: ProviderId) -> Result<ProviderStatusDto, AppError> {
         let name = provider_label(provider);
+        if provider == ProviderId::Claude && self.runtime.factory.is_none() {
+            return Err(BackendError::blocked(
+                "Claude доступен только вручную: установленная версия не доказала отключение settings, hooks, MCP и slash-команд",
+            ));
+        }
+        let settings = self.database.with_connection(store::read_settings)?;
+        let isolation_ok = settings.isolation_report.as_ref().is_some_and(|report| {
+            report.passed && report.profile_version == ISOLATION_PROFILE_VERSION
+        }) || self.runtime.factory.is_some();
+        if !isolation_ok
+            || !self.runtime.runner.capability().available && self.runtime.factory.is_none()
+        {
+            return Err(BackendError::blocked(
+                "Сначала выполните успешную проверку файловой изоляции",
+            ));
+        }
         let Some(report) = self.run_probe(provider)? else {
             return Err(match self.runtime.locator.find(executable_name(provider)) {
                 Located::Rejected(reason) => BackendError::blocked(format!(
@@ -466,9 +582,20 @@ impl<'a> AiService<'a> {
                     .unwrap_or_else(|| "версия CLI не поддерживается".to_owned())
             )));
         }
+        if provider == ProviderId::Codex && report.logged_in != Some(true) {
+            return Err(BackendError::blocked(format!(
+                "{name}: учётные данные не подтверждены внутри OS isolation. Выполните `codex login` в Терминале и повторите проверку; если ошибка сохраняется, используйте ручную передачу"
+            )));
+        }
         self.database.with_transaction(|transaction| {
             let mut settings = store::read_settings(transaction)?;
-            settings.set(provider, ProviderSetting { cli_enabled: true });
+            settings.set(
+                provider,
+                ProviderSetting {
+                    cli_enabled: true,
+                    consent_profile_version: Some(ISOLATION_PROFILE_VERSION),
+                },
+            );
             store::write_settings(transaction, &settings)
         })?;
         self.status(provider)
@@ -477,7 +604,13 @@ impl<'a> AiService<'a> {
     pub fn disconnect(&self, provider: ProviderId) -> Result<ProviderStatusDto, AppError> {
         self.database.with_transaction(|transaction| {
             let mut settings = store::read_settings(transaction)?;
-            settings.set(provider, ProviderSetting { cli_enabled: false });
+            settings.set(
+                provider,
+                ProviderSetting {
+                    cli_enabled: false,
+                    consent_profile_version: None,
+                },
+            );
             store::write_settings(transaction, &settings)
         })?;
         self.status(provider)
@@ -775,6 +908,7 @@ impl<'a> AiService<'a> {
                 .map(|report| report.optional_flags.clone())
                 .unwrap_or_default(),
             home: self.runtime.home().map(Path::to_path_buf),
+            runner: self.runtime.runner.clone(),
         }))
     }
 

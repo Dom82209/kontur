@@ -18,6 +18,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     ai::{
+        isolation::IsolationReport,
         model::{AiJobDto, AiTask, ResponseSource},
         service::{handoff_target, MAX_RESPONSE_BYTES},
         AiEventSink, AiService, TransportPreference,
@@ -81,6 +82,21 @@ pub async fn check_provider<R: Runtime>(
         let status = with_ai(&app, |service| service.check(provider))?;
         emit_status(&app, &status);
         Ok(status)
+    })
+    .await
+}
+
+/// Реальный macOS self-test тем же runner и профилем, что production-запуски.
+#[tauri::command]
+pub async fn run_ai_isolation_self_test<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<IsolationReport, AppError> {
+    blocking(move || {
+        let report = with_ai(&app, |service| service.check_isolation())?;
+        for status in with_ai(&app, |service| service.statuses())? {
+            emit_status(&app, &status);
+        }
+        Ok(report)
     })
     .await
 }
@@ -430,7 +446,7 @@ mod tests {
         }
     }
 
-    const FAKE_CODEX: &str = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'codex-cli 0.99.0';;\n  login) exit 0;;\n  exec) for f in --sandbox --skip-git-repo-check --cd --color --output-last-message; do echo \"  $f <X>\"; done;;\nesac\n";
+    const FAKE_CODEX: &str = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'codex-cli 0.99.0';;\n  login) exit 0;;\n  exec) echo 'Usage: codex exec [OPTIONS]'; echo 'Prompt from stdin'; echo 'read-only'; for f in --sandbox --skip-git-repo-check --output-last-message --ephemeral --ignore-user-config --ignore-rules --strict-config; do echo \"  $f <X>\"; done;;\nesac\n";
 
     fn app() -> (tauri::App<tauri::test::MockRuntime>, TempDir) {
         use std::os::unix::fs::PermissionsExt;

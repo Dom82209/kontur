@@ -68,6 +68,7 @@ pub const COMMANDS: &[&str] = &[
     "transition_workflow",
     "get_provider_statuses",
     "check_provider",
+    "run_ai_isolation_self_test",
     "connect_provider",
     "disconnect_provider",
     "open_provider_app",

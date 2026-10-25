@@ -136,6 +136,7 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     transitionWorkflow: fail("transitionWorkflow"),
     getProviderStatuses: fail("getProviderStatuses"),
     checkProvider: fail("checkProvider"),
+    runAiIsolationSelfTest: fail("runAiIsolationSelfTest"),
     connectProvider: fail("connectProvider"),
     disconnectProvider: fail("disconnectProvider"),
     openProviderApp: fail("openProviderApp"),

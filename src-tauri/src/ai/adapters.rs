@@ -22,8 +22,9 @@ use serde_json::Value;
 use crate::dto::ProviderId;
 
 use super::{
+    isolation::IsolationRunner,
     locate::Executable,
-    process::{run_process, safe_env, ExitKind, ProcessOutcome, ProcessSpec, Tick},
+    process::{ExitKind, ProcessOutcome, ProcessSpec, Tick},
     redact::{redact, tail_chars},
 };
 
@@ -43,11 +44,15 @@ pub fn executable_name(provider: ProviderId) -> &'static str {
 fn required_flags(provider: ProviderId) -> &'static [&'static str] {
     match provider {
         ProviderId::Codex => &[
+            "exec",
             "--sandbox",
+            "read-only",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--strict-config",
             "--skip-git-repo-check",
             "--output-last-message",
-            "--cd",
-            "--color",
         ],
         ProviderId::Claude => &["--print", "--output-format", "--max-turns", "--tools"],
     }
@@ -56,7 +61,7 @@ fn required_flags(provider: ProviderId) -> &'static [&'static str] {
 /// Необязательные флаги, которые добавляются, если версия их знает.
 fn optional_flags(provider: ProviderId) -> &'static [&'static str] {
     match provider {
-        ProviderId::Codex => &["--ephemeral"],
+        ProviderId::Codex => &[],
         ProviderId::Claude => &[
             "--no-session-persistence",
             "--strict-mcp-config",
@@ -107,26 +112,39 @@ fn sanitize_version(raw: &str) -> Option<String> {
 
 /// Короткий запуск для проверки возможностей: пустой каталог, чистое окружение.
 fn probe_run(
+    runner: &IsolationRunner,
     exe: &Path,
     args: &[&str],
-    cwd: &Path,
-    home: Option<&Path>,
+    work_root: &Path,
     keep_output: bool,
 ) -> ProcessOutcome {
-    run_process(
-        &ProcessSpec {
-            program: exe.to_path_buf(),
-            args: args.iter().map(OsString::from).collect(),
-            cwd: cwd.to_path_buf(),
-            env: safe_env(home, exe, cwd),
-            stdin: None,
-            timeout: PROBE_TIMEOUT,
-            stdout_cap: if keep_output { 256 * 1024 } else { 0 },
-            stderr_cap: if keep_output { 16 * 1024 } else { 0 },
-        },
-        &AtomicBool::new(false),
-        &mut |_| {},
-    )
+    let workdir = tempfile::Builder::new()
+        .prefix(".kontur-ai-probe-")
+        .tempdir_in(work_root)
+        .expect("private probe directory");
+    runner
+        .run(
+            &ProcessSpec {
+                program: exe.to_path_buf(),
+                args: args.iter().map(OsString::from).collect(),
+                cwd: workdir.path().to_path_buf(),
+                env: Vec::new(),
+                stdin: None,
+                timeout: PROBE_TIMEOUT,
+                stdout_cap: if keep_output { 256 * 1024 } else { 0 },
+                stderr_cap: if keep_output { 16 * 1024 } else { 0 },
+            },
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap_or_else(|error| ProcessOutcome {
+            exit: ExitKind::SpawnFailed(error.message),
+            stdout: Vec::new(),
+            stdout_truncated: false,
+            stderr: Vec::new(),
+            stderr_truncated: false,
+            duration: Duration::ZERO,
+        })
 }
 
 /// Проверяет версию, нужные флаги и состояние входа. Вывод проверки входа
@@ -134,10 +152,10 @@ fn probe_run(
 pub fn probe(
     provider: ProviderId,
     exe: &Executable,
-    cwd: &Path,
-    home: Option<&Path>,
+    work_root: &Path,
+    runner: &IsolationRunner,
 ) -> ProbeReport {
-    let version_run = probe_run(&exe.path, &["--version"], cwd, home, true);
+    let version_run = probe_run(runner, &exe.path, &["--version"], work_root, true);
     let version = match &version_run.exit {
         ExitKind::Exited(0) => sanitize_version(&String::from_utf8_lossy(&version_run.stdout)),
         _ => None,
@@ -156,15 +174,18 @@ pub fn probe(
             }),
         };
     }
-    let help_run = probe_run(&exe.path, &help_args(provider), cwd, home, true);
+    let help_run = probe_run(runner, &exe.path, &help_args(provider), work_root, true);
     let mut help = String::from_utf8_lossy(&help_run.stdout).into_owned();
     help.push('\n');
     help.push_str(&String::from_utf8_lossy(&help_run.stderr));
-    let missing_flags: Vec<String> = required_flags(provider)
+    let mut missing_flags: Vec<String> = required_flags(provider)
         .iter()
         .filter(|flag| !flag_present(&help, flag))
         .map(|flag| (*flag).to_owned())
         .collect();
+    if provider == ProviderId::Codex && !help.to_ascii_lowercase().contains("stdin") {
+        missing_flags.push("stdin prompt".to_owned());
+    }
     let optional: Vec<String> = optional_flags(provider)
         .iter()
         .filter(|flag| flag_present(&help, flag))
@@ -178,9 +199,12 @@ pub fn probe(
             .any(|line| line.trim_start().starts_with("auth")),
     };
     let logged_in = if auth_known {
-        let auth = probe_run(&exe.path, &auth_args(provider), cwd, home, false);
+        let auth = probe_run(runner, &exe.path, &auth_args(provider), work_root, false);
         match auth.exit {
             ExitKind::Exited(0) => Some(true),
+            // Automatic mode is fail-closed: a non-zero status inside the
+            // exact production isolation profile means credentials were not
+            // proven usable there, regardless of the host CLI status.
             ExitKind::Exited(_) => Some(false),
             _ => None,
         }
@@ -279,6 +303,7 @@ pub struct CliAdapter {
     pub version: Option<String>,
     pub optional_flags: Vec<String>,
     pub home: Option<PathBuf>,
+    pub runner: IsolationRunner,
 }
 
 impl CliAdapter {
@@ -298,9 +323,10 @@ impl CliAdapter {
                     ]
                     .map(OsString::from),
                 );
-                if has("--ephemeral") {
-                    args.push("--ephemeral".into());
-                }
+                args.push("--ephemeral".into());
+                args.push("--ignore-user-config".into());
+                args.push("--ignore-rules".into());
+                args.push("--strict-config".into());
                 args.push("--cd".into());
                 args.push(workdir.as_os_str().to_owned());
                 args.push("--output-last-message".into());
@@ -381,20 +407,30 @@ impl AiAdapter for CliAdapter {
     fn execute(&self, request: &AdapterRequest<'_>, control: RunControl<'_>) -> AdapterResult {
         let tmp = request.workdir.join("tmp");
         let _ = std::fs::create_dir_all(&tmp);
-        let outcome = run_process(
-            &ProcessSpec {
-                program: self.executable.path.clone(),
-                args: self.args(request.workdir),
-                cwd: request.workdir.to_path_buf(),
-                env: safe_env(self.home.as_deref(), &self.executable.path, &tmp),
-                stdin: Some(request.prompt.as_bytes().to_vec()),
-                timeout: request.timeout,
-                stdout_cap: RESPONSE_CAP_BYTES,
-                stderr_cap: STDERR_CAP_BYTES,
-            },
-            control.cancel,
-            control.on_tick,
-        );
+        let outcome = self
+            .runner
+            .run(
+                &ProcessSpec {
+                    program: self.executable.path.clone(),
+                    args: self.args(request.workdir),
+                    cwd: request.workdir.to_path_buf(),
+                    env: Vec::new(),
+                    stdin: Some(request.prompt.as_bytes().to_vec()),
+                    timeout: request.timeout,
+                    stdout_cap: RESPONSE_CAP_BYTES,
+                    stderr_cap: STDERR_CAP_BYTES,
+                },
+                control.cancel,
+                control.on_tick,
+            )
+            .map_err(|error| AdapterFailure {
+                kind: FailureKind::Spawn,
+                message: error.message,
+                exit_code: None,
+                stderr_excerpt: String::new(),
+                duration_ms: 0,
+                partial_text: None,
+            })?;
         interpret(
             self.provider,
             outcome,
@@ -544,7 +580,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{probe, AdapterRequest, AiAdapter, CliAdapter, FailureKind, RunControl};
-    use crate::{ai::locate::Executable, dto::ProviderId};
+    use crate::{
+        ai::{isolation::IsolationRunner, locate::Executable},
+        dto::ProviderId,
+    };
 
     /// Фиктивный CLI в TempDir: никакой сети, только ответы по аргументам.
     fn fake_cli(dir: &Path, name: &str, body: &str) -> Executable {
@@ -564,9 +603,14 @@ case "$1" in
   exec)
     if [ "$2" = "--help" ]; then
       echo "Usage: codex exec [OPTIONS] [PROMPT]"
+      echo "Prompt is read from stdin"
       echo "  -s, --sandbox <SANDBOX_MODE>"
+      echo "      read-only"
       echo "      --skip-git-repo-check"
       echo "      --ephemeral"
+      echo "      --ignore-user-config"
+      echo "      --ignore-rules"
+      echo "      --strict-config"
       echo "  -C, --cd <DIR>"
       echo "      --color <COLOR>"
       echo "  -o, --output-last-message <FILE>"
@@ -586,10 +630,15 @@ exit 2
     fn probe_detects_version_flags_and_login_without_reading_auth_output() {
         let tmp = TempDir::new().unwrap();
         let exe = fake_cli(tmp.path(), "codex", CODEX);
-        let report = probe(ProviderId::Codex, &exe, tmp.path(), None);
+        let report = probe(
+            ProviderId::Codex,
+            &exe,
+            tmp.path(),
+            &IsolationRunner::system(None),
+        );
         assert_eq!(report.version.as_deref(), Some("codex-cli 0.99.0"));
         assert!(report.supported, "{report:?}");
-        assert_eq!(report.optional_flags, vec!["--ephemeral".to_owned()]);
+        assert!(report.optional_flags.is_empty());
         assert_eq!(report.logged_in, Some(true));
     }
 
@@ -601,7 +650,12 @@ exit 2
             "claude",
             r#"case "$1" in --version) echo "1.0.0 (Claude Code)";; --help) echo "  -p, --print"; echo "  --output-format <format>";; esac"#,
         );
-        let report = probe(ProviderId::Claude, &exe, tmp.path(), None);
+        let report = probe(
+            ProviderId::Claude,
+            &exe,
+            tmp.path(),
+            &IsolationRunner::system(None),
+        );
         assert!(!report.supported);
         assert_eq!(
             report.missing_flags,
@@ -621,6 +675,7 @@ exit 2
             version: Some("codex-cli 0.99.0".into()),
             optional_flags: vec!["--ephemeral".into()],
             home: None,
+            runner: IsolationRunner::system(None),
         };
         let args: Vec<String> = adapter
             .args(&work)
@@ -679,6 +734,7 @@ exit 2
             version: None,
             optional_flags: vec![],
             home: None,
+            runner: IsolationRunner::system(None),
         };
         let cancel = AtomicBool::new(false);
         let request = AdapterRequest {
@@ -744,6 +800,7 @@ exit 2
             version: None,
             optional_flags: vec![],
             home: None,
+            runner: IsolationRunner::system(None),
         };
         let cancel = AtomicBool::new(false);
         let failure = adapter

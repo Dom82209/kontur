@@ -133,6 +133,31 @@ export interface ProviderHandoff {
   webUrl: string;
 }
 
+export interface IsolationCheckResult {
+  id: string;
+  passed: boolean;
+  message: string;
+}
+
+export interface IsolationReport {
+  platform: string;
+  runnerAvailable: boolean;
+  profileVersion: number;
+  passed: boolean;
+  checks: IsolationCheckResult[];
+  checkedAt: ISODate;
+  explanation: string;
+}
+
+export interface ProviderIsolation {
+  capability: { available: boolean; profileVersion: number; reason: string | null };
+  report: IsolationReport | null;
+  consentProfileVersion: number | null;
+  consentValid: boolean;
+  executionPolicy: "manual_only" | "isolated_automatic";
+  blockingReason: string | null;
+}
+
 export const AI_JOB_OPEN: readonly AiJobStatus[] = ["prepared", "running", "response_ready"];
 export const isOpenJob = (job: Pick<AiJob, "status">): boolean => AI_JOB_OPEN.includes(job.status);
 

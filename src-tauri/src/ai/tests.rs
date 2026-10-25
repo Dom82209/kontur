@@ -183,8 +183,8 @@ impl Recorder {
 const FAKE_CODEX: &str = r#"#!/bin/sh
 case "$1" in
   --version) echo "codex-cli 0.99.0";;
-  login) [ -f "$HOME/logged-in" ] && exit 0; exit 1;;
-  exec) echo "  --sandbox <MODE>"; echo "  --skip-git-repo-check"; echo "  --cd <DIR>"; echo "  --color <C>"; echo "  --output-last-message <FILE>";;
+  login) exit 0;;
+  exec) echo "Usage: codex exec [OPTIONS]"; echo "Prompt from stdin"; echo "  --sandbox <MODE> read-only"; echo "  --ephemeral"; echo "  --ignore-user-config"; echo "  --ignore-rules"; echo "  --strict-config"; echo "  --skip-git-repo-check"; echo "  --output-last-message <FILE>";;
 esac
 "#;
 
@@ -388,13 +388,10 @@ fn detected_cli_is_never_enabled_without_explicit_connect() {
     );
     assert_eq!(codex.cli.version, None, "no probe before explicit action");
 
-    // Подключение без входа в официальный CLI — ошибка, не ложный успех.
+    // Fake CLI сообщает успешный вход; подключение всё равно происходит только
+    // после явного действия пользователя.
     let status = env.ai().connect(ProviderId::Codex).unwrap();
     assert!(status.cli.enabled);
-    assert_eq!(status.availability, ProviderAvailability::Error);
-    assert!(status.error_message.unwrap().contains("codex login"));
-    fs::write(env.home.join("logged-in"), "").unwrap();
-    let status = env.ai().check(ProviderId::Codex).unwrap();
     assert_eq!(status.availability, ProviderAvailability::Connected);
     assert_eq!(
         status.account_label.as_deref(),
@@ -432,9 +429,53 @@ fn detected_cli_is_never_enabled_without_explicit_connect() {
         .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&settings).unwrap(),
-        json!({"codex": {"cliEnabled": false}, "claude": {"cliEnabled": true}}),
-        "only a flag is stored — no paths, tokens or accounts"
+        json!({
+            "codex": {"cliEnabled": false, "consentProfileVersion": null},
+            "claude": {"cliEnabled": true, "consentProfileVersion": 1},
+            "isolationReport": null
+        }),
+        "only consent state is stored — no paths, tokens or accounts"
     );
+}
+
+#[test]
+fn legacy_enabled_setting_has_no_versioned_consent_and_stays_manual() {
+    let env = env();
+    install(&env.bin, "codex", FAKE_CODEX);
+    env.database
+        .with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO app_settings(key, value_json, created_at, updated_at) VALUES ('ai_providers', ?1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                [r#"{"codex":{"cliEnabled":true},"claude":{"cliEnabled":false}}"#],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let status = env.ai().status(ProviderId::Codex).unwrap();
+    assert!(!status.cli.enabled);
+    assert!(!status.isolation.consent_valid);
+    assert_eq!(status.availability, ProviderAvailability::Manual);
+}
+
+#[test]
+fn claude_is_manual_only_without_proof_that_settings_and_hooks_are_disabled() {
+    let tmp = TempDir::new().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    let bin = root.join("prefix/bin");
+    fs::create_dir_all(&bin).unwrap();
+    install(&bin, "claude", FAKE_CLAUDE);
+    let runtime = ProviderRuntime::for_tests(
+        root.join("data/ai"),
+        CliLocator::with_dirs(vec![bin], vec![root.join("prefix")], None),
+        None,
+        Duration::from_secs(5),
+    );
+    let database = seeded();
+    let error = AiService::new(&database, &runtime)
+        .connect(ProviderId::Claude)
+        .unwrap_err();
+    assert_eq!(error.code, crate::error::ErrorCode::Blocked);
+    assert!(error.message.contains("settings") && error.message.contains("hooks"));
 }
 
 #[test]
@@ -447,6 +488,23 @@ fn connect_fails_honestly_without_cli_or_with_unsupported_version() {
     assert_eq!(error.code, ErrorCode::Blocked);
     assert!(error.message.contains("--sandbox"));
     assert!(!env.ai().status(ProviderId::Codex).unwrap().cli.enabled);
+}
+
+#[test]
+fn codex_automatic_mode_requires_credentials_proven_inside_isolation() {
+    let env = env();
+    install(
+        &env.bin,
+        "codex",
+        &FAKE_CODEX.replace("login) exit 0", "login) exit 9"),
+    );
+    let error = env.ai().connect(ProviderId::Codex).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Blocked);
+    assert!(error.message.contains("учётные данные"));
+    let status = env.ai().status(ProviderId::Codex).unwrap();
+    assert!(!status.cli.enabled);
+    assert_eq!(status.cli.logged_in, Some(false));
+    assert_eq!(status.availability, ProviderAvailability::Manual);
 }
 
 #[test]
@@ -1202,7 +1260,8 @@ case "$1" in
   login) exit 0;;
   exec)
     if [ "$2" = "--help" ]; then
-      for f in --sandbox --skip-git-repo-check --cd --color --output-last-message --ephemeral; do echo "  $f <X>"; done; exit 0
+      echo 'Usage: codex exec [OPTIONS]'; echo 'Prompt from stdin'; echo '  read-only'
+      for f in --sandbox --skip-git-repo-check --output-last-message --ephemeral --ignore-user-config --ignore-rules --strict-config; do echo "  $f <X>"; done; exit 0
     fi
     out=""; prev=""; cd_dir=""
     for a in "$@"; do
@@ -1228,6 +1287,7 @@ esac
     let database = seeded();
     let verifier = FakeVerifier::default();
     let ai = AiService::new(&database, &runtime);
+    assert!(ai.check_isolation().unwrap().passed);
     assert_eq!(
         ai.connect(ProviderId::Codex).unwrap().availability,
         ProviderAvailability::Connected
@@ -1264,16 +1324,13 @@ esac
         done.adapter_label.as_deref(),
         Some("Codex CLI · codex-cli 1.0.0")
     );
-    let dump = fs::read_to_string(&marker).unwrap();
     assert!(
-        !dump.contains("ANTHROPIC_API_KEY"),
-        "secrets of the app environment are not inherited"
+        !marker.exists(),
+        "isolated CLI cannot write outside its job directory"
     );
-    assert!(dump.contains(&format!("HOME={}", home.display())));
-    assert!(
-        dump.contains("/data/ai/.kontur-ai-"),
-        "runs inside the job's own empty directory"
-    );
+    let serialized = serde_json::to_string(&done).unwrap();
+    assert!(!serialized.contains("ANTHROPIC_API_KEY"));
+    assert!(!serialized.contains(&home.to_string_lossy().to_string()));
     let leftovers: Vec<_> = fs::read_dir(root.join("data/ai"))
         .unwrap()
         .filter_map(Result::ok)

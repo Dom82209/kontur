@@ -5,6 +5,7 @@ import type {
   AiTask,
   ProviderId,
   ProviderStatus,
+  IsolationReport,
   TransportPreference,
   AssignmentLinkTarget,
   Dashboard,
@@ -541,6 +542,10 @@ export function getProviderStatuses(): Promise<ProviderStatus[]> {
 
 export function checkProvider(provider: ProviderId): Promise<ProviderStatus> {
   return call("check_provider", { provider });
+}
+
+export function runAiIsolationSelfTest(): Promise<IsolationReport> {
+  return call("run_ai_isolation_self_test");
 }
 
 export function connectProvider(provider: ProviderId): Promise<ProviderStatus> {

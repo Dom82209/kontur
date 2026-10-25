@@ -1,5 +1,9 @@
 # Контракт постоянного хранения
 
+## AI isolation consent (этап 9.2)
+
+Схема SQLite остаётся v7. В `app_settings.ai_providers` хранятся только флаги, `consentProfileVersion` и безопасный `IsolationReport` без путей и секретов. Отсутствующая версия (включая старое `{cliEnabled:true}` этапа 9) означает отсутствие согласия и не активирует CLI. Изменение версии профиля или failed self-test аннулирует consent. Абсолютный job path, credential path и содержимое credentials не сохраняются.
+
 Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, `ai-types.ts`, Rust DTO и SQLite schema version 7. SQLite доступен только Rust backend; read-only DTO, две DB-only мутации, импорт во «Входящие», импорт экспорта ЦУ и извлечение текста доступны через Tauri IPC, но основной UI по умолчанию работает через `MockDesktopBridge`.
 
 ## Соответствие сущностей

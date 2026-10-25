@@ -24,6 +24,7 @@ import {
   type OperationResult,
   type ProviderId,
   type ProviderStatus,
+  type IsolationReport,
   type RouteDestination,
   type RoutePreview,
   type Subject,
@@ -672,6 +673,7 @@ export class MockDesktopBridge implements DesktopBridge {
       errorMessage: null,
       accountLabel: provider === "codex" ? "Codex CLI · демо" : "Claude Code CLI · демо",
       cli: { ...s.cli, enabled: true, loggedIn: true, checkedAt: new Date().toISOString() },
+      isolation: { ...s.isolation, consentProfileVersion: 1, consentValid: true, executionPolicy: "isolated_automatic", blockingReason: null },
     });
     return clone(s);
   }
@@ -683,6 +685,21 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(s);
   }
 
+  async runAiIsolationSelfTest(): Promise<IsolationReport> {
+    await this.wait(300);
+    const checkedAt = new Date().toISOString();
+    const report: IsolationReport = {
+      platform: "macos", runnerAvailable: true, profileVersion: 1, passed: true,
+      checks: [{ id: "mock", passed: true, message: "Демонстрационная проверка" }],
+      checkedAt,
+      explanation: "Демонстрационный bridge не запускает внешний CLI.",
+    };
+    for (const status of this.providers) {
+      this.setProvider(status, { isolation: { ...status.isolation, report } });
+    }
+    return clone(report);
+  }
+
   async getProviderStatuses(): Promise<ProviderStatus[]> {
     await this.wait(100);
     return clone(this.providers);
@@ -691,7 +708,7 @@ export class MockDesktopBridge implements DesktopBridge {
   async disconnectProvider(provider: ProviderId): Promise<ProviderStatus> {
     const s = this.providers.find((p) => p.provider === provider)!;
     await this.wait((400));
-    this.setProvider(s, { state: "disconnected", accountLabel: null, errorMessage: null, cli: { ...s.cli, enabled: false } });
+    this.setProvider(s, { state: "disconnected", accountLabel: null, errorMessage: null, cli: { ...s.cli, enabled: false }, isolation: { ...s.isolation, consentProfileVersion: null, consentValid: false, executionPolicy: "manual_only" } });
     return clone(s);
   }
 

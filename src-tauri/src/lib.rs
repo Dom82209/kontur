@@ -120,6 +120,7 @@ pub fn run() {
             workflow_commands::transition_workflow,
             ai_commands::get_provider_statuses,
             ai_commands::check_provider,
+            ai_commands::run_ai_isolation_self_test,
             ai_commands::connect_provider,
             ai_commands::disconnect_provider,
             ai_commands::open_provider_app,

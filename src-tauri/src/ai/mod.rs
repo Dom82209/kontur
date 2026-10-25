@@ -13,6 +13,7 @@
 
 pub mod adapters;
 pub mod context;
+pub mod isolation;
 pub mod locate;
 pub mod model;
 pub mod process;

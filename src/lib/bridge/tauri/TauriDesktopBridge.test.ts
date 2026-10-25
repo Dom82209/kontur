@@ -166,6 +166,7 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     transitionWorkflow: unexpected("transitionWorkflow"),
     getProviderStatuses: unexpected("getProviderStatuses"),
     checkProvider: unexpected("checkProvider"),
+    runAiIsolationSelfTest: unexpected("runAiIsolationSelfTest"),
     connectProvider: unexpected("connectProvider"),
     disconnectProvider: unexpected("disconnectProvider"),
     openProviderApp: unexpected("openProviderApp"),

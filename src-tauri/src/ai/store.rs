@@ -51,15 +51,21 @@ pub struct ProviderSetting {
     /// Пользователь явно подключил официальный CLI. Только флаг — никаких
     /// путей, токенов и учётных данных.
     pub cli_enabled: bool,
+    /// Consent is valid only for the exact isolation profile version.  Old
+    /// stage-9 JSON has no value here and therefore cannot reactivate a CLI.
+    #[serde(default)]
+    pub consent_profile_version: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSettings {
     #[serde(default)]
     pub codex: ProviderSetting,
     #[serde(default)]
     pub claude: ProviderSetting,
+    #[serde(default)]
+    pub isolation_report: Option<super::isolation::IsolationReport>,
 }
 
 impl ProviderSettings {
