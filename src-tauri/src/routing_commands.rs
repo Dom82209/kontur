@@ -43,6 +43,7 @@ pub fn route_files(
     file_ids: Vec<String>,
     destination: Option<RouteDestinationDto>,
 ) -> Result<OperationResultDto<Vec<RoutePreviewDto>>, AppError> {
+    let _guard = state.lock_file_mutations()?;
     service(&state).route(&file_ids, destination.as_ref())
 }
 
@@ -51,5 +52,6 @@ pub fn undo_operation(
     state: State<'_, AppState>,
     operation_id: String,
 ) -> Result<OperationResultDto<()>, AppError> {
+    let _guard = state.lock_file_mutations()?;
     service(&state).undo(&operation_id)
 }

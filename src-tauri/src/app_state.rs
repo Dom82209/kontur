@@ -20,6 +20,7 @@ pub struct AppState {
     events: EventRegistry,
     grants: IntakeGrants,
     import_lock: Mutex<()>,
+    mutation_lock: Mutex<()>,
     candidates: CandidateRegistry,
     watcher: WatcherService,
     extraction_jobs: ExtractionJobs,
@@ -39,6 +40,7 @@ impl AppState {
             events: EventRegistry,
             grants: IntakeGrants::new(),
             import_lock: Mutex::new(()),
+            mutation_lock: Mutex::new(()),
             candidates: CandidateRegistry::new(),
             watcher: WatcherService::new(),
             extraction_jobs: ExtractionJobs::new(),
@@ -131,5 +133,13 @@ impl AppState {
         self.import_lock
             .lock()
             .map_err(|_| BackendError::database("Блокировка импорта повреждена"))
+    }
+
+    /// Опасные файловые мутации выполняются по одной. Это защищает не только UI,
+    /// но и IPC от двух быстрых кликов или повторного вызова из другого окна.
+    pub fn lock_file_mutations(&self) -> Result<MutexGuard<'_, ()>, AppError> {
+        self.mutation_lock
+            .lock()
+            .map_err(|_| BackendError::database("Блокировка файловой операции повреждена"))
     }
 }

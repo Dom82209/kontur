@@ -52,6 +52,7 @@ pub fn build_submission_package(
     state: State<'_, AppState>,
     homework_id: String,
 ) -> Result<OperationResultDto<SubmissionPackageDto>, AppError> {
+    let _guard = state.lock_file_mutations()?;
     SubmissionService::new(state.database(), state.home_dir()).build(&homework_id)
 }
 
@@ -75,6 +76,7 @@ pub fn confirm_submission(
     homework_id: String,
     confirmation: SubmissionConfirmationInput,
 ) -> Result<OperationResultDto<SubmissionReceiptDto>, AppError> {
+    let _guard = state.lock_file_mutations()?;
     let proof = confirmation
         .proof
         .as_ref()

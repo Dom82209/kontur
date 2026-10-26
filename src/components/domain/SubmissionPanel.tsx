@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import { CircleCheck, CircleX, Cloud, Copy, FolderOpen, Link2, Lock, Package, Send, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import { bridge, type Homework, type PackageItem, type Readiness, type SubmissionPackage, type SubmissionReceipt, type WorkflowCommandOptions } from "../../lib/bridge";
@@ -33,6 +33,7 @@ function toLocalInput(d: Date): string {
 export function SubmissionPanel({ homework: h, readiness, pkg, receipt, commentsCount, onChanged, manual = false, readyAllowed, commandOptions }: Props) {
   const toast = useToast();
   const { reportError, undo } = useOps();
+  const actionInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [readyOpen, setReadyOpen] = useState(false);
   const [noComments, setNoComments] = useState(false);
@@ -44,6 +45,8 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
   const isReadyStage = h.workflowStage === "ready_to_submit";
 
   const act = async <T,>(fn: () => Promise<T>, title: string, ok?: (v: T) => void) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     try {
       const v = await fn();
@@ -52,6 +55,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
     } catch (e) {
       reportError(e, title);
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   };

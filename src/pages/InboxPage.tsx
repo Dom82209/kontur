@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { Archive, ArrowRight, CircleCheck, Copy, ExternalLink, FolderSearch, GraduationCap, Inbox, ListChecks, NotebookPen, Pencil, ScanText, TriangleAlert, WandSparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
 import { useOps } from "../app/operations";
@@ -43,6 +43,7 @@ export function InboxPage() {
   const { reportError, undo } = useOps();
   const names = useSubjectNames();
   const q = useBridgeQuery(() => bridge.getInboxFiles(), [], ["inbox:file-added", "inbox:updated", "inbox:classification-updated", "operation:completed"]);
+  const routeInFlight = useRef(false);
   const [importRun, setImportRun] = useState<ImportRun | null>(null);
   const [exportCandidate, setExportCandidate] = useState<DownloadCandidate | null>(null);
   const [picking, setPicking] = useState(false);
@@ -158,7 +159,8 @@ export function InboxPage() {
   const importing = !!importRun && !importRun.report && !importRun.error;
 
   const route = async (ids: string[]) => {
-    if (ids.length === 0) return;
+    if (ids.length === 0 || routeInFlight.current) return;
+    routeInFlight.current = true;
     setRouting(new Set(ids));
     try {
       const res = await bridge.routeFiles(ids, null);
@@ -180,6 +182,7 @@ export function InboxPage() {
     } catch (e) {
       reportError(e, "Раскладка не выполнена");
     } finally {
+      routeInFlight.current = false;
       setRouting(new Set());
     }
   };
