@@ -135,5 +135,22 @@ describe("ProviderCard", () => {
     expect(html).toContain("settings и hooks");
     expect(html).toContain("Проверка по комментариям преподавателя");
     expect(html).not.toMatch(/type="password"|<input/);
+    expect(html).not.toMatch(/API[ _-]?(key|ключ)/i);
+  });
+
+  it("показывает account subscription только для подтверждённого connected-статуса", () => {
+    const connected = {
+      ...structuredClone(status),
+      provider: "codex",
+      state: "connected",
+      availability: "connected",
+      adapter: "cli",
+      accountLabel: "Подписка ChatGPT · Codex CLI",
+      cli: { ...status.cli, enabled: true, loggedIn: true, executable: "codex" },
+    };
+    const html = wrap(createElement(ProviderCard, { status: connected as never }));
+    expect(html).toContain("подписка аккаунта");
+    expect(html).not.toContain("не авторизован");
+    expect(html).not.toMatch(/<input/);
   });
 });

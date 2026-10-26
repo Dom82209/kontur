@@ -226,3 +226,25 @@ fn parse_transcript(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scenario_d_transcript_preview_extracts_pairs_without_writing() {
+        let pairs = parse_transcript(
+            "Вопрос: Нужен ли шлюз?\nПреподаватель: Да, добавьте его.\nВ: Какой формат?\nО: PDF и исходник.",
+            TeacherCommentSource::Chat,
+            "2026-10-26".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].question, "Нужен ли шлюз?");
+        assert_eq!(pairs[0].answer, "Да, добавьте его.");
+        assert_eq!(pairs[1].answer, "PDF и исходник.");
+        assert!(pairs
+            .iter()
+            .all(|pair| pair.source == TeacherCommentSource::Chat && pair.date == "2026-10-26"));
+    }
+}

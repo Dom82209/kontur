@@ -86,6 +86,11 @@ mod tests {
 
     fn fixture_database() -> Database {
         let database = migrated_database();
+        seed_fixture(&database);
+        database
+    }
+
+    fn seed_fixture(database: &Database) {
         database
             .with_connection(|connection| {
                 connection.execute_batch(
@@ -149,7 +154,6 @@ mod tests {
                 Ok(())
             })
             .expect("seed fixture");
-        database
     }
 
     #[test]
@@ -380,5 +384,62 @@ mod tests {
         assert_eq!(health.schema_version, CURRENT_SCHEMA_VERSION);
         let value: Value = serde_json::to_value(health).unwrap();
         assert!(value.get("databasePath").is_none());
+    }
+
+    #[test]
+    fn scenario_a_file_backed_state_survives_restart() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("kontur.sqlite3");
+        {
+            let database = Database::open_file(&path).unwrap();
+            assert_eq!(database.migrate().unwrap(), CURRENT_SCHEMA_VERSION);
+            seed_fixture(&database);
+            database
+                .with_connection(|connection| {
+                    connection.execute(
+                        "INSERT INTO teacher_comments(id, homework_id, question, answer, source, date, added_at) VALUES ('comment-1', 'homework-7', 'Что исправить?', 'Добавить шлюз', 'chat', '2026-10-20', '2026-10-20')",
+                        [],
+                    )?;
+                    connection.execute(
+                        "INSERT INTO teacher_requirements(id, homework_id, comment_id, text, origin, status, note, checked_version_id) VALUES ('requirement-1', 'homework-7', 'comment-1', 'Добавить шлюз', 'ответ', 'not_done', '', 'version-1')",
+                        [],
+                    )?;
+                    connection.execute(
+                        "INSERT INTO submission_packages(id, homework_id, final_version_id, status, package_path, checklist_json, items_json, links_json, warnings_json, upload_list_json, manifest_json, built_at) VALUES ('package-1', 'homework-7', 'version-1', 'draft', 'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу', '[]', '[]', '[]', '[]', '[]', '[]', '2026-10-20T12:00:00Z')",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let reopened = Database::open_file(&path).unwrap();
+        assert_eq!(reopened.migrate().unwrap(), CURRENT_SCHEMA_VERSION);
+        let service = QueryService::new(&reopened);
+        assert_eq!(service.subjects().unwrap().len(), 1);
+        assert_eq!(service.weeks("subject-oba").unwrap().len(), 2);
+        assert_eq!(service.homework("homework-7").unwrap().versions.len(), 1);
+        assert_eq!(service.activity_log().unwrap().len(), 2);
+        assert_eq!(
+            service.automation_rules().unwrap().workflow.style_threshold,
+            6
+        );
+        reopened
+            .with_connection(|connection| {
+                for table in [
+                    "teacher_comments",
+                    "teacher_requirements",
+                    "submission_packages",
+                ] {
+                    let count: i64 = connection.query_row(
+                        &format!("SELECT count(*) FROM {table}"),
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(count, 1, "{table} must survive restart");
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 }
