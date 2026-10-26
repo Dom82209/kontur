@@ -115,6 +115,8 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     chooseManagedRoot: unexpected("chooseManagedRoot"),
     prepareInboxRoot: unexpected("prepareInboxRoot"),
     createDemoWorkspace: unexpected("createDemoWorkspace"),
+    exportDiagnosticReport: unexpected("exportDiagnosticReport"),
+    openObsidianNote: unexpected("openObsidianNote"),
     pickImportFiles: unexpected("pickImportFiles"),
     importInboxFiles: unexpected("importInboxFiles"),
     getOperationResult: unexpected("getOperationResult"),

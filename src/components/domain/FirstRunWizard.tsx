@@ -15,11 +15,12 @@ export function FirstRunWizard() {
   const roots = query.data;
   const open = !dismissed && !!roots && !roots.importReady;
 
-  const run = async (action: () => Promise<ManagedRoots>, title: string) => {
+  const run = async (action: () => Promise<ManagedRoots>, title: string, reload = false) => {
     setBusy(true);
     try {
       const next = await action();
       query.setData(() => next);
+      if (reload) window.location.reload();
     } catch (error) {
       reportError(error, title);
     } finally {
@@ -47,7 +48,7 @@ export function FirstRunWizard() {
       wide
       footer={
         <>
-          <button className="btn btn--ghost" disabled={busy} onClick={() => void run(() => bridge.createDemoWorkspace(), "Демо-пространство не создано")}>
+          <button className="btn btn--ghost" disabled={busy} onClick={() => void run(() => bridge.createDemoWorkspace(), "Демо-пространство не создано", true)}>
             <FlaskConical /> Создать демо
           </button>
           {preview ? (

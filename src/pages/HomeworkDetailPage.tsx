@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { ArrowLeft, ArrowRight, BrainCircuit, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, Pin, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, BrainCircuit, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, NotebookPen, Pin, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
@@ -293,6 +293,9 @@ export function HomeworkDetailPage() {
           </p>
         </div>
         <div className="pagehead__actions">
+          <button className="btn" onClick={() => void bridge.openObsidianNote(`${h.folderPath}/Карточка ДЗ.md`).catch((error: unknown) => reportError(error, "Заметка Obsidian не открыта"))}>
+            <NotebookPen /> Obsidian
+          </button>
           <Link to={`/ai?homework=${h.id}`} className="btn">
             <BrainCircuit /> AI Workspace
           </Link>

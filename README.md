@@ -19,7 +19,7 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-Ручная проверка реального импорта во «Входящие» (весь UI на `TauriDesktopBridge`; ещё не реализованные функции отвечают `backend_unavailable`):
+Ручная проверка реального workflow (весь native UI работает через `TauriDesktopBridge`; IPC-ошибки не подменяются mock-результатом):
 
 ```bash
 npm run tauri:dev
@@ -62,4 +62,4 @@ React 19 · TypeScript strict · Vite · Motion for React (`motion/react`) · Re
 
 Горячие клавиши: ⌘K палитра, ⌘Z отмена последней файловой операции, ⌘1…⌘6 разделы, ⌘, настройки.
 
-Документы: [FRONTEND_HANDOFF.md](./FRONTEND_HANDOFF.md) · [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md)
+Документы: [руководство пользователя](./docs/USER_GUIDE.md) · [тестирование](./docs/TESTING_GUIDE.md) · [release checklist](./docs/RELEASE_CHECKLIST.md) · [frontend handoff](./FRONTEND_HANDOFF.md) · [design system](./DESIGN_SYSTEM.md)

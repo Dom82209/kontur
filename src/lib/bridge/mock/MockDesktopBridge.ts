@@ -408,6 +408,15 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(this.roots);
   }
 
+  async exportDiagnosticReport(): Promise<{ cancelled: boolean; fileName: string | null }> {
+    await this.wait(80);
+    return { cancelled: false, fileName: "kontur-diagnostic-demo.json" };
+  }
+
+  async openObsidianNote(_relativePath: string): Promise<void> {
+    await this.wait(60);
+  }
+
   // ───────────── Загрузки и экспорт ЦУ (имитация этапа 6) ─────────────
 
   getDownloadsWatcher: DesktopBridge["getDownloadsWatcher"] = () => this.lms.getWatcher();

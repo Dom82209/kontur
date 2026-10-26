@@ -7,7 +7,9 @@ import {
   __setInvokeForTests,
   chooseManagedRoot,
   createDemoWorkspace,
+  exportDiagnosticReport,
   importInboxFiles,
+  openObsidianNote,
   pickImportFiles,
   revealInFinder,
 } from "./ipc";
@@ -86,6 +88,8 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     chooseManagedRoot: fail("chooseManagedRoot"),
     prepareInboxRoot: fail("prepareInboxRoot"),
     createDemoWorkspace: fail("createDemoWorkspace"),
+    exportDiagnosticReport: fail("exportDiagnosticReport"),
+    openObsidianNote: fail("openObsidianNote"),
     pickImportFiles: fail("pickImportFiles"),
     importInboxFiles: fail("importInboxFiles"),
     getOperationResult: fail("getOperationResult"),
@@ -228,6 +232,8 @@ describe("Tauri native intake", () => {
       chooseManagedRoot: vi.fn(async () => ({ cancelled: true, roots })),
       prepareInboxRoot: vi.fn(async () => roots),
       createDemoWorkspace: vi.fn(async () => roots),
+      exportDiagnosticReport: vi.fn(async () => ({ cancelled: false, fileName: "kontur-diagnostic.json" })),
+      openObsidianNote: vi.fn(async () => undefined),
       openInboxFile: vi.fn(async () => undefined),
       revealInboxFile: vi.fn(async () => undefined),
       revealInFinder: vi.fn(async () => undefined),
@@ -237,12 +243,16 @@ describe("Tauri native intake", () => {
     await expect(adapter.chooseManagedRoot("backup")).resolves.toMatchObject({ cancelled: true });
     await adapter.prepareInboxRoot();
     await adapter.createDemoWorkspace();
+    await adapter.exportDiagnosticReport();
+    await adapter.openObsidianNote("Предметы/ОБА/Неделя 07/03 ДЗ/Карточка ДЗ.md");
     await adapter.openInboxFile("inbox-1");
     await adapter.revealInboxFile("inbox-1");
     await adapter.revealInFinder("Предметы/00 Входящие");
     expect(calls.chooseManagedRoot).toHaveBeenCalledWith("backup");
     expect(calls.openInboxFile).toHaveBeenCalledWith("inbox-1");
     expect(calls.revealInFinder).toHaveBeenCalledWith("Предметы/00 Входящие");
+    expect(calls.exportDiagnosticReport).toHaveBeenCalledOnce();
+    expect(calls.openObsidianNote).toHaveBeenCalledOnce();
   });
 
   it("native drop подписывается на intake:native-drop и помечает origin=drop", () => {
@@ -314,12 +324,16 @@ describe("IPC команды этапа 5", () => {
     await importInboxFiles(operation.id, [{ sourcePath: "/x/a.pdf", origin: "drop" }]);
     await chooseManagedRoot("vault");
     await createDemoWorkspace();
+    await exportDiagnosticReport();
+    await openObsidianNote("Предметы/ОБА/Заметка.md");
     await revealInFinder("Предметы/00 Входящие/a.pdf");
     expect(invoke.mock.calls).toEqual([
       ["pick_import_files", undefined],
       ["import_inbox_files", { operationId: operation.id, items: [{ sourcePath: "/x/a.pdf", origin: "drop" }] }],
       ["choose_managed_root", { kind: "vault" }],
       ["create_demo_workspace", undefined],
+      ["export_diagnostic_report", undefined],
+      ["open_obsidian_note", { relativePath: "Предметы/ОБА/Заметка.md" }],
       ["reveal_in_finder", { relativePath: "Предметы/00 Входящие/a.pdf" }],
     ]);
   });

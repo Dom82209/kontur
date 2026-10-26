@@ -12,6 +12,10 @@
 
 AI UI показывает один из режимов: «подписка аккаунта», «ручная передача», «не авторизован». API-key auth не поддерживается: в изоляцию Codex монтируется только официальный `auth.json` с `auth_mode=chatgpt`, без `OPENAI_API_KEY`; Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP.
 
+## Этап 13 — диагностика и release candidate
+
+`DesktopBridge.exportDiagnosticReport()` вызывает native save dialog. Backend записывает JSON только с version/schema, состояниями корней, счётчиками и обезличенными статусами. Имена, пути, тексты, prompts/responses и credentials не экспортируются.
+
 ## Этап 9.2 — isolation UI
 
 `ProviderStatus.isolation` содержит capability, последний `IsolationReport`, версию consent, `executionPolicy` и причину блокировки. `DesktopBridge.runAiIsolationSelfTest()` запускает native self-test. В «Настройки → Нейросети» показаны ручной/изолированный режим, версия профиля, дата проверки, кнопки проверки, явного включения и отключения. Старый `cliEnabled=true` без версии профиля не активирует CLI. Claude production всегда manual-only; frontend показывает backend reason и не подменяет его mock fallback.

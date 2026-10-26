@@ -4,7 +4,9 @@
 
 Модуль `ai::isolation` является единственной production-границей запуска внешних AI CLI: `IsolationRunner`, `IsolationCapability`, `IsolationReport`, `IsolationSelfTest`, `ProviderExecutionPolicy` и versioned macOS Seatbelt profile. Все version/help/auth/execute проходят через runner; неизолированного fallback нет. Self-test и consent хранятся безопасно в `app_settings`, текущая схема SQLite — v8. Codex получает полный обязательный набор флагов; в изоляцию монтируется только account-сессия Codex `auth_mode=chatgpt` без `OPENAI_API_KEY`. Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP. Подробности — `docs/AI_ISOLATION_SECURITY.md`.
 
-Статус документа: этап 11. Основной UI в native runtime использует только `TauriDesktopBridge`; все файловые, учебные и AI-команды подключены к реальному IPC. Mock доступен тестам и явному browser demo.
+Статус документа: этап 13. Основной UI в native runtime использует только `TauriDesktopBridge`; все файловые, учебные и AI-команды подключены к реальному IPC. Mock доступен тестам и явному browser demo.
+
+Этап 13 добавляет `export_diagnostic_report`: save dialog остаётся Rust-границей, frontend не получает путь. Отчёт не читает файлы и не выбирает prompt/response/detail/path-колонки SQLite.
 
 ## Модули
 
@@ -39,7 +41,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `7`. Неизменяемые v1–v6 и добавочная v7 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тест миграции заполненной v1 проверяет сохранение строк всех старых таблиц.
+Текущая версия схемы — `8`. Неизменяемые v1–v7 и добавочная v8 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тесты миграций заполненных старых схем проверяют сохранение строк.
 
 Схема содержит таблицы:
 
@@ -54,7 +56,8 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `download_seen` (v4);
 - `extractions`, `material_extractions`, `extraction_batches`, `corpus_selections`, `corpus_selection_items` (v5);
 - `style_confirmations` (v6);
-- `ai_jobs` (v7).
+- `ai_jobs` (v7);
+- `route_operation_items`, `managed_notes`, `style_profile_sources` и manifests неизменяемого submission snapshot (v8).
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 

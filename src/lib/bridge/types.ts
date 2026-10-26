@@ -230,6 +230,11 @@ export interface ManagedRoots {
   importReady: boolean;
 }
 
+export interface DiagnosticExport {
+  cancelled: boolean;
+  fileName: string | null;
+}
+
 export interface RootSelection {
   /** Пользователь закрыл системный диалог; настройки не изменились. */
   cancelled: boolean;
@@ -888,6 +893,10 @@ export interface DesktopBridge {
   prepareInboxRoot(): Promise<ManagedRoots>;
   /** Создаёт изолированное демонстрационное пространство только в каталоге данных приложения. */
   createDemoWorkspace(): Promise<ManagedRoots>;
+  /** Сохраняет обезличенную диагностику без текстов, путей и credentials. */
+  exportDiagnosticReport(): Promise<DiagnosticExport>;
+  /** Открывает только зарегистрированную managed Markdown-заметку. */
+  openObsidianNote(relativePath: string): Promise<void>;
   // ── Загрузки и экспорт ЦУ (этап 6). Вход в LMS и отправка работ не автоматизируются. ──
   getDownloadsWatcher(): Promise<DownloadsWatcher>;
   /** Включение — только явным действием пользователя в Настройках. */

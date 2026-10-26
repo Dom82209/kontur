@@ -1,4 +1,6 @@
-import { BrainCircuit, Gauge, MessagesSquare, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun, Wand2, FileText } from "lucide-react";
+import { BrainCircuit, Download, Gauge, MessagesSquare, Monitor, Moon, PenLine, ScanSearch, ShieldCheck, Sun, Wand2, FileText } from "lucide-react";
+import { useState } from "react";
+import { useOps } from "../app/operations";
 import { usePrefs } from "../app/preferences";
 import { DownloadsWatcherToggle } from "../components/domain/DownloadsWatcher";
 import { ExtractionSettingsPanel } from "../components/domain/ExtractionSettingsPanel";
@@ -19,6 +21,9 @@ const PROVIDERS = [
 
 export function SettingsPage() {
   const prefs = usePrefs();
+  const { reportError } = useOps();
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<string | null>(null);
   const { rules, error, reload, dirty, saving, update, save, reset } = useRulesDraft();
   const providers = useBridgeQuery(() => bridge.getProviderStatuses(), [], ["provider:status-changed"]);
 
@@ -228,6 +233,27 @@ export function SettingsPage() {
           <p className="faint" style={{ marginTop: 10 }}>
             Режим данных: <span className="mono">{bridge.kind === "mock" ? "демонстрационный (mock adapter)" : "desktop backend"}</span>
           </p>
+          <div className="settings__fields" style={{ marginTop: 14 }}>
+            <button
+              className="btn btn--sm"
+              style={{ justifySelf: "start" }}
+              disabled={exportingDiagnostics}
+              onClick={() => {
+                setExportingDiagnostics(true);
+                setDiagnosticResult(null);
+                void bridge.exportDiagnosticReport()
+                  .then((result) => {
+                    if (!result.cancelled) setDiagnosticResult(`Сохранено: ${result.fileName ?? "kontur-diagnostic.json"}`);
+                  })
+                  .catch((error: unknown) => reportError(error, "Диагностика не экспортирована"))
+                  .finally(() => setExportingDiagnostics(false));
+              }}
+            >
+              <Download /> {exportingDiagnostics ? "Создание…" : "Экспорт диагностики"}
+            </button>
+            <p className="field__hint">Отчёт содержит только версию, статусы и счётчики. Тексты документов, пути, cookies, токены и credentials не включаются.</p>
+            {diagnosticResult && <div className="notice notice--ok" role="status">{diagnosticResult}</div>}
+          </div>
         </section>
       </div>
       <SaveBar visible={dirty} saving={saving} onSave={() => void save()} onReset={reset} />

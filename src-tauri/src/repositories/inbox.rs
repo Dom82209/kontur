@@ -34,7 +34,9 @@ impl ReadRepository<'_> {
             let mut statement = connection.prepare(
                 "SELECT id, name, kind, size_bytes, added_at, origin, status, relative_path,
                         classification_json, duplicate_json, provenance_json
-                 FROM inbox_files ORDER BY added_at DESC, id DESC",
+                 FROM inbox_files
+                 WHERE status <> 'routed'
+                 ORDER BY added_at DESC, id DESC",
             )?;
             let mut rows = statement.query([])?;
             let mut output = Vec::new();

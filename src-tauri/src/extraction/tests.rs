@@ -1164,6 +1164,32 @@ fn analyze_reads_original_without_changing_it_and_stores_normalized_result() {
 }
 
 #[test]
+fn routed_inbox_source_is_not_duplicated_in_material_catalog() {
+    let env = env();
+    let inbox = add_inbox(&env, "Лекция.pdf", LECTURE_PDF);
+    env.database
+        .with_connection(|connection| {
+            connection.execute(
+                "UPDATE inbox_files SET status = 'routed' WHERE id = ?1",
+                [&inbox.id],
+            )?;
+            connection.execute(
+                "INSERT INTO files(id, week_id, category, name, kind, size_bytes, relative_path, content_hash)
+                 VALUES ('routed-file', 'w5', 'lecture', 'Лекция.pdf', 'pdf', ?1,
+                         'Предметы/ОБА/Неделя 05/01 Лекции/Лекция.pdf', ?2)",
+                rusqlite::params![LECTURE_PDF.len() as i64, sha_hex(LECTURE_PDF)],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let materials = service(&env).list().unwrap();
+    assert_eq!(materials.len(), 1);
+    assert_eq!(materials[0].material.kind, MaterialKind::File);
+    assert_eq!(materials[0].material.id, "routed-file");
+}
+
+#[test]
 fn same_hash_uses_cache_and_force_rebuilds() {
     let env = env();
     let inbox = add_inbox(&env, "Лекция.pdf", LECTURE_PDF);

@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::{ffi::OsString, io::Write};
 use uuid::Uuid;
 
@@ -17,8 +18,17 @@ pub struct ManagedMarkdownWrite {
     destination: VerifiedDestination,
     previous: Option<Vec<u8>>,
     identity: Identity,
+    managed_hash: String,
 }
 impl ManagedMarkdownWrite {
+    pub fn relative_path(&self) -> &PersistentPath {
+        self.destination.relative()
+    }
+
+    pub fn managed_hash(&self) -> &str {
+        &self.managed_hash
+    }
+
     pub fn compensate(self) -> bool {
         match self.previous {
             Some(bytes) => write_bytes(&self.destination, &bytes).is_ok(),
@@ -58,6 +68,7 @@ pub fn write_managed_markdown(
         destination,
         previous,
         identity,
+        managed_hash: format!("{:x}", Sha256::digest(next.as_bytes())),
     })
 }
 fn replace_block(text: &str, block: &str) -> Result<String, AppError> {

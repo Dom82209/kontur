@@ -42,6 +42,8 @@ export interface TauriIpcClient {
   chooseManagedRoot: typeof ipc.chooseManagedRoot;
   prepareInboxRoot: typeof ipc.prepareInboxRoot;
   createDemoWorkspace: typeof ipc.createDemoWorkspace;
+  exportDiagnosticReport: typeof ipc.exportDiagnosticReport;
+  openObsidianNote: typeof ipc.openObsidianNote;
   pickImportFiles: typeof ipc.pickImportFiles;
   importInboxFiles: typeof ipc.importInboxFiles;
   getOperationResult: typeof ipc.getOperationResult;
@@ -189,6 +191,8 @@ export class TauriDesktopBridge implements DesktopBridge {
   chooseManagedRoot: DesktopBridge["chooseManagedRoot"] = (kind) => this.ipcClient.chooseManagedRoot(kind);
   prepareInboxRoot: DesktopBridge["prepareInboxRoot"] = () => this.ipcClient.prepareInboxRoot();
   createDemoWorkspace: DesktopBridge["createDemoWorkspace"] = () => this.ipcClient.createDemoWorkspace();
+  exportDiagnosticReport: DesktopBridge["exportDiagnosticReport"] = () => this.ipcClient.exportDiagnosticReport();
+  openObsidianNote: DesktopBridge["openObsidianNote"] = (relativePath) => this.ipcClient.openObsidianNote(relativePath);
 
   // ── Загрузки и экспорт ЦУ ──
 

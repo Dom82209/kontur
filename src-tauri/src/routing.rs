@@ -271,6 +271,9 @@ impl<'a> RoutingService<'a> {
         let db_result=self.database.with_transaction(|tx|{
             writes::insert_running_operation(tx,&operation_id,OperationKind::Route,"Раскладка файлов")?;
             for (preview,dest) in &previews { let row=route_row_in(tx,&preview.file_id,dest)?; ensure_week_and_homework(tx,&row,dest)?; if preview.action!=RouteActionDto::Skip { let hash=committed.iter().find(|c|c.receipt.destination.as_str()==preview.target_path).map(|c|c.receipt.sha256.as_str()).ok_or_else(||BackendError::database("Нет квитанции копирования"))?; tx.execute("INSERT INTO files(id,week_id,homework_id,category,name,kind,size_bytes,modified_at,relative_path,content_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?8,?9)",params![Uuid::new_v4().to_string(),row.week_id,row.homework_id,category_db(dest.category),preview.target_name,row.kind,row.size,preview.target_path,hash])?; } tx.execute("INSERT INTO route_operation_items(operation_id,inbox_file_id,target_path,action) VALUES(?1,?2,?3,?4)",params![operation_id,preview.file_id,preview.target_path,action_db(preview.action)])?; tx.execute("UPDATE inbox_files SET status='routed',updated_at=CURRENT_TIMESTAMP WHERE id=?1",[&preview.file_id])?; }
+            for note in &note_writes {
+                register_managed_note(tx, note)?;
+            }
             tx.execute("UPDATE operations SET undoable=1,undo_payload_json=?2,paths_json=?3,detail=?4 WHERE id=?1",params![operation_id,manifest_json,paths_json,format!("Разложено файлов: {}",previews.len())])?; writes::complete_operation(tx,&operation_id)?; Ok(())
         });
         if let Err(error) = db_result {
@@ -399,6 +402,58 @@ impl<'a> RoutingService<'a> {
             .collect::<Vec<_>>()
             .join("\n"))
     }
+}
+
+fn register_managed_note(
+    transaction: &rusqlite::Transaction<'_>,
+    note: &ManagedMarkdownWrite,
+) -> Result<(), AppError> {
+    let relative_path = note.relative_path().as_str();
+    let (parent, file_name) = relative_path
+        .rsplit_once('/')
+        .ok_or_else(|| BackendError::database("Неверный путь управляемой заметки"))?;
+    let (entity_kind, entity_id): (&str, String) = match file_name {
+        "Карточка ДЗ.md" => (
+            "homework",
+            transaction.query_row(
+                "SELECT id FROM homeworks WHERE folder_path=?1",
+                [parent],
+                |row| row.get(0),
+            )?,
+        ),
+        "Обзор недели.md" => (
+            "week",
+            transaction.query_row(
+                "SELECT id FROM weeks WHERE folder_path=?1",
+                [parent],
+                |row| row.get(0),
+            )?,
+        ),
+        _ => (
+            "subject",
+            transaction.query_row(
+                "SELECT id FROM subjects WHERE folder_path=?1",
+                [parent],
+                |row| row.get(0),
+            )?,
+        ),
+    };
+    transaction.execute(
+        "INSERT INTO managed_notes(id,entity_kind,entity_id,relative_path,managed_hash)
+         VALUES(?1,?2,?3,?4,?5)
+         ON CONFLICT(entity_kind,entity_id) DO UPDATE SET
+           relative_path=excluded.relative_path,
+           managed_hash=excluded.managed_hash,
+           updated_at=CURRENT_TIMESTAMP",
+        params![
+            Uuid::new_v4().to_string(),
+            entity_kind,
+            entity_id,
+            relative_path,
+            note.managed_hash()
+        ],
+    )?;
+    Ok(())
 }
 
 struct RouteRow {
@@ -673,6 +728,13 @@ mod tests {
         assert!(wire.get("source_relative_path").is_none());
         let routed = service.route(&["i1".into()], Some(&dest)).unwrap();
         assert!(f.vault.join(&routed.value[0].target_path).is_file());
+        let registered_notes: i64 = f
+            .database
+            .with_connection(|c| {
+                Ok(c.query_row("SELECT count(*) FROM managed_notes", [], |r| r.get(0))?)
+            })
+            .unwrap();
+        assert_eq!(registered_notes, 2);
         let note = f
             .vault
             .join("Предметы/Математика/Неделя 07/Обзор недели.md");
@@ -682,10 +744,30 @@ mod tests {
         f.add("i2", second_name, None);
         let second = RouteDestinationDto {
             category: MaterialCategory::Seminar,
-            ..dest
+            ..dest.clone()
         };
         let second_route = service.route(&["i2".into()], Some(&second)).unwrap();
         assert!(fs::read_to_string(&note).unwrap().starts_with("Мой текст"));
+        f.add("i3", "Математика week 7 ДЗ.md", None);
+        let homework = RouteDestinationDto {
+            category: MaterialCategory::HomeworkTask,
+            ..dest
+        };
+        service.route(&["i3".into()], Some(&homework)).unwrap();
+        let homework_note: String = f
+            .database
+            .with_connection(|c| {
+                Ok(c.query_row(
+                    "SELECT relative_path FROM managed_notes WHERE entity_kind='homework'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            homework_note,
+            "Предметы/Математика/Неделя 07/03 ДЗ/Карточка ДЗ.md"
+        );
         service.undo(&second_route.operation.id).unwrap();
         assert!(!f.vault.join(&second_route.value[0].target_path).exists());
         let status: String = f

@@ -125,9 +125,61 @@ pub async fn create_demo_workspace<R: Runtime>(
         service.set_root(RootKind::Vault, &vault)?;
         service.set_root(RootKind::Backup, &backup)?;
         service.set_root(RootKind::Downloads, &downloads)?;
-        service.prepare_inbox()
+        let roots = service.prepare_inbox()?;
+        state.database().with_transaction(|transaction| {
+            transaction.execute(
+                "INSERT INTO subjects(id, name, short_name, folder_path)
+                 VALUES ('demo-course', 'Демо-курс', 'Демо', 'Предметы/Демо-курс')
+                 ON CONFLICT(id) DO NOTHING",
+                [],
+            )?;
+            Ok(())
+        })?;
+        Ok(roots)
     })
     .await
+}
+
+#[tauri::command]
+pub fn open_obsidian_note<R: Runtime>(
+    app: AppHandle<R>,
+    relative_path: String,
+) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let relative = PersistentPath::new(relative_path)?;
+    if !relative.as_str().ends_with(".md") {
+        return Err(BackendError::blocked(
+            "Можно открыть только Markdown-заметку",
+        ));
+    }
+    let managed: bool = state.database().with_connection(|connection| {
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_notes WHERE relative_path = ?1)",
+            [relative.as_str()],
+            |row| row.get(0),
+        )?)
+    })?;
+    if !managed {
+        return Err(BackendError::blocked("Заметка не создана «Контуром»"));
+    }
+    let roots = roots_service(&state);
+    roots.resolve_for_os(&relative, true)?;
+    let vault_path = roots
+        .config()?
+        .vault_path
+        .ok_or_else(|| BackendError::blocked("Хранилище Obsidian не выбрано"))?;
+    let vault_name = Path::new(&vault_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| BackendError::blocked("Имя Obsidian vault недоступно"))?;
+    let mut url = url::Url::parse("obsidian://open")
+        .map_err(|_| BackendError::blocked("Не удалось создать Obsidian-ссылку"))?;
+    url.query_pairs_mut()
+        .append_pair("vault", vault_name)
+        .append_pair("file", relative.as_str());
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|_| BackendError::io("Не удалось открыть заметку в Obsidian"))
 }
 
 #[tauri::command]
@@ -532,5 +584,18 @@ mod tests {
             .is_dir());
         assert!(data.join("demo-workspace/Резервные копии").is_dir());
         assert!(data.join("demo-workspace/Загрузки").is_dir());
+        let subject = app
+            .state::<AppState>()
+            .database()
+            .with_connection(|connection| {
+                Ok(connection.query_row(
+                    "SELECT name, folder_path FROM subjects WHERE id = 'demo-course'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(subject.0, "Демо-курс");
+        assert_eq!(subject.1, "Предметы/Демо-курс");
     }
 }

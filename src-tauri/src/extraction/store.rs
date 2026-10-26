@@ -157,7 +157,9 @@ pub fn all_materials(database: &Database) -> Result<Vec<MaterialInfo>, AppError>
         let mut materials = Vec::new();
         let mut statement = connection.prepare(
             "SELECT id, name, kind, size_bytes, relative_path, sha256
-             FROM inbox_files ORDER BY added_at DESC, id",
+             FROM inbox_files
+             WHERE status <> 'routed'
+             ORDER BY added_at DESC, id",
         )?;
         for row in statement.query_map([], inbox_row)? {
             materials.push(row?);

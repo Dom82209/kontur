@@ -273,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn routed_files_are_not_returned_as_waiting_in_inbox() {
+        let database = fixture_database();
+        database
+            .with_connection(|connection| {
+                connection.execute(
+                    "UPDATE inbox_files SET status = 'routed' WHERE id = 'inbox-1'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(QueryService::new(&database)
+            .inbox_files()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn reads_saved_automation_rules_and_merges_safe_defaults() {
         let database = fixture_database();
         let rules = QueryService::new(&database).automation_rules().unwrap();

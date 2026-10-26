@@ -4,7 +4,7 @@
 
 ## Текущий этап
 
-Этап 12 выполняется поверх зафиксированного runtime этапа 11. Настоящий Tauri runtime использует только `TauriDesktopBridge`; mock остаётся тестовым и явным browser demo. Добавлены file-backed restart regression, матрица сценариев A–F, backend-mutex для опасных файловых мутаций, синхронные UI in-flight guards и route-level code splitting. Schema version остаётся 8.
+Этап 13 готовит сборку для пользовательского тестирования. Есть onboarding, demo workspace, диагностика корней, Finder-действия, журнал, подсказки следующего шага и обезличенный diagnostic export. Резервное копирование, восстановление, перенос и SHA-256 описаны в `docs/USER_GUIDE.md`. Schema version остаётся 8.
 
 AI использует только account subscription: Codex принимает существующую официальную ChatGPT/Codex CLI-сессию лишь после проверки внутри изоляции; API-key auth не монтируется. Claude остаётся manual-only до доказанной изоляции settings/hooks/MCP. Полей API-ключей нет.
 

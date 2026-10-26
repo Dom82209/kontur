@@ -242,6 +242,14 @@ export function createDemoWorkspace(): Promise<ManagedRoots> {
   return call("create_demo_workspace");
 }
 
+export function exportDiagnosticReport(): Promise<import("../types").DiagnosticExport> {
+  return call("export_diagnostic_report");
+}
+
+export function openObsidianNote(relativePath: string): Promise<void> {
+  return call("open_obsidian_note", { relativePath });
+}
+
 /** Системный выбор нескольких файлов (диалог открывает Rust). Отмена — пустой массив. */
 export function pickImportFiles(): Promise<NativeIntakeItem[]> {
   return call("pick_import_files");
