@@ -806,6 +806,7 @@ export class MockDesktopBridge implements DesktopBridge {
   getTeacherComments: DesktopBridge["getTeacherComments"] = (...a) => this.workflow.getTeacherComments(...a);
   saveTeacherComments: DesktopBridge["saveTeacherComments"] = (...a) => this.workflow.saveTeacherComments(...a);
   importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = (...a) => this.workflow.importTeacherTranscript(...a);
+  previewTeacherTranscript: DesktopBridge["previewTeacherTranscript"] = (...a) => this.workflow.previewTeacherTranscript(...a);
   removeTeacherComment: DesktopBridge["removeTeacherComment"] = (...a) => this.workflow.removeTeacherComment(...a);
   runTeacherReview: DesktopBridge["runTeacherReview"] = (...a) => this.workflow.runTeacherReview(...a);
   getTeacherRequirements: DesktopBridge["getTeacherRequirements"] = (...a) => this.workflow.getTeacherRequirements(...a);
@@ -982,7 +983,22 @@ export class MockDesktopBridge implements DesktopBridge {
     const folder = `${weekFolder(dest.subjectId, dest.weekNumber)}/${CATEGORY_FOLDER[dest.category]}`;
     const dup = this.findDuplicate(f, dest, reserved);
     const targetName = dup ? dup.suggestedName : `${stem}${ext}`;
-    return { fileId: f.id, targetPath: `${folder}/${targetName}`, targetName, createsWeek: !exists, duplicate: dup };
+    const targetPath = `${folder}/${targetName}`;
+    return {
+      fileId: f.id,
+      sourceName: f.name,
+      sourceRelativePath: `Предметы/00 Входящие/${f.name}`,
+      targetPath,
+      targetName,
+      createsWeek: !exists,
+      createsDirectories: !exists ? [weekFolder(dest.subjectId, dest.weekNumber), folder] : [folder],
+      sha256Match: dup?.sameContent ?? false,
+      nameConflict: Boolean(dup && !dup.sameContent),
+      renamed: Boolean(dup && !dup.sameContent),
+      action: dup?.sameContent ? "skip" : dup ? "rename" : "copy",
+      undoable: true,
+      duplicate: dup,
+    };
   }
 
   private findDuplicate(f: InboxFile, dest: RouteDestination, reserved: FileRef[] = []): InboxFile["duplicate"] {

@@ -1,12 +1,13 @@
 import { AnimatePresence, motion } from "motion/react";
 import { FileUp, ListPlus, MessagesSquare, Paperclip, Plus, ScanSearch, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type RequirementStatus, type TeacherComment, type TeacherCommentSource, type TeacherRequirement, type TeacherRequirementInput, type WorkflowCommandOptions } from "../../lib/bridge";
+import { bridge, type RequirementStatus, type TeacherComment, type TeacherCommentInput, type TeacherCommentSource, type TeacherRequirement, type TeacherRequirementInput, type TeacherTranscriptInput, type WorkflowCommandOptions } from "../../lib/bridge";
 import { COMMENT_SOURCE_LABEL, formatDate, plural, REQUIREMENT_STATUS_LABEL } from "../../lib/format";
 import { Segmented } from "../ui/Segmented";
 import { EmptyState } from "../ui/States";
+import { Dialog } from "../ui/Dialog";
 import { RequirementList } from "./RequirementList";
 
 type Mode = "paste" | "file" | "manual";
@@ -88,7 +89,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
   const [q, setQ] = useState("");
   const [a, setA] = useState("");
   const [busy, setBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [transcriptPreview, setTranscriptPreview] = useState<{ input: TeacherTranscriptInput; pairs: TeacherCommentInput[] } | null>(null);
   const iso = new Date(`${date}T12:00:00`).toISOString();
 
   const done = (n: number) => toast.push({ tone: "ok", title: `Добавлено ${n} ${plural(n, "комментарий", "комментария", "комментариев")}`, text: "Запустите повторную проверку по всем комментариям" });
@@ -103,6 +104,17 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
       setA("");
     } catch (e) {
       reportError(e, "Комментарии не сохранены");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const previewTranscript = async (input: TeacherTranscriptInput) => {
+    setBusy(true);
+    try {
+      const pairs = await bridge.previewTeacherTranscript(input);
+      setTranscriptPreview({ input, pairs });
+    } catch (e) {
+      reportError(e, "Переписка не распознана");
     } finally {
       setBusy(false);
     }
@@ -155,28 +167,20 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                       <textarea className="textarea teacher__textarea teacher__textarea--transcript" placeholder={"В: Можно ли…?\nО: Да, но…"} value={text} onChange={(e) => setText(e.target.value)} />
                       <span className="field__hint">Строки «В:» / «О:» (или «Вопрос:» / «Ответ:») разбиваются на пары автоматически.</span>
                     </label>
-                    <button className="btn btn--primary" disabled={busy || !text.trim()} onClick={() => void submit(() => bridge.importTeacherTranscript(homeworkId, { text, source, date: iso }))}>
-                      <MessagesSquare /> Разобрать и сохранить
+                    <button className="btn btn--primary" disabled={busy || !text.trim()} onClick={() => void previewTranscript({ text, source, date: iso })}>
+                      <MessagesSquare /> Разобрать и проверить
                     </button>
                   </>
                 )}
                 {mode === "file" && (
                   <>
-                    <p className="faint">Markdown, TXT, PDF или изображение. Текст извлечёт backend; файл сохранится рядом с условием.</p>
-                    <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
+                    <p className="faint">Выберите TXT или Markdown. Файл читается локально только после системного выбора; абсолютный путь не сохраняется.</p>
+                    <button className="btn" disabled={busy} onClick={() => void bridge.pickFiles().then((items) => {
+                      const item = items[0];
+                      if (item) void previewTranscript({ file: item, source, date: iso });
+                    }, (e: unknown) => reportError(e, "Файл не выбран"))}>
                       <FileUp /> Выбрать файл
                     </button>
-                    <input
-                      ref={fileRef}
-                      type="file"
-                      hidden
-                      accept=".md,.txt,.pdf,image/*"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        e.target.value = "";
-                        if (f) void submit(() => bridge.importTeacherTranscript(homeworkId, { file: { name: f.name, sizeBytes: f.size }, source, date: iso }));
-                      }}
-                    />
                   </>
                 )}
                 {mode === "manual" && (
@@ -240,6 +244,17 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
           )}
         </div>
       </section>
+      <Dialog
+        open={transcriptPreview !== null}
+        onClose={() => setTranscriptPreview(null)}
+        title="Проверьте распознанные пары"
+        description="Ничего не будет сохранено до подтверждения. Ошибочную пару можно не импортировать: отмените и поправьте исходный текст."
+        footer={<><button className="btn btn--ghost" onClick={() => setTranscriptPreview(null)}>Отмена</button><button className="btn btn--primary" disabled={busy || !transcriptPreview?.pairs.length} onClick={() => { const pending = transcriptPreview; if (!pending) return; setTranscriptPreview(null); void submit(() => bridge.importTeacherTranscript(homeworkId, { ...pending.input, confirmed: true })); }}>Подтвердить {transcriptPreview?.pairs.length ?? 0}</button></>}
+      >
+        <ol className="teacher__preview-list">
+          {transcriptPreview?.pairs.map((pair, index) => <li key={`${index}-${pair.question}`}><strong>{pair.question || "Без вопроса"}</strong><p>{pair.answer || "Без ответа"}</p></li>)}
+        </ol>
+      </Dialog>
 
       {requirements.length > 0 && (
         <section className="panel teacher__reqs">

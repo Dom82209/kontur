@@ -4,14 +4,26 @@ import { BridgeError, type AutomationRules } from "../types";
 import {
   __setInvokeForTests,
   backendHealth,
+  buildSubmissionPackage,
+  classifyFiles,
+  confirmSubmission,
+  createWeek,
   getActivityLog,
   getAutomationRules,
   getHomework,
   getHomeworkList,
   getInboxFiles,
   getSubjects,
+  getStyleProfile,
   getWeek,
   getWeeks,
+  importTeacherTranscript,
+  previewRoute,
+  previewTeacherTranscript,
+  removeTeacherComment,
+  routeFiles,
+  setPackageCheck,
+  undoOperation,
   updateAutomationRules,
   updateClassification,
 } from "./ipc";
@@ -124,6 +136,54 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
 
     await updateAutomationRules(rules);
     expect(invoke).toHaveBeenCalledWith("update_automation_rules", { rules });
+  });
+
+  it("этап 10 передаёт точные IPC-команды и DTO без snake_case", async () => {
+    const invoke = vi.fn(async () => ({}));
+    __setInvokeForTests(invoke);
+    const destination = { subjectId: "subject-1", weekNumber: 7, category: "homework_task" as const };
+    const transcript = {
+      text: "В: Что исправить?\nО: Добавить вывод.",
+      source: "chat" as const,
+      date: "2026-10-26T10:00:00Z",
+      confirmed: true,
+    };
+    const confirmation = {
+      submittedAt: "2026-10-26T11:00:00Z",
+      assignmentUrl: "https://lms.example.edu/task/1",
+      proof: null,
+      userConfirmed: true as const,
+    };
+
+    await createWeek("subject-1", 7);
+    await classifyFiles(["file-1", "file-2"]);
+    await previewRoute("file-1", destination);
+    await routeFiles(["file-1"], destination);
+    await routeFiles(["file-2"], null);
+    await undoOperation("operation-1");
+    await getStyleProfile();
+    await previewTeacherTranscript(transcript);
+    await importTeacherTranscript("homework-1", transcript);
+    await removeTeacherComment("comment-1");
+    await buildSubmissionPackage("homework-1");
+    await setPackageCheck("package-1", "manual_review", true);
+    await confirmSubmission("homework-1", confirmation);
+
+    expect(invoke.mock.calls).toEqual([
+      ["create_week", { subjectId: "subject-1", weekNumber: 7 }],
+      ["classify_files", { fileIds: ["file-1", "file-2"] }],
+      ["preview_route", { fileId: "file-1", destination }],
+      ["route_files", { fileIds: ["file-1"], destination }],
+      ["route_files", { fileIds: ["file-2"], destination: null }],
+      ["undo_operation", { operationId: "operation-1" }],
+      ["get_style_profile", undefined],
+      ["preview_teacher_transcript", { input: transcript }],
+      ["import_teacher_transcript", { homeworkId: "homework-1", input: transcript }],
+      ["remove_teacher_comment", { commentId: "comment-1" }],
+      ["build_submission_package", { homeworkId: "homework-1" }],
+      ["set_package_check", { packageId: "package-1", checkId: "manual_review", done: true }],
+      ["confirm_submission", { homeworkId: "homework-1", confirmation }],
+    ]);
   });
 
   it("преобразует ошибку write-команды в BridgeError", async () => {

@@ -51,9 +51,17 @@ import type {
   OperationRecord,
   OperationResult,
   RootSelection,
+  RouteDestination,
+  RoutePreview,
   SelectableRootKind,
   Subject,
   Week,
+  StyleProfile,
+  TeacherTranscriptInput,
+  SubmissionPackage,
+  SubmissionReceipt,
+  SubmissionConfirmation,
+  PackageCheckId,
 } from "../types";
 import { BridgeError } from "../types";
 import { toBridgeError } from "./errors";
@@ -174,6 +182,36 @@ export function updateClassification(
   };
   return call("update_classification", { fileId, patch: encoded });
 }
+
+export function createWeek(subjectId: string, weekNumber: number): Promise<OperationResult<Week>> {
+  return call("create_week", { subjectId, weekNumber });
+}
+
+export function classifyFiles(fileIds: string[]): Promise<OperationResult<InboxFile[]>> {
+  return call("classify_files", { fileIds });
+}
+
+export function previewRoute(fileId: string, destination: RouteDestination): Promise<RoutePreview> {
+  return call("preview_route", { fileId, destination });
+}
+
+export function routeFiles(fileIds: string[], destination: RouteDestination | null): Promise<OperationResult<RoutePreview[]>> {
+  return call("route_files", { fileIds, destination });
+}
+
+export function undoOperation(operationId: string): Promise<OperationResult<null>> {
+  return call("undo_operation", { operationId });
+}
+
+export function getStyleProfile(): Promise<StyleProfile | null> { return call("get_style_profile"); }
+export function previewTeacherTranscript(input: TeacherTranscriptInput): Promise<TeacherCommentInput[]> { return call("preview_teacher_transcript", { input }); }
+export function importTeacherTranscript(homeworkId: string, input: TeacherTranscriptInput): Promise<OperationResult<TeacherComment[]>> {
+  return call("import_teacher_transcript", { homeworkId, input });
+}
+export function removeTeacherComment(commentId: string): Promise<void> { return call("remove_teacher_comment", { commentId }); }
+export function buildSubmissionPackage(homeworkId: string): Promise<OperationResult<SubmissionPackage>> { return call("build_submission_package", { homeworkId }); }
+export function setPackageCheck(packageId: string, checkId: PackageCheckId, done: boolean): Promise<SubmissionPackage> { return call("set_package_check", { packageId, checkId, done }); }
+export function confirmSubmission(homeworkId: string, confirmation: SubmissionConfirmation): Promise<OperationResult<SubmissionReceipt>> { return call("confirm_submission", { homeworkId, confirmation }); }
 
 // ── Этап 5: управляемые каталоги, native intake, импорт во «Входящие» ──
 

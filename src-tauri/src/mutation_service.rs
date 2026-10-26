@@ -629,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_seven_after_ai_jobs() {
+    fn schema_version_includes_file_workflow_tables() {
         let database = database();
-        assert_eq!(CURRENT_SCHEMA_VERSION, 7);
-        assert_eq!(database.schema_version().unwrap(), 7);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 8);
+        assert_eq!(database.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
     }
 
     #[test]

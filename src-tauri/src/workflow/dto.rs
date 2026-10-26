@@ -567,6 +567,33 @@ pub struct SubmissionReceiptDto {
     pub snapshot_hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleProfileDto {
+    pub id: String,
+    pub file_name: String,
+    pub relative_path: String,
+    pub updated_at: String,
+    pub traits: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmissionProofInput {
+    pub name: String,
+    pub size_bytes: u64,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmissionConfirmationInput {
+    pub submitted_at: String,
+    pub assignment_url: String,
+    pub proof: Option<SubmissionProofInput>,
+    pub user_confirmed: bool,
+}
+
 // ───────────── Проекции ─────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -175,9 +175,17 @@ export interface RouteDestination {
 
 export interface RoutePreview {
   fileId: string;
+  sourceName: string;
+  sourceRelativePath: string;
   targetPath: string;
   targetName: string;
   createsWeek: boolean;
+  createsDirectories: string[];
+  sha256Match: boolean;
+  nameConflict: boolean;
+  renamed: boolean;
+  action: "copy" | "skip" | "rename";
+  undoable: boolean;
   duplicate: DuplicateInfo | null;
 }
 
@@ -188,6 +196,14 @@ export interface DroppedItem {
   sourcePath?: string;
   /** Как файл получен: системный выбор или перетаскивание. По умолчанию — drop. */
   origin?: "picker" | "drop";
+}
+
+export interface TeacherTranscriptInput {
+  text?: string;
+  file?: DroppedItem;
+  source: TeacherComment["source"];
+  date: ISODate;
+  confirmed?: boolean;
 }
 
 // ───────────────────────── Управляемые каталоги и импорт ─────────────────────────
@@ -965,7 +981,8 @@ export interface DesktopBridge {
   /** Ручное добавление требования, выведенного из комментария преподавателя. */
   addTeacherRequirement(homeworkId: string, input: TeacherRequirementInput, options?: WorkflowCommandOptions): Promise<OperationResult<TeacherRequirement>>;
   /** Разбирает вставленную переписку или файл (md/txt/pdf/изображение) на пары «вопрос — ответ». */
-  importTeacherTranscript(homeworkId: string, input: { text?: string; file?: DroppedItem; source: TeacherComment["source"]; date: ISODate }): Promise<OperationResult<TeacherComment[]>>;
+  previewTeacherTranscript(input: TeacherTranscriptInput): Promise<TeacherCommentInput[]>;
+  importTeacherTranscript(homeworkId: string, input: TeacherTranscriptInput): Promise<OperationResult<TeacherComment[]>>;
   removeTeacherComment(commentId: string): Promise<void>;
   runTeacherReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
   getTeacherRequirements(homeworkId: string): Promise<TeacherRequirement[]>;

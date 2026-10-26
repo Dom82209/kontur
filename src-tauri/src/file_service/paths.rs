@@ -109,6 +109,13 @@ impl VaultRoot {
         }
         self.0.verify_parent(relative, &parent)
     }
+
+    /// Создаёт каталог покомпонентно внутри vault, не следуя symlink.
+    pub fn ensure_directory(&self, relative: &PersistentPath) -> Result<(), AppError> {
+        fd::ensure_directory_path(self.0.fd(), relative)
+            .map(|_| ())
+            .map_err(|_| blocked("Не удалось безопасно создать папку в хранилище"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +399,24 @@ impl SourceFile {
 
     pub(crate) fn file(&self) -> &File {
         &self.file
+    }
+
+    /// Читает небольшой UTF-8 текст из уже проверенного inode. Используется
+    /// только для явно выбранных пользователем текстовых импортов.
+    pub fn read_utf8_limited(&self, limit: u64) -> Result<String, AppError> {
+        use std::io::Read;
+        let size = self.revalidate()?;
+        if size > limit {
+            return Err(blocked("Текстовый файл слишком большой"));
+        }
+        let mut file = self
+            .file
+            .try_clone()
+            .map_err(|_| io_error("Не удалось прочитать файл"))?;
+        let mut bytes = Vec::with_capacity(size as usize);
+        file.read_to_end(&mut bytes)
+            .map_err(|_| io_error("Не удалось прочитать файл"))?;
+        String::from_utf8(bytes).map_err(|_| blocked("Файл должен быть текстом UTF-8"))
     }
 
     /// Время изменения открытого inode (нс), чтобы сверить с наблюдением watcher.

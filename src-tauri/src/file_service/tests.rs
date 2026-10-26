@@ -496,8 +496,8 @@ fn persistent_path_deserialization_revalidates_input() {
 }
 
 #[test]
-fn schema_version_is_seven_after_ai_jobs() {
-    assert_eq!(CURRENT_SCHEMA_VERSION, 7);
+fn schema_version_includes_file_workflow_tables() {
+    assert_eq!(CURRENT_SCHEMA_VERSION, 8);
 }
 
 fn undo_context() -> UndoContext {

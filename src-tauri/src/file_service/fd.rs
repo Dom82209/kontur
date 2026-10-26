@@ -355,6 +355,11 @@ pub(crate) fn rename_noreplace(dir: &OwnedFd, from: &OsStr, to: &OsStr) -> Resul
     }
 }
 
+pub(crate) fn rename_replace(dir: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), AppError> {
+    rfs::renameat(dir, from, dir, to)
+        .map_err(|_| io_error("Не удалось атомарно заменить управляемый файл"))
+}
+
 /// Удаляет `name` из `dir` только если это тот же regular inode, что создала операция.
 pub(crate) fn unlink_if_same(dir: &OwnedFd, name: &OsStr, identity: Identity) -> bool {
     let Ok(stat) = rfs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) else {

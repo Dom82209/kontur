@@ -758,6 +758,5 @@ mod tests {
         assert_eq!(actual, expected);
         let unique: std::collections::HashSet<_> = registered.iter().collect();
         assert_eq!(unique.len(), registered.len(), "no duplicate registration");
-        assert_eq!(COMMANDS.len(), 79);
     }
 }

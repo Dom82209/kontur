@@ -3,6 +3,7 @@ mod backup;
 mod fd;
 mod hashing;
 mod hooks;
+mod managed_markdown;
 mod paths;
 mod planning;
 mod read;
@@ -18,6 +19,7 @@ pub(crate) use hashing::sha256_file;
 pub use hashing::{hash_source, Sha256Digest};
 #[cfg(test)]
 pub(crate) use hooks::{install as install_test_hook, HookPoint as TestHookPoint};
+pub use managed_markdown::{write_managed_markdown, ManagedMarkdownWrite};
 pub use paths::{
     BackupRoot, DownloadEntry, DownloadsRoot, FileIdentity, InboxRoot, PersistentPath, ScratchRoot,
     SourceFile, VaultRoot, VerifiedDestination,
@@ -25,7 +27,9 @@ pub use paths::{
 pub use planning::{plan_copy, CopyDecision};
 pub use read::{read_vault_file, ReadSnapshot};
 pub use undo::{
-    validate_undo, BackupUndoEntry, CreatedFileUndoEntry, UndoContext, UndoManifest, ValidatedUndo,
+    apply_created_files, stage_created_files, validate_created_undo, validate_undo,
+    BackupUndoEntry, CreatedFileUndoEntry, StagedUndoFile, UndoContext, UndoManifest,
+    ValidatedUndo,
 };
 
 #[cfg(test)]

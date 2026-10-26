@@ -19,6 +19,10 @@ mod lms_commands;
 pub mod mutation_service;
 pub mod query_service;
 pub mod repositories;
+pub mod routing;
+mod routing_commands;
+pub mod submission;
+mod submission_commands;
 pub mod workflow;
 mod workflow_commands;
 
@@ -65,6 +69,18 @@ pub fn run() {
             commands::get_activity_log,
             commands::update_automation_rules,
             commands::update_classification,
+            routing_commands::create_week,
+            routing_commands::classify_files,
+            routing_commands::preview_route,
+            routing_commands::route_files,
+            routing_commands::undo_operation,
+            submission_commands::get_style_profile,
+            submission_commands::import_teacher_transcript,
+            submission_commands::preview_teacher_transcript,
+            submission_commands::remove_teacher_comment,
+            submission_commands::build_submission_package,
+            submission_commands::set_package_check,
+            submission_commands::confirm_submission,
             intake_commands::check_managed_roots,
             intake_commands::choose_managed_root,
             intake_commands::prepare_inbox_root,

@@ -560,6 +560,12 @@ export class MockWorkflow {
     return { operation: op, value: clone(added) };
   }
 
+  async previewTeacherTranscript(input: { text?: string; file?: DroppedItem; source: TeacherComment["source"]; date: string }): Promise<import("../types").TeacherCommentInput[]> {
+    await this.ctx.wait(80);
+    const text = input.text ?? (input.file ? `О: Проверьте текст из файла ${input.file.name}.` : "");
+    return parseTranscript(text).map((pair) => ({ ...pair, source: input.source, date: input.date }));
+  }
+
   async removeTeacherComment(commentId: string): Promise<void> {
     await this.ctx.wait(80);
     const c = this.comments.find((x) => x.id === commentId);
@@ -1967,4 +1973,3 @@ function assessmentOf(result: ReviewResult): ReviewAssessment {
     missingRequired: result.missing.filter((m) => m.required).length,
   };
 }
-

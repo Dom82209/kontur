@@ -1,5 +1,11 @@
 # Контур — frontend handoff
 
+## Этап 10 — native-файловый цикл
+
+В `TauriDesktopBridge` подключены реальные `createWeek`, `classifyFiles`, `previewRoute`, `routeFiles`, `undoOperation`, `getStyleProfile`, `importTeacherTranscript`, `removeTeacherComment`, `buildSubmissionPackage`, `setPackageCheck` и `confirmSubmission`. `RoutePreview` содержит полный план (`sourceRelativePath`, `createsDirectories`, `sha256Match`, `nameConflict`, `renamed`, `action`, `undoable`). UI обязан показывать план до `routeFiles`; `ambiguous` нельзя раскладывать автоматически. Импорт файла переписки использует native `pickFiles()`, поэтому абсолютный путь не сохраняется в React или SQLite.
+
+Production-default bridge остаётся задачей этапа 11; до отдельного коммита этапа 11 browser/demo продолжает работать на mock.
+
 ## Этап 9.2 — isolation UI
 
 `ProviderStatus.isolation` содержит capability, последний `IsolationReport`, версию consent, `executionPolicy` и причину блокировки. `DesktopBridge.runAiIsolationSelfTest()` запускает native self-test. В «Настройки → Нейросети» показаны ручной/изолированный режим, версия профиля, дата проверки, кнопки проверки, явного включения и отключения. Старый `cliEnabled=true` без версии профиля не активирует CLI. Claude production всегда manual-only; frontend показывает backend reason и не подменяет его mock fallback.

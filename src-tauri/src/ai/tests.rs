@@ -1345,7 +1345,7 @@ esac
 }
 
 #[test]
-fn migration_v7_keeps_rows_and_enforces_job_invariants() {
+fn current_migration_keeps_rows_and_enforces_job_invariants() {
     let database = seeded();
     let (version, tables): (u32, i64) = database
         .with_connection(|connection| {
@@ -1359,7 +1359,7 @@ fn migration_v7_keeps_rows_and_enforces_job_invariants() {
             ))
         })
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, crate::db::migrations::CURRENT_SCHEMA_VERSION);
     assert_eq!(tables, 1);
     // Задание чужого запуска и абсолютные пути в составе отклоняются схемой.
     let insert = |run: &str, context: &str| {

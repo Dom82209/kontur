@@ -68,7 +68,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::{
-        db::Database,
+        db::{migrations::CURRENT_SCHEMA_VERSION, Database},
         domain::{HomeworkStage, HomeworkWorkflowStage},
         error::ErrorCode,
     };
@@ -77,7 +77,10 @@ mod tests {
 
     fn migrated_database() -> Database {
         let database = Database::open_in_memory().expect("open database");
-        assert_eq!(database.migrate().expect("migrate database"), 7);
+        assert_eq!(
+            database.migrate().expect("migrate database"),
+            CURRENT_SCHEMA_VERSION
+        );
         database
     }
 
@@ -374,7 +377,7 @@ mod tests {
         let health = QueryService::new(&database).health().unwrap();
         assert!(health.ready);
         assert!(health.database_exists);
-        assert_eq!(health.schema_version, 7);
+        assert_eq!(health.schema_version, CURRENT_SCHEMA_VERSION);
         let value: Value = serde_json::to_value(health).unwrap();
         assert!(value.get("databasePath").is_none());
     }

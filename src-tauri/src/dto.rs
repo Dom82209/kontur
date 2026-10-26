@@ -203,6 +203,41 @@ pub struct InboxFileDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RouteDestinationDto {
+    pub subject_id: String,
+    pub week_number: i64,
+    pub category: MaterialCategory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteActionDto {
+    Copy,
+    Skip,
+    Rename,
+}
+
+/// Полный read-only план одной файловой операции. Он не содержит абсолютных путей.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutePreviewDto {
+    pub file_id: String,
+    pub source_name: String,
+    pub source_relative_path: String,
+    pub target_path: String,
+    pub target_name: String,
+    pub creates_week: bool,
+    pub creates_directories: Vec<String>,
+    pub sha256_match: bool,
+    pub name_conflict: bool,
+    pub renamed: bool,
+    pub action: RouteActionDto,
+    pub undoable: bool,
+    pub duplicate: Option<DuplicateInfoDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionSectionDto {
     pub id: String,
     pub title: String,

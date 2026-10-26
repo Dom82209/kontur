@@ -184,14 +184,21 @@ describe("TauriDesktopBridge рабочего цикла", () => {
     const conflict = new BridgeError("conflict", "Данные ДЗ изменились — перечитайте состояние и повторите действие");
     const getWorkflow = vi.fn(async () => Promise.reject(conflict));
     const unavailable = new BridgeError("provider_unavailable", "Codex: официальный CLI не найден");
-    const bridge = new TauriDesktopBridge(client({ getWorkflow, commitPrompt: async () => Promise.reject(conflict), connectProvider: async () => Promise.reject(unavailable) }));
+    const fileFailure = new BridgeError("blocked", "Комплект не готов");
+    const bridge = new TauriDesktopBridge(client({
+      getWorkflow,
+      commitPrompt: async () => Promise.reject(conflict),
+      connectProvider: async () => Promise.reject(unavailable),
+      buildSubmissionPackage: async () => Promise.reject(fileFailure),
+      importTeacherTranscript: async () => Promise.reject(fileFailure),
+    }));
     await expect(bridge.commitPrompt("prompt", { expectedRevision: 1 })).rejects.toBe(conflict);
     await expect(bridge.getReviewRuns("hw")).rejects.toBe(conflict);
     await expect(bridge.getWorkflow("hw")).rejects.toBe(conflict);
     await expect(bridge.setSourceIncluded("b", "i", false)).rejects.toMatchObject({ code: "immutable" });
     await expect(bridge.connectProvider("codex")).rejects.toBe(unavailable);
-    await expect(bridge.buildSubmissionPackage("hw")).rejects.toMatchObject({ code: "backend_unavailable" });
-    await expect(bridge.importTeacherTranscript("hw", { text: "x", source: "chat", date: "2026-10-21" })).rejects.toMatchObject({ code: "backend_unavailable" });
+    await expect(bridge.buildSubmissionPackage("hw")).rejects.toBe(fileFailure);
+    await expect(bridge.importTeacherTranscript("hw", { text: "x", source: "chat", date: "2026-10-21" })).rejects.toBe(fileFailure);
   });
 
   it("not_found превращается в null только для getWorkflow, а не для списков агрегата", async () => {

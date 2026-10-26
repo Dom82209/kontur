@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import { CircleCheck, CircleX, Cloud, Copy, FolderOpen, Link2, Lock, Package, Send, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import { bridge, type Homework, type PackageItem, type Readiness, type SubmissionPackage, type SubmissionReceipt, type WorkflowCommandOptions } from "../../lib/bridge";
@@ -39,9 +39,8 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submittedAt, setSubmittedAt] = useState(() => toLocalInput(new Date()));
   const [url, setUrl] = useState(h.assignmentUrl ?? "");
-  const [proof, setProof] = useState<{ name: string; sizeBytes: number } | null>(null);
+  const [proof, setProof] = useState<{ name: string; sizeBytes: number; path?: string } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const proofRef = useRef<HTMLInputElement>(null);
   const isReadyStage = h.workflowStage === "ready_to_submit";
 
   const act = async <T,>(fn: () => Promise<T>, title: string, ok?: (v: T) => void) => {
@@ -324,22 +323,18 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
         <div className="field">
           <span className="field__label">Скриншот или файл подтверждения</span>
           <div className="submit__proof">
-            <button className="btn btn--sm" onClick={() => proofRef.current?.click()}>
+            <button
+              className="btn btn--sm"
+              disabled={busy}
+              onClick={() => void act(async () => {
+                const selected = (await bridge.pickFiles())[0];
+                if (selected) setProof({ name: selected.name, sizeBytes: selected.sizeBytes, path: selected.sourcePath });
+              }, "Не удалось выбрать подтверждение")}
+            >
               Прикрепить
             </button>
             <span className="faint mono">{proof?.name ?? "необязательно"}</span>
           </div>
-          <input
-            ref={proofRef}
-            type="file"
-            hidden
-            accept="image/*,.pdf"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) setProof({ name: f.name, sizeBytes: f.size });
-            }}
-          />
         </div>
         <label className="confirm">
           <input type="checkbox" className="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />

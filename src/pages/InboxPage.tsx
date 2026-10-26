@@ -14,6 +14,7 @@ import { FileChip } from "../components/domain/FileChip";
 import { ClassifyWizard } from "../components/domain/ClassifyWizard";
 import { ClassificationFields } from "../components/domain/ClassificationFields";
 import { Confidence } from "../components/ui/Confidence";
+import { Dialog } from "../components/ui/Dialog";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
 import { bridge, BridgeError, newOperationId, type DownloadCandidate, type DroppedItem, type InboxFile, type InboxImportReport, type InboxProvenance, type MaterialRef, type RoutePreview } from "../lib/bridge";
 import { CATEGORY_LABEL, formatBytes, formatRelative, pad2, plural } from "../lib/format";
@@ -93,6 +94,8 @@ export function InboxPage() {
   const [routing, setRouting] = useState<Set<string>>(new Set());
   const [landed, setLanded] = useState<Landed[]>([]);
   const [preview, setPreview] = useState<RoutePreview | null>(null);
+  const [routePlan, setRoutePlan] = useState<{ ids: string[]; previews: RoutePreview[] } | null>(null);
+  const [planning, setPlanning] = useState(false);
 
   const ambiguous = files.filter((f) => f.status === "ambiguous");
   const ready = files.filter(isReady);
@@ -106,8 +109,6 @@ export function InboxPage() {
     const c = focus?.classification;
     if (!focus || !c?.subjectId || !c.weekNumber || c.category === "unknown") return;
     let alive = true;
-    // В Tauri раскладка ещё не реализована: путь не предсказываем, ошибку не скрываем в консоли.
-    if (bridge.kind === "tauri") return;
     void bridge
       .previewRoute(focus.id, { subjectId: c.subjectId, weekNumber: c.weekNumber, category: c.category })
       .then((p) => alive && setPreview(p))
@@ -132,6 +133,8 @@ export function InboxPage() {
     setImportRun({ operationId, total: items.length, progress: 0, message: "Проверка файлов", report: null, error: null });
     try {
       const result = await bridge.importFiles(items, operationId);
+      const importedIds = result.value.items.flatMap((item) => item.status === "imported" ? [item.file.id] : []);
+      if (importedIds.length > 0) await bridge.classifyFiles(importedIds);
       setImportRun((run) => (run?.operationId === operationId ? { ...run, progress: 1, report: result.value } : run));
       const { imported, duplicates } = result.value;
       if (imported > 0) toast.push({ tone: "ok", title: `Добавлено ${imported} ${plural(imported, "файл", "файла", "файлов")}`, text: duplicates > 0 ? `Дублей без копирования: ${duplicates}` : undefined });
@@ -178,6 +181,23 @@ export function InboxPage() {
       reportError(e, "Раскладка не выполнена");
     } finally {
       setRouting(new Set());
+    }
+  };
+
+  const requestRoute = async (ids: string[]) => {
+    const targets = files.filter((file) => ids.includes(file.id) && isReady(file));
+    if (targets.length === 0) return;
+    setPlanning(true);
+    try {
+      const previews = await Promise.all(targets.map((file) => {
+        const c = file.classification!;
+        return bridge.previewRoute(file.id, { subjectId: c.subjectId!, weekNumber: c.weekNumber!, category: c.category });
+      }));
+      setRoutePlan({ ids: targets.map((file) => file.id), previews });
+    } catch (e) {
+      reportError(e, "Не удалось построить план раскладки");
+    } finally {
+      setPlanning(false);
     }
   };
 
@@ -247,11 +267,11 @@ export function InboxPage() {
                 </button>
               )}
               {selected.size > 0 && (
-                <button className="btn btn--sm" onClick={() => void route([...selected])} disabled={routing.size > 0}>
+                <button className="btn btn--sm" onClick={() => void requestRoute([...selected])} disabled={routing.size > 0 || planning}>
                   Разложить выбранные
                 </button>
               )}
-              <button className="btn btn--sm btn--primary" onClick={() => void route(ready.map((f) => f.id))} disabled={ready.length === 0 || routing.size > 0} title="Раскладываются только уверенно распознанные файлы">
+              <button className="btn btn--sm btn--primary" onClick={() => void requestRoute(ready.map((f) => f.id))} disabled={ready.length === 0 || routing.size > 0 || planning} title="Раскладываются только уверенно распознанные файлы">
                 <WandSparkles /> Разложить автоматически{ready.length > 0 && <span className="num"> · {ready.length}</span>}
               </button>
             </div>
@@ -420,10 +440,8 @@ export function InboxPage() {
                         Уточнить
                       </button>
                     </div>
-                  ) : focus.status === "new" && bridge.kind === "tauri" ? (
-                    <p className="faint">Файл во «Входящих». Автоматическое распознавание предмета и недели для обычных файлов подключается на следующем этапе.</p>
-                  ) : focus.status === "classified" && bridge.kind === "tauri" ? (
-                    <p className="faint">Предварительно распознан. Раскладка по предметам подключается на следующем этапе — файл остаётся во «Входящих».</p>
+                  ) : focus.status === "new" ? (
+                    <button className="btn btn--sm" onClick={() => void bridge.classifyFiles([focus.id]).then(() => q.reload(), (e: unknown) => reportError(e, "Классификация не выполнена"))}>Распознать файл</button>
                   ) : (
                     <p className="faint">Определяется…</p>
                   )}
@@ -468,7 +486,25 @@ export function InboxPage() {
         </aside>
       </div>
 
-      <ClassifyWizard open={wizard} files={files} onClose={() => setWizard(false)} onRoute={(ids) => void route(ids)} />
+      <ClassifyWizard open={wizard} files={files} onClose={() => setWizard(false)} onRoute={(ids) => void requestRoute(ids)} />
+      <Dialog
+        open={routePlan !== null}
+        onClose={() => setRoutePlan(null)}
+        title="Подтвердите раскладку"
+        description="До подтверждения файлы и папки не изменяются. Существующие файлы никогда не перезаписываются."
+        footer={<><button className="btn btn--ghost" onClick={() => setRoutePlan(null)}>Отмена</button><button className="btn btn--primary" disabled={!routePlan || routing.size > 0} onClick={() => { const ids = routePlan?.ids ?? []; setRoutePlan(null); void route(ids); }}>Подтвердить и разложить</button></>}
+      >
+        <ul className="readiness">
+          {routePlan?.previews.map((item) => <li key={item.fileId}>
+            <div>
+              <div className="readiness__label">{item.sourceName} → {item.targetName}</div>
+              <div className="mono faint">{item.sourceRelativePath}</div>
+              <div className="mono">{item.targetPath}</div>
+              <div className="faint">Действие: {item.action === "copy" ? "копировать" : item.action === "skip" ? "пропустить одинаковый SHA-256" : "копировать с новым именем"}; папки: {item.createsDirectories.join(", ") || "не создаются"}; undo: {item.undoable ? "доступен" : "нет"}</div>
+            </div>
+          </li>)}
+        </ul>
+      </Dialog>
       <CuExportDialog candidate={exportCandidate} onClose={() => setExportCandidate(null)} onImported={onExportImported} />
       <ExtractionViewer material={textOf?.material ?? null} name={textOf?.name ?? ""} onClose={() => setTextOf(null)} />
     </div>

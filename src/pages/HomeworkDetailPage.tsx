@@ -561,7 +561,6 @@ export function HomeworkDetailPage() {
               comments={comments}
               requirements={reqs}
               locked={locked}
-              manual={!demo}
               running={!!activeRun}
               canReview={!!current && h.workflowStage === "teacher_review"}
               onReview={() => current && void run("review_teacher", current.id)}
@@ -581,7 +580,6 @@ export function HomeworkDetailPage() {
             receipt={wf.receipt.data}
             commentsCount={comments.length}
             onChanged={() => void wf.reloadAll()}
-            manual={!demo}
             readyAllowed={wf.workflow.data?.transitions.find((t) => t.to === "ready_to_submit")?.allowed ?? false}
             commandOptions={actions.options}
           />
