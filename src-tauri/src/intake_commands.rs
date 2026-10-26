@@ -107,6 +107,30 @@ pub async fn prepare_inbox_root<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn create_demo_workspace<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<ManagedRootsDto, AppError> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let base = state.app_data_dir().join("demo-workspace");
+        let vault = base.join("Учебное хранилище");
+        let backup = base.join("Резервные копии");
+        let downloads = base.join("Загрузки");
+        for directory in [&vault, &backup, &downloads] {
+            std::fs::create_dir_all(directory).map_err(|_| {
+                BackendError::io("Не удалось создать безопасное демонстрационное пространство")
+            })?;
+        }
+        let service = roots_service(&state);
+        service.set_root(RootKind::Vault, &vault)?;
+        service.set_root(RootKind::Backup, &backup)?;
+        service.set_root(RootKind::Downloads, &downloads)?;
+        service.prepare_inbox()
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn pick_import_files<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Vec<DroppedItemDto>, AppError> {
@@ -346,7 +370,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::run_import;
+    use super::{create_demo_workspace, run_import};
     use crate::{
         app_state::AppState,
         db::Database,
@@ -487,5 +511,26 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::Blocked);
         assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn demo_workspace_is_created_only_under_temp_app_data() {
+        let tmp = TempDir::new().unwrap();
+        let data = tmp.path().join("app-data");
+        let database = Database::open_in_memory().unwrap();
+        database.migrate().unwrap();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        app.manage(AppState::new(data.clone(), None, database));
+
+        let roots =
+            tauri::async_runtime::block_on(create_demo_workspace(app.handle().clone())).unwrap();
+        assert!(roots.import_ready);
+        assert!(data
+            .join("demo-workspace/Учебное хранилище/Предметы/00 Входящие")
+            .is_dir());
+        assert!(data.join("demo-workspace/Резервные копии").is_dir());
+        assert!(data.join("demo-workspace/Загрузки").is_dir());
     }
 }

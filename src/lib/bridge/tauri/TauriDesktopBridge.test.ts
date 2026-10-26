@@ -114,6 +114,7 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     checkManagedRoots: unexpected("checkManagedRoots"),
     chooseManagedRoot: unexpected("chooseManagedRoot"),
     prepareInboxRoot: unexpected("prepareInboxRoot"),
+    createDemoWorkspace: unexpected("createDemoWorkspace"),
     pickImportFiles: unexpected("pickImportFiles"),
     importInboxFiles: unexpected("importInboxFiles"),
     getOperationResult: unexpected("getOperationResult"),
@@ -180,7 +181,7 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     discardAiJob: unexpected("discardAiJob"),
     confirmAiResult: unexpected("confirmAiResult"),
     ...overrides,
-  };
+  } as TauriIpcClient;
 }
 
 function unexpected(name: string): () => Promise<never> {
@@ -267,16 +268,18 @@ describe("TauriDesktopBridge", () => {
     },
   );
 
-  it("unsupported-метод отклоняется с backend_unavailable без mock fallback", async () => {
+  it("ошибки новых write-команд приходят из backend без mock fallback", async () => {
     const getSubjects = vi.fn(async () => Promise.reject(new BridgeError("database", "SQLite unavailable")));
-    const adapter = new TauriDesktopBridge(readClient({ getSubjects }));
+    const createWeek = vi.fn(async () => Promise.reject(new BridgeError("blocked", "unsafe root")));
+    const adapter = new TauriDesktopBridge(readClient({ getSubjects, createWeek }));
 
-    await expect(adapter.createWeek("subject-1", 8)).rejects.toMatchObject({ code: "backend_unavailable" });
+    await expect(adapter.createWeek("subject-1", 8)).rejects.toMatchObject({ code: "blocked" });
     await expect(adapter.getSubjects()).rejects.toMatchObject({ code: "database" });
+    expect(createWeek).toHaveBeenCalledOnce();
     expect(getSubjects).toHaveBeenCalledOnce();
   });
 
-  it("основная factory-точка UI всё ещё создаёт mock", () => {
-    expect(bridge.kind).toBe("mock");
+  it("основная factory-точка UI использует production Tauri bridge", () => {
+    expect(bridge.kind).toBe("tauri");
   });
 });

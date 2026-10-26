@@ -775,3 +775,25 @@ button.row:focus-visible {
   background: var(--accent);
   border-radius: inherit;
 }
+.onboarding-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.onboarding-steps li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  align-items: center;
+}
+
+.onboarding-steps li > .mono {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-steps p {
+  margin: 3px 0 0;
+}

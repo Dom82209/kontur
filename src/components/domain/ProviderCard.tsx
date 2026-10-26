@@ -45,6 +45,11 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
   const checkIsolation = () => act(() => bridge.runAiIsolationSelfTest());
   const openApp = () => act(() => bridge.openProviderApp(status.provider));
   const { cli, isolation } = status;
+  const accountMode = status.availability === "connected"
+    ? "подписка аккаунта"
+    : status.availability === "manual"
+      ? "ручная передача"
+      : "не авторизован";
 
   const action = cli.enabled ? (
     <>
@@ -93,6 +98,7 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
           {status.availability === "manual" ? <span>{AVAILABILITY_LABEL.manual}</span> : <ProviderStateLabel state={status.state} />}
           {!compact && status.accountLabel && <span className="faint"> · {status.accountLabel}</span>}
         </div>
+        <div className="provider__roles"><span className={`badge ${status.availability === "connected" ? "badge--ok" : status.availability === "manual" ? "badge--info" : "badge--warn"}`}>{accountMode}</span></div>
         {!compact && (
           <div className="provider__roles">
             {status.tasks.map((t) => (

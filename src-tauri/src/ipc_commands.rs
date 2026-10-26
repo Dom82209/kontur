@@ -28,6 +28,7 @@ pub const COMMANDS: &[&str] = &[
     "check_managed_roots",
     "choose_managed_root",
     "prepare_inbox_root",
+    "create_demo_workspace",
     "pick_import_files",
     "import_inbox_files",
     "get_operation_result",

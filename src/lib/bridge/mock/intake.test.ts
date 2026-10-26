@@ -82,9 +82,10 @@ describe("mock: импорт во «Входящие» этапа 5", () => {
 });
 
 describe("factory", () => {
-  it("по умолчанию и вне Tauri runtime создаёт mock, даже с флагом", () => {
-    expect(createBridge(undefined).kind).toBe("mock");
-    expect(createBridge("tauri").kind).toBe("mock");
+  it("в браузере включает mock только явным demo-флагом", () => {
+    expect(createBridge(undefined).kind).toBe("tauri");
+    expect(createBridge("tauri").kind).toBe("tauri");
+    expect(createBridge("demo").kind).toBe("mock");
   });
 
   it("newOperationId выдаёт UUID v4", () => {

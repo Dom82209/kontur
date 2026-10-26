@@ -140,17 +140,26 @@ impl IsolationRunner {
         let Some(home) = &self.home else {
             return Vec::new();
         };
-        let codex_home = home.join(".codex");
-        ["auth.json", ".credentials.json"]
-            .into_iter()
-            .map(|name| codex_home.join(name))
-            .filter_map(|path| {
-                fs::symlink_metadata(&path)
-                    .is_ok_and(|metadata| metadata.file_type().is_file())
-                    .then(|| fs::canonicalize(path).ok())
-                    .flatten()
-            })
-            .collect()
+        let path = home.join(".codex/auth.json");
+        if !fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
+        {
+            return Vec::new();
+        }
+        let account_session = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|value| {
+                value.get("auth_mode").and_then(|mode| mode.as_str()) == Some("chatgpt")
+                    && value
+                        .get("OPENAI_API_KEY")
+                        .is_none_or(|key| key.is_null() || key.as_str() == Some(""))
+                    && value.get("tokens").is_some_and(|tokens| tokens.is_object())
+            });
+        if !account_session {
+            return Vec::new();
+        }
+        fs::canonicalize(path).into_iter().collect()
     }
 
     fn profile(&self, executable: &Path, job: &Path) -> Result<String, AppError> {
@@ -596,7 +605,11 @@ mod tests {
         let job = root.path().join("job");
         fs::create_dir_all(&codex).unwrap();
         fs::create_dir(&job).unwrap();
-        fs::write(codex.join("auth.json"), r#"{"token":"test-only"}"#).unwrap();
+        fs::write(
+            codex.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"access_token":"test-only"}}"#,
+        )
+        .unwrap();
         fs::write(codex.join("config.toml"), "model = 'must-not-be-read'").unwrap();
         let fake = job.join("codex");
         fs::write(
@@ -629,5 +642,22 @@ exit 0
             )
             .unwrap();
         assert_eq!(outcome.exit, ExitKind::Exited(0), "{outcome:?}");
+    }
+
+    #[test]
+    fn api_key_credentials_are_never_mounted_as_account_subscription() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let root = TempDir::new().unwrap();
+        let codex = root.path().join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("auth.json"),
+            r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test","tokens":{}}"#,
+        )
+        .unwrap();
+        let runner = IsolationRunner::system(Some(root.path()));
+        assert!(runner.credential_paths().is_empty());
     }
 }

@@ -84,6 +84,7 @@ pub fn run() {
             intake_commands::check_managed_roots,
             intake_commands::choose_managed_root,
             intake_commands::prepare_inbox_root,
+            intake_commands::create_demo_workspace,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,
             intake_commands::get_operation_result,

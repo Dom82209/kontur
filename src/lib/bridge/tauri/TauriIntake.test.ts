@@ -6,6 +6,7 @@ import { __setListenForTests, listenToIntakeEvent } from "./events";
 import {
   __setInvokeForTests,
   chooseManagedRoot,
+  createDemoWorkspace,
   importInboxFiles,
   pickImportFiles,
   revealInFinder,
@@ -84,6 +85,7 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     checkManagedRoots: fail("checkManagedRoots"),
     chooseManagedRoot: fail("chooseManagedRoot"),
     prepareInboxRoot: fail("prepareInboxRoot"),
+    createDemoWorkspace: fail("createDemoWorkspace"),
     pickImportFiles: fail("pickImportFiles"),
     importInboxFiles: fail("importInboxFiles"),
     getOperationResult: fail("getOperationResult"),
@@ -150,7 +152,7 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     discardAiJob: fail("discardAiJob"),
     confirmAiResult: fail("confirmAiResult"),
     ...overrides,
-  };
+  } as TauriIpcClient;
 }
 
 describe("Tauri native intake", () => {
@@ -225,6 +227,7 @@ describe("Tauri native intake", () => {
       checkManagedRoots: vi.fn(async () => roots),
       chooseManagedRoot: vi.fn(async () => ({ cancelled: true, roots })),
       prepareInboxRoot: vi.fn(async () => roots),
+      createDemoWorkspace: vi.fn(async () => roots),
       openInboxFile: vi.fn(async () => undefined),
       revealInboxFile: vi.fn(async () => undefined),
       revealInFinder: vi.fn(async () => undefined),
@@ -233,6 +236,7 @@ describe("Tauri native intake", () => {
     await adapter.getManagedRoots();
     await expect(adapter.chooseManagedRoot("backup")).resolves.toMatchObject({ cancelled: true });
     await adapter.prepareInboxRoot();
+    await adapter.createDemoWorkspace();
     await adapter.openInboxFile("inbox-1");
     await adapter.revealInboxFile("inbox-1");
     await adapter.revealInFinder("Предметы/00 Входящие");
@@ -309,11 +313,13 @@ describe("IPC команды этапа 5", () => {
     await pickImportFiles();
     await importInboxFiles(operation.id, [{ sourcePath: "/x/a.pdf", origin: "drop" }]);
     await chooseManagedRoot("vault");
+    await createDemoWorkspace();
     await revealInFinder("Предметы/00 Входящие/a.pdf");
     expect(invoke.mock.calls).toEqual([
       ["pick_import_files", undefined],
       ["import_inbox_files", { operationId: operation.id, items: [{ sourcePath: "/x/a.pdf", origin: "drop" }] }],
       ["choose_managed_root", { kind: "vault" }],
+      ["create_demo_workspace", undefined],
       ["reveal_in_finder", { relativePath: "Предметы/00 Входящие/a.pdf" }],
     ]);
   });
@@ -324,11 +330,12 @@ describe("IPC команды этапа 5", () => {
   });
 });
 
-describe("createBridge: явный флаг разработчика", () => {
-  it("создаёт TauriDesktopBridge только при флаге и наличии Tauri runtime", async () => {
+describe("createBridge: production Tauri по умолчанию и явный browser demo", () => {
+  it("в Tauri runtime не допускает подмену mock даже demo-флагом", async () => {
     const { createBridge } = await import("../index");
     __setTauriRuntimeForTests(true);
     expect(createBridge("tauri").kind).toBe("tauri");
-    expect(createBridge(undefined).kind).toBe("mock");
+    expect(createBridge(undefined).kind).toBe("tauri");
+    expect(createBridge("demo").kind).toBe("tauri");
   });
 });

@@ -886,6 +886,8 @@ export interface DesktopBridge {
   chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection>;
   /** Создать «Входящие» внутри хранилища, если папки ещё нет. */
   prepareInboxRoot(): Promise<ManagedRoots>;
+  /** Создаёт изолированное демонстрационное пространство только в каталоге данных приложения. */
+  createDemoWorkspace(): Promise<ManagedRoots>;
   // ── Загрузки и экспорт ЦУ (этап 6). Вход в LMS и отправка работ не автоматизируются. ──
   getDownloadsWatcher(): Promise<DownloadsWatcher>;
   /** Включение — только явным действием пользователя в Настройках. */

@@ -4,7 +4,13 @@
 
 В `TauriDesktopBridge` подключены реальные `createWeek`, `classifyFiles`, `previewRoute`, `routeFiles`, `undoOperation`, `getStyleProfile`, `importTeacherTranscript`, `removeTeacherComment`, `buildSubmissionPackage`, `setPackageCheck` и `confirmSubmission`. `RoutePreview` содержит полный план (`sourceRelativePath`, `createsDirectories`, `sha256Match`, `nameConflict`, `renamed`, `action`, `undoable`). UI обязан показывать план до `routeFiles`; `ambiguous` нельзя раскладывать автоматически. Импорт файла переписки использует native `pickFiles()`, поэтому абсолютный путь не сохраняется в React или SQLite.
 
-Production-default bridge остаётся задачей этапа 11; до отдельного коммита этапа 11 browser/demo продолжает работать на mock.
+С этапа 11 настоящий Tauri runtime всегда использует `TauriDesktopBridge`; mock доступен только тестам и явному `VITE_KONTUR_BRIDGE=demo` вне Tauri. Ошибка IPC показывается пользователю и не подменяется demo-результатом.
+
+## Этап 11 — runtime и первый запуск
+
+Все методы, вызываемые UI, имеют обязательный IPC-клиент; временные stage-10 fallback удалены. Первый запуск показывает native-мастер: выбор единого учебного корня/Obsidian vault, папки загрузок и backup, read-only preview создаваемой структуры и отдельное подтверждение. Demo workspace создаётся только в app-data и проверяется TempDir-тестом.
+
+AI UI показывает один из режимов: «подписка аккаунта», «ручная передача», «не авторизован». API-key auth не поддерживается: в изоляцию Codex монтируется только официальный `auth.json` с `auth_mode=chatgpt`, без `OPENAI_API_KEY`; Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP.
 
 ## Этап 9.2 — isolation UI
 
@@ -12,7 +18,7 @@ Production-default bridge остаётся задачей этапа 11; до о
 
 Пользовательская формулировка: «Изолированный режим ограничивает файловый доступ внешнего CLI. Сеть и обработка переданного текста остаются на стороне провайдера».
 
-Документ фиксирует frontend-контракт и границу этапа 9. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; mock остаётся исполняемым поведением UI по умолчанию. Этап 5 добавил в контракт управляемые каталоги, отчётный импорт во «Входящие», native drag state и действия Finder; этап 6 — watcher загрузок, кандидатов, предпросмотр и импорт экспорта CU LMS Enhancer, происхождение файлов и ссылки LMS; этап 7 — локальное извлечение текста и структуры, просмотр результата, cache по SHA-256 и подборку материалов для будущего анализа; этап 8 — рабочий цикл ДЗ; этап 9 — задания передачи провайдерам (официальный CLI после явного подключения или ручная передача) с подтверждением результата.
+Документ фиксирует frontend-контракт. Источник истины по типам — `src/lib/bridge/types.ts` и `src/lib/bridge/workflow-types.ts`; production использует реальный Tauri backend.
 
 ## 1. Граница архитектуры
 
@@ -20,14 +26,14 @@ Production-default bridge остаётся задачей этапа 11; до о
 React pages/components
   → useBridgeQuery / useBridgeEvent / useRulesDraft / useWorkflowActions
   → bridge: DesktopBridge
-  → MockDesktopBridge (сейчас) | TauriDesktopBridge (явная отдельная фабрика)
+  → TauriDesktopBridge (production) | MockDesktopBridge (тесты / browser demo)
   → Tauri commands/events
   → Rust: filesystem, watchers, provider adapters, backups
 ```
 
 - React не обращается к файловой системе, shell, cookies или Tauri API напрямую.
 - Единственная системная граница — типизированный `DesktopBridge` из `src/lib/bridge`.
-- `createBridge()` по умолчанию создаёт `MockDesktopBridge`. Только флаг разработчика `VITE_KONTUR_BRIDGE=tauri` в нативном runtime создаёт `TauriDesktopBridge` целиком (для ручной проверки реального импорта); ни один npm-скрипт его не выставляет. Переключение UI по умолчанию — отдельный будущий этап.
+- `createBridge()` в native runtime всегда создаёт `TauriDesktopBridge`. В браузере mock разрешён только явным `VITE_KONTUR_BRIDGE=demo`; без него bridge честно сообщает `backend_unavailable`.
 - Hybrid bridge запрещён: реальный адаптер не смешивает SQLite-чтения с mock-записями, поскольку это создаёт несогласованное состояние и ложный успешный результат операций.
 - Пути в моделях — относительные пути внутри выбранного хранилища. Абсолютный путь пользователя не хардкодится.
 - Все даты — ISO 8601, размеры — байты, идентификаторы непрозрачны для frontend.
@@ -205,7 +211,7 @@ start operation
 
 `backend_health`, `get_subjects`, `get_weeks`, `get_week`, `get_homework_list`, `get_homework`, `get_inbox_files`, `get_automation_rules`, `get_activity_log` зарегистрированы в Rust и доступны через типизированные функции одноимённого уровня в `tauri/ipc.ts`. Аргументы IPC передаются в camelCase, DTO возвращаются в точной форме frontend-контракта. Ошибки Rust `{ code, message }` преобразуются в `BridgeError`; отсутствие native runtime даёт `backend_unavailable`.
 
-`update_automation_rules` и `update_classification` также зарегистрированы. Первая возвращает контрактный `OperationResult<AutomationRules>`, вторая — актуальный `InboxFile`, как определено методами `DesktopBridge`. `TauriDesktopBridge` подключает соответствующие `updateAutomationRules` и `updateClassification` напрямую к IPC. Только `getWeek` и `getHomework` переводят backend `not_found` в контрактный `null`; остальные ошибки пробрасываются. Все прочие методы интерфейса явно отклоняются с `backend_unavailable` и не используют mock.
+`update_automation_rules` и `update_classification` также зарегистрированы. Первая возвращает контрактный `OperationResult<AutomationRules>`, вторая — актуальный `InboxFile`, как определено методами `DesktopBridge`. Только контрактно nullable-геттеры переводят backend `not_found` в `null`; остальные ошибки пробрасываются. Все UI-методы подключены к настоящим IPC-командам и не используют mock fallback.
 
 `ClassificationPatch` сохраняет различие между отсутствием и очисткой: TypeScript `undefined` кодируется как `{ state: "absent" }`, `null` как `{ state: "null" }`, значение как `{ state: "value", value }`. Для category явная очистка означает `unknown`. Команда не перемещает файл и не обращается к файловой системе.
 
@@ -229,7 +235,7 @@ start operation
 - сдача (этап 10): `buildSubmissionPackage`, `setPackageCheck`, `confirmSubmission`;
 - `undoOperation`.
 
-UI по умолчанию продолжает использовать `MockDesktopBridge`; Tauri-фабрика выбирается только флагом `VITE_KONTUR_BRIDGE=tauri` при наличии Tauri runtime.
+UI в Tauri по умолчанию использует `TauriDesktopBridge`; browser mock требует `VITE_KONTUR_BRIDGE=demo`.
 
 ### Tauri event adapter
 
@@ -248,7 +254,7 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 - Порядок событий импорта: `operation:progress` (0, затем после каждого файла) → `inbox:file-added` (если есть новые) → `inbox:updated` → `operation:completed`/`operation:failed` → resolve.
 - `getManagedRoots()` возвращает `vault`, `inbox`, `backup`, `downloads` с состоянием `ok | not_configured | missing | unsafe` и `displayPath` только для показа (`~` вместо home). `chooseManagedRoot(kind)` открывает системный выбор папки, `cancelled: true` при отмене. «Входящие» всегда `Предметы/00 Входящие` внутри хранилища; `prepareInboxRoot()` создаёт папку заранее, иначе её создаёт первый импорт.
 - `openInboxFile(fileId)` открывает файл приложением по умолчанию (исполняемые файлы и скрипты — `blocked`), `revealInboxFile(fileId)` и `revealInFinder(relativePath)` показывают элемент в Finder.
-- Экран «Входящие» показывает `ImportPanel`: прогресс по `operation:progress` с тем же `operationId`, итог по каждому файлу, «В Finder». «Симулировать загрузку» — только mock. «Настройки» содержат «Управляемые каталоги» вместо текстовых полей путей. Классификация и раскладка в Tauri-режиме пока unsupported: новые файлы остаются со статусом `new` («Ждёт распознавания»).
+- Экран «Входящие» показывает `ImportPanel`: прогресс по `operation:progress` с тем же `operationId`, итог по каждому файлу, «В Finder». «Симулировать загрузку» — только mock. В Tauri доступны реальные классификация, обязательный preview и подтверждённая раскладка.
 
 ## 8a. Загрузки и экспорт CU LMS Enhancer (этап 6)
 
@@ -332,4 +338,4 @@ Runtime detection едина для IPC и events. В browser/mock окруже�
 
 ## 12. Что остаётся backend-этапу
 
-Этап 6 закрыл watcher загрузок и импорт экспорта ЦУ во «Входящие», этап 7 — локальное извлечение текста и подборку материалов, этап 8 — persistence, state machine, команды и события рабочего цикла ДЗ, этап 9 — задания передачи провайдерам с подтверждением результата. Дальше — автоматическая классификация обычных файлов и раскладка по предметам поверх готового импорта, применение backup/undo, пакеты и immutable snapshot (этап 10). UI по умолчанию всё ещё использует `MockDesktopBridge`; его переключение должно быть отдельным принятым этапом.
+Этапы 10–11 добавили реальную классификацию/раскладку/undo, пакеты, immutable snapshot, production Tauri bridge и мастер первого запуска. Mock не является production-default.

@@ -2,9 +2,9 @@
 
 ## Дополнение этапа 9.2
 
-Модуль `ai::isolation` является единственной production-границей запуска внешних AI CLI: `IsolationRunner`, `IsolationCapability`, `IsolationReport`, `IsolationSelfTest`, `ProviderExecutionPolicy` и versioned macOS Seatbelt profile. Все version/help/auth/execute проходят через runner; неизолированного fallback нет. Self-test и consent хранятся безопасно в `app_settings`, схема SQLite остаётся v7. Codex получает полный обязательный набор флагов; Claude production остаётся manual-only. Подробности — `docs/AI_ISOLATION_SECURITY.md`.
+Модуль `ai::isolation` является единственной production-границей запуска внешних AI CLI: `IsolationRunner`, `IsolationCapability`, `IsolationReport`, `IsolationSelfTest`, `ProviderExecutionPolicy` и versioned macOS Seatbelt profile. Все version/help/auth/execute проходят через runner; неизолированного fallback нет. Self-test и consent хранятся безопасно в `app_settings`, текущая схема SQLite — v8. Codex получает полный обязательный набор флагов; в изоляцию монтируется только account-сессия Codex `auth_mode=chatgpt` без `OPENAI_API_KEY`. Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP. Подробности — `docs/AI_ISOLATION_SECURITY.md`.
 
-Статус документа: этап 9. Read-only путь, две DB-only мутации, реальный импорт во «Входящие» через fd-relative file service, watcher загрузок, импорт экспорта CU LMS Enhancer и локальное извлечение текста с подборкой материалов подключены к Tauri IPC. Рабочий цикл ДЗ (этап 8) и задания передачи провайдерам AI (этап 9) подключены к Tauri IPC. Основной UI по умолчанию использует `MockDesktopBridge`.
+Статус документа: этап 11. Основной UI в native runtime использует только `TauriDesktopBridge`; все файловые, учебные и AI-команды подключены к реальному IPC. Mock доступен тестам и явному browser demo.
 
 ## Модули
 
@@ -260,7 +260,7 @@ Tauri-команда `backend_health` проверяет доступность 
 
 ## Граница следующего этапа
 
-React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` по умолчанию создаёт `MockDesktopBridge`; `TauriDesktopBridge` целиком включается только флагом разработчика `VITE_KONTUR_BRIDGE=tauri`. Hybrid bridge запрещён.
+React не обращается к SQLite и файловой системе напрямую: публичной границей остаётся типизированный `DesktopBridge`. `createBridge()` всегда выбирает Tauri backend внутри native runtime; вне него mock включается только явным `VITE_KONTUR_BRIDGE=demo`. Hybrid bridge запрещён.
 
 Этап 10 добавляет классификацию обычных файлов, раскладку по предметам, undo и immutable submission snapshot. Отправка работ в LMS остаётся ручной.
 

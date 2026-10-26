@@ -446,8 +446,8 @@ impl<'a> AiService<'a> {
             }
         };
         let label = match provider {
-            ProviderId::Codex => "Codex CLI",
-            ProviderId::Claude => "Claude Code CLI",
+            ProviderId::Codex => "Подписка ChatGPT · Codex CLI",
+            ProviderId::Claude => "Подписка Claude.ai · Claude Code",
         };
         ProviderStatusDto {
             provider,

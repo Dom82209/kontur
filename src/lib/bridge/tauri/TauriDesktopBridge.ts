@@ -13,7 +13,6 @@ import type {
 } from "../types";
 import { BridgeError } from "../types";
 import { listenToBridgeEvent, listenToIntakeEvent } from "./events";
-import { unsupportedBackend } from "./errors";
 import * as ipc from "./ipc";
 
 export interface TauriIpcClient {
@@ -27,21 +26,22 @@ export interface TauriIpcClient {
   getActivityLog: typeof ipc.getActivityLog;
   updateAutomationRules: typeof ipc.updateAutomationRules;
   updateClassification: typeof ipc.updateClassification;
-  createWeek?: typeof ipc.createWeek;
-  classifyFiles?: typeof ipc.classifyFiles;
-  previewRoute?: typeof ipc.previewRoute;
-  routeFiles?: typeof ipc.routeFiles;
-  undoOperation?: typeof ipc.undoOperation;
-  getStyleProfile?: typeof ipc.getStyleProfile;
-  importTeacherTranscript?: typeof ipc.importTeacherTranscript;
-  previewTeacherTranscript?: typeof ipc.previewTeacherTranscript;
-  removeTeacherComment?: typeof ipc.removeTeacherComment;
-  buildSubmissionPackage?: typeof ipc.buildSubmissionPackage;
-  setPackageCheck?: typeof ipc.setPackageCheck;
-  confirmSubmission?: typeof ipc.confirmSubmission;
+  createWeek: typeof ipc.createWeek;
+  classifyFiles: typeof ipc.classifyFiles;
+  previewRoute: typeof ipc.previewRoute;
+  routeFiles: typeof ipc.routeFiles;
+  undoOperation: typeof ipc.undoOperation;
+  getStyleProfile: typeof ipc.getStyleProfile;
+  importTeacherTranscript: typeof ipc.importTeacherTranscript;
+  previewTeacherTranscript: typeof ipc.previewTeacherTranscript;
+  removeTeacherComment: typeof ipc.removeTeacherComment;
+  buildSubmissionPackage: typeof ipc.buildSubmissionPackage;
+  setPackageCheck: typeof ipc.setPackageCheck;
+  confirmSubmission: typeof ipc.confirmSubmission;
   checkManagedRoots: typeof ipc.checkManagedRoots;
   chooseManagedRoot: typeof ipc.chooseManagedRoot;
   prepareInboxRoot: typeof ipc.prepareInboxRoot;
+  createDemoWorkspace: typeof ipc.createDemoWorkspace;
   pickImportFiles: typeof ipc.pickImportFiles;
   importInboxFiles: typeof ipc.importInboxFiles;
   getOperationResult: typeof ipc.getOperationResult;
@@ -188,6 +188,7 @@ export class TauriDesktopBridge implements DesktopBridge {
   getManagedRoots: DesktopBridge["getManagedRoots"] = () => this.ipcClient.checkManagedRoots();
   chooseManagedRoot: DesktopBridge["chooseManagedRoot"] = (kind) => this.ipcClient.chooseManagedRoot(kind);
   prepareInboxRoot: DesktopBridge["prepareInboxRoot"] = () => this.ipcClient.prepareInboxRoot();
+  createDemoWorkspace: DesktopBridge["createDemoWorkspace"] = () => this.ipcClient.createDemoWorkspace();
 
   // ── Загрузки и экспорт ЦУ ──
 
@@ -255,7 +256,7 @@ export class TauriDesktopBridge implements DesktopBridge {
     const { operationId, revision } = command(options);
     return this.ipcClient.selectHomeworkVersion(operationId, versionId, revision);
   };
-  getStyleProfile: DesktopBridge["getStyleProfile"] = () => this.ipcClient.getStyleProfile?.() ?? unsupportedBackend("Профиль стиля");
+  getStyleProfile: DesktopBridge["getStyleProfile"] = () => this.ipcClient.getStyleProfile();
   prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = async (homeworkId, purpose, versionId = null, options) => {
     const { operationId, revision } = command(options);
     return (await this.ipcClient.createSourceBundle(operationId, homeworkId, purpose, versionId, revision)).value;
@@ -320,9 +321,9 @@ export class TauriDesktopBridge implements DesktopBridge {
     const { operationId, revision } = command(options);
     return this.ipcClient.addTeacherRequirement(operationId, homeworkId, input, revision);
   };
-  importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = (homeworkId, input) => this.ipcClient.importTeacherTranscript?.(homeworkId, input) ?? unsupportedBackend("Импорт переписки преподавателя");
-  previewTeacherTranscript: DesktopBridge["previewTeacherTranscript"] = (input) => this.ipcClient.previewTeacherTranscript?.(input) ?? unsupportedBackend("Предпросмотр переписки преподавателя");
-  removeTeacherComment: DesktopBridge["removeTeacherComment"] = (commentId) => this.ipcClient.removeTeacherComment?.(commentId) ?? unsupportedBackend("Удаление комментария преподавателя");
+  importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = (homeworkId, input) => this.ipcClient.importTeacherTranscript(homeworkId, input);
+  previewTeacherTranscript: DesktopBridge["previewTeacherTranscript"] = (input) => this.ipcClient.previewTeacherTranscript(input);
+  removeTeacherComment: DesktopBridge["removeTeacherComment"] = (commentId) => this.ipcClient.removeTeacherComment(commentId);
   getTeacherRequirements: DesktopBridge["getTeacherRequirements"] = async (homeworkId) => (await this.workflowOf(homeworkId)).teacherRequirements;
   resolveRequirement: DesktopBridge["resolveRequirement"] = async (requirementId, status, note, options) => {
     const { operationId, revision } = command(options);
@@ -333,18 +334,18 @@ export class TauriDesktopBridge implements DesktopBridge {
     const { operationId, revision } = command(options);
     return this.ipcClient.markReadyToSubmit(operationId, homeworkId, options.noTeacherComments, revision);
   };
-  buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = (homeworkId) => this.ipcClient.buildSubmissionPackage?.(homeworkId) ?? unsupportedBackend("Сборка комплекта на сдачу");
+  buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = (homeworkId) => this.ipcClient.buildSubmissionPackage(homeworkId);
   getSubmissionPackage: DesktopBridge["getSubmissionPackage"] = async (homeworkId) => (await this.workflowOf(homeworkId)).submissionPackage;
-  setPackageCheck: DesktopBridge["setPackageCheck"] = (packageId, checkId, done) => this.ipcClient.setPackageCheck?.(packageId, checkId, done) ?? unsupportedBackend("Чек-лист комплекта");
-  confirmSubmission: DesktopBridge["confirmSubmission"] = (homeworkId, confirmation) => this.ipcClient.confirmSubmission?.(homeworkId, confirmation) ?? unsupportedBackend("Подтверждение отправки");
+  setPackageCheck: DesktopBridge["setPackageCheck"] = (packageId, checkId, done) => this.ipcClient.setPackageCheck(packageId, checkId, done);
+  confirmSubmission: DesktopBridge["confirmSubmission"] = (homeworkId, confirmation) => this.ipcClient.confirmSubmission(homeworkId, confirmation);
   getSubmissionReceipt: DesktopBridge["getSubmissionReceipt"] = async (homeworkId) => (await this.workflowOf(homeworkId)).submissionReceipt;
 
-  // ── Раскладка «Входящих» по предметам — следующий этап, не входит в рабочий цикл ДЗ. ──
+  // ── Реальная раскладка «Входящих» по предметам. ──
 
-  createWeek: DesktopBridge["createWeek"] = (subjectId, weekNumber) => this.ipcClient.createWeek?.(subjectId, weekNumber) ?? unsupportedBackend("Создание недели");
-  classifyFiles: DesktopBridge["classifyFiles"] = (fileIds) => this.ipcClient.classifyFiles?.(fileIds) ?? unsupportedBackend("Классификация файлов");
-  previewRoute: DesktopBridge["previewRoute"] = (fileId, destination) => this.ipcClient.previewRoute?.(fileId, destination) ?? unsupportedBackend("Предпросмотр раскладки");
-  routeFiles: DesktopBridge["routeFiles"] = (fileIds, destination) => this.ipcClient.routeFiles?.(fileIds, destination) ?? unsupportedBackend("Раскладка файлов");
+  createWeek: DesktopBridge["createWeek"] = (subjectId, weekNumber) => this.ipcClient.createWeek(subjectId, weekNumber);
+  classifyFiles: DesktopBridge["classifyFiles"] = (fileIds) => this.ipcClient.classifyFiles(fileIds);
+  previewRoute: DesktopBridge["previewRoute"] = (fileId, destination) => this.ipcClient.previewRoute(fileId, destination);
+  routeFiles: DesktopBridge["routeFiles"] = (fileIds, destination) => this.ipcClient.routeFiles(fileIds, destination);
 
   // ── Провайдеры и задания передачи (этап 9). Учётные данные не запрашиваются и не передаются. ──
 
@@ -371,5 +372,5 @@ export class TauriDesktopBridge implements DesktopBridge {
     const { operationId, revision } = command(options);
     return this.ipcClient.confirmAiResult(operationId, jobId, options?.supportingJobId ?? null, input, revision);
   };
-  undoOperation: DesktopBridge["undoOperation"] = (operationId) => this.ipcClient.undoOperation?.(operationId) ?? unsupportedBackend("Отмена операции");
+  undoOperation: DesktopBridge["undoOperation"] = (operationId) => this.ipcClient.undoOperation(operationId);
 }

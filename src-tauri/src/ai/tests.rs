@@ -395,7 +395,7 @@ fn detected_cli_is_never_enabled_without_explicit_connect() {
     assert_eq!(status.availability, ProviderAvailability::Connected);
     assert_eq!(
         status.account_label.as_deref(),
-        Some("Codex CLI · codex-cli 0.99.0")
+        Some("Подписка ChatGPT · Codex CLI · codex-cli 0.99.0")
     );
     assert_eq!(status.cli.executable.as_deref(), Some("codex"));
 

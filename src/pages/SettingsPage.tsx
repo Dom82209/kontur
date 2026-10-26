@@ -134,7 +134,7 @@ export function SettingsPage() {
           <div className="settings__fields">
             {providers.data ? providers.data.map((p) => <ProviderCard key={p.provider} status={p} />) : <SkeletonRows count={2} />}
             <p className="field__hint">
-              Официальный CLI подключается только кнопкой «Подключить CLI» и только если он установлен и поддерживает безопасный неинтерактивный режим. Вход — в самом CLI (Терминал). Без CLI каждый шаг выполняется ручной передачей: промт копируется по кнопке, ответ вставляется в «Контур».
+              Используются только подписки аккаунтов: ChatGPT/Codex account login и Claude.ai Pro/Max через официальный Claude Code. API-ключи и отдельный API billing не поддерживаются. Codex включается автоматически только после проверки account credentials внутри изоляции; Claude остаётся ручной передачей, пока невозможно доказать отключение settings, hooks и MCP.
             </p>
           </div>
         </section>

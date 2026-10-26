@@ -238,6 +238,10 @@ export function prepareInboxRoot(): Promise<ManagedRoots> {
   return call("prepare_inbox_root");
 }
 
+export function createDemoWorkspace(): Promise<ManagedRoots> {
+  return call("create_demo_workspace");
+}
+
 /** Системный выбор нескольких файлов (диалог открывает Rust). Отмена — пустой массив. */
 export function pickImportFiles(): Promise<NativeIntakeItem[]> {
   return call("pick_import_files");

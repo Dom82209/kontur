@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { NAV } from "../../app/nav";
 import { useOps } from "../../app/operations";
 import { useHotkey } from "../../lib/hooks/useHotkey";
+import { FirstRunWizard } from "../domain/FirstRunWizard";
 import { CommandPalette } from "./CommandPalette";
 import { IntroSequence } from "./IntroSequence";
 import { Sidebar } from "./Sidebar";
@@ -54,6 +55,7 @@ export function AppShell() {
           </AnimatePresence>
         </main>
         <CommandPalette open={palette} onClose={() => setPalette(false)} />
+        <FirstRunWizard />
         <IntroSequence />
       </div>
     </LayoutGroup>

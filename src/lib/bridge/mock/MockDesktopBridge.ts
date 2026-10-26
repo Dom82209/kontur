@@ -402,6 +402,12 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(this.roots);
   }
 
+  async createDemoWorkspace(): Promise<ManagedRoots> {
+    await this.wait(120);
+    this.roots = buildRoots();
+    return clone(this.roots);
+  }
+
   // ───────────── Загрузки и экспорт ЦУ (имитация этапа 6) ─────────────
 
   getDownloadsWatcher: DesktopBridge["getDownloadsWatcher"] = () => this.lms.getWatcher();
