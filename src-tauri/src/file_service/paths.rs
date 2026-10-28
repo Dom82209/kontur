@@ -160,7 +160,7 @@ pub struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn of(identity: Identity) -> Self {
+    pub(crate) fn of(identity: Identity) -> Self {
         let (dev, ino) = identity.raw();
         Self { dev, ino }
     }

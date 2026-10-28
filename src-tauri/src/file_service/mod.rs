@@ -7,6 +7,7 @@ mod managed_markdown;
 mod paths;
 mod planning;
 mod read;
+mod scan;
 mod undo;
 
 pub use atomic_copy::{
@@ -26,6 +27,7 @@ pub use paths::{
 };
 pub use planning::{plan_copy, CopyDecision};
 pub use read::{read_vault_file, ReadSnapshot};
+pub use scan::{HashedFile, ScanLimits, ScanOutcome, ScannedEntry, ScannedKind};
 pub use undo::{
     apply_created_files, stage_created_files, validate_created_undo, validate_undo,
     BackupUndoEntry, CreatedFileUndoEntry, StagedUndoFile, UndoContext, UndoManifest,

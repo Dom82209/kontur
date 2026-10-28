@@ -563,14 +563,17 @@ pub fn dashboard(
         .into_iter()
         .filter(|item| item.stage != HomeworkStage::Submitted)
         .collect();
+    // ДЗ с неизвестным сроком не попадают в ленту сроков: срок не выдумывается.
     let mut deadlines: Vec<DeadlineDto> = active
         .iter()
-        .map(|item| DeadlineDto {
-            homework_id: item.id.clone(),
-            subject_id: item.subject_id.clone(),
-            title: item.title.clone(),
-            deadline: item.deadline.clone(),
-            stage: item.stage,
+        .filter_map(|item| {
+            Some(DeadlineDto {
+                homework_id: item.id.clone(),
+                subject_id: item.subject_id.clone(),
+                title: item.title.clone(),
+                deadline: item.deadline.clone()?,
+                stage: item.stage,
+            })
         })
         .collect();
     deadlines.sort_by(|left, right| {
@@ -580,7 +583,11 @@ pub fn dashboard(
     });
     let in_week: Vec<_> = active
         .iter()
-        .filter(|item| item.deadline >= week.starts_at && item.deadline <= week.ends_at)
+        .filter(|item| {
+            item.deadline.as_deref().is_some_and(|deadline| {
+                deadline >= week.starts_at.as_str() && deadline <= week.ends_at.as_str()
+            })
+        })
         .collect();
     let items: Vec<WeekProgressItemDto> = in_week
         .iter()

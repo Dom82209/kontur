@@ -62,8 +62,9 @@ pub struct WeekDto {
     pub id: String,
     pub subject_id: String,
     pub number: i64,
-    pub starts_at: String,
-    pub ends_at: String,
+    /// `None` — даты недели неизвестны до настройки семестра.
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
     pub topic: Option<String>,
     pub lectures: Vec<FileRefDto>,
     pub seminars: Vec<FileRefDto>,
@@ -271,7 +272,8 @@ pub struct HomeworkDto {
     pub subject_id: String,
     pub week_number: i64,
     pub title: String,
-    pub deadline: String,
+    /// `None` — срок неизвестен (не выдумывается).
+    pub deadline: Option<String>,
     pub stage: HomeworkStage,
     pub task_files: Vec<FileRefDto>,
     pub versions: Vec<HomeworkVersionDto>,

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 struct Migration {
     version: u32,
@@ -49,6 +49,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 10,
         sql: include_str!("v10.sql"),
+    },
+    Migration {
+        version: 11,
+        sql: include_str!("v11.sql"),
     },
 ];
 
@@ -113,6 +117,8 @@ mod tests {
             "submission_receipts",
             "teacher_comments",
             "teacher_requirements",
+            "vault_adoption_items",
+            "vault_adoption_plans",
             "weeks",
             "workspace_identity",
         ];

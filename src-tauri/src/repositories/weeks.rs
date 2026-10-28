@@ -39,8 +39,8 @@ impl ReadRepository<'_> {
                 id: row.id,
                 subject_id: row.subject_id,
                 number: row.number,
-                starts_at: row.starts_at,
-                ends_at: row.ends_at,
+                starts_at: known(row.starts_at),
+                ends_at: known(row.ends_at),
                 topic: row.topic,
                 lectures,
                 seminars,
@@ -110,5 +110,14 @@ impl ReadRepository<'_> {
             }
             Ok(output)
         })
+    }
+}
+
+/// Пустая строка в `weeks.starts_at/ends_at` означает «даты неизвестны».
+fn known(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }

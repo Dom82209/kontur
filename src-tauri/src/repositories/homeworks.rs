@@ -80,9 +80,8 @@ pub(crate) fn load_homeworks(
     let mut versions = load_versions(connection, homework_id)?;
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let deadline = row.deadline.ok_or_else(|| {
-            BackendError::database(format!("homework {} has no deadline", row.id))
-        })?;
+        // NULL — срок неизвестен (например, ДЗ подключено из существующего vault).
+        let deadline = row.deadline;
         require_relative_path(&row.folder_path, "homeworks.folder_path")?;
         let stage = HomeworkStage::try_from_db(&row.stage)
             .map_err(|message| invalid_enum("homeworks.stage", message))?;
@@ -120,7 +119,7 @@ fn homework_rows(
     let sql = if homework_id.is_some() {
         format!("{base} WHERE h.id = ?1")
     } else {
-        format!("{base} ORDER BY h.deadline, h.id")
+        format!("{base} ORDER BY h.deadline IS NULL, h.deadline, h.id")
     };
     let mut statement = connection.prepare(&sql)?;
     let mut rows = if let Some(id) = homework_id {

@@ -1,3 +1,4 @@
+pub mod adoption;
 pub mod ai;
 mod ai_commands;
 mod app_state;

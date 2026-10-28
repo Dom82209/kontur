@@ -32,7 +32,24 @@
 
 | Этап | Статус | Коммит |
 |---|---|---|
-| 1. Workspace boundary | готов: preview/confirm/cancel, журнал, restart, legacy demo/real, symlink/traversal/rollback, 38 тестов | `feat(workspaces): isolate demo and real data` |
+| 1. Workspace boundary | готов: preview/confirm/cancel, журнал, restart, legacy demo/real, symlink/traversal/rollback, 42 теста; ревью-фиксы (вложенные vault, symlink demo, неизменяемый fingerprint) | `feat(workspaces): isolate demo and real data`, `fix(workspaces): harden stage 1 workspace boundary` |
+| 2. Vault adoption | **в работе (WIP)**: backend готов и покрыт 13 тестами; IPC, DesktopBridge, mock и UI ещё не сделаны | `wip(adoption): …` |
+
+## Checkpoint этапа 2 (WIP)
+
+Сделано (`src-tauri`):
+
+- `file_service/scan.rs` — read-only fd-relative обход vault (`O_NOFOLLOW`, скрытые записи не открываются, symlink/спецфайлы/не-UTF-8 только в отчёт, лимиты) и потоковый SHA-256.
+- `adoption.rs` + миграция v11 — неизменяемый план `vault_adoption_plans` (preview → apply/dry-run/cancel, TTL 30 мин, SHA-256 плана), стабильные id из identity workspace и относительного пути, повторное хэширование каждого нового файла перед apply, одна транзакция, provenance в `vault_adoption_items`, ручные категории с приоритетом. `Неделя 00`, `00 Общие материалы`, служебные папки и заметки — в отчёт пропущенных.
+- Часть этапа 5 перенесена раньше, потому что у импортированных ДЗ нет известных дат: v11 разрешает `homeworks.deadline = NULL` и пустые даты недели; `HomeworkDto.deadline` и `WeekDto.startsAt/endsAt` стали `Option`. Лента сроков пропускает ДЗ без срока.
+
+Осталось для этапа 2:
+
+1. Frontend-типы: `deadline: ISODate | null`, `startsAt/endsAt: ISODate | null` и все места отображения/сортировки («срок не указан»). **До этого backend-изменение DTO не согласовано с TS-типами.**
+2. Tauri-команды `preview_vault_adoption`, `apply_vault_adoption(planId, overrides, dryRun)`, `cancel_vault_adoption`; регистрация в `lib.rs` и capabilities.
+3. `DesktopBridge` (types, ipc, TauriDesktopBridge, Mock + тесты).
+4. UI-мастер «Подключить материалы из vault» в настройках: сводка, пропущенные с причинами, ручные категории, dry-run, apply.
+5. Read-only preview на копии настоящего vault и полный прогон проверок на Mac (`logs/run-checks.command`).
 
 ## Известные ограничения
 
