@@ -2,9 +2,18 @@
 
 ## AI isolation consent (этап 9.2)
 
-Схема SQLite остаётся v8. В `app_settings.ai_providers` хранятся только флаги, `consentProfileVersion` и безопасный `IsolationReport` без путей и секретов. Отсутствующая версия (включая старое `{cliEnabled:true}` этапа 9) означает отсутствие согласия и не активирует CLI. Изменение версии профиля или failed self-test аннулирует consent. Абсолютный job path, credential path и содержимое credentials не сохраняются.
+Схема SQLite — v9. В `app_settings.ai_providers` хранятся только флаги, `consentProfileVersion` и безопасный `IsolationReport` без путей и секретов. Отсутствующая версия (включая старое `{cliEnabled:true}` этапа 9) означает отсутствие согласия и не активирует CLI. Изменение версии профиля или failed self-test аннулирует consent. Абсолютный job path, credential path и содержимое credentials не сохраняются.
 
-Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, `ai-types.ts`, Rust DTO и SQLite schema version 8. SQLite доступен только Rust backend; основной native UI работает через реальный `TauriDesktopBridge`. Mock не участвует в production persistence.
+Документ сверяет фактические типы `src/lib/bridge/types.ts`, `workflow-types.ts`, `ai-types.ts`, Rust DTO и SQLite schema version 9. SQLite доступен только Rust backend; основной native UI работает через реальный `TauriDesktopBridge`. Mock не участвует в production persistence.
+
+## Schema v9 — workspace isolation
+
+- `workspace_identity` существует в каждой workspace-БД ровно в одной строке: стабильный UUID, `demo|real`, canonical vault, SHA-256 fingerprint, created_at, `active|archived`. UUID/kind/created_at и удаление защищены триггерами.
+- Учебные таблицы не получают nullable `workspace_id`: граница — отдельный SQLite-файл. Это охватывает все существующие и будущие строки по умолчанию, включая operations, `ai_jobs`, submission packages и immutable receipts.
+- `workspace-catalog.sqlite3` — отдельный служебный каталог, не workspace schema. Он хранит только метаданные и относительный путь `kontur.sqlite3` либо `workspaces/<uuid>.sqlite3`; абсолютный путь к произвольной БД из каталога не принимается.
+- Каталог (`PRAGMA user_version = 1`) также хранит `workspace_transitions`: action, снимок vault (canonical, dev, inode, SHA-256 marker), from/target workspace, `previewed|applying|applied|cancelled|failed`, сообщение, created/expires/finished. Записи `workspaces` append-only: UUID, kind, путь БД и created_at неизменяемы, удаление запрещено триггерами.
+- Existing schema v8 мигрирует append-only в v9 на месте. Пустая конфигурация или прежний `demo-workspace` регистрируются как demo, выбранный пользователем vault — как real. Ни одна старая учебная строка не копируется и не перепривязывается.
+- Подтверждённый переход меняет active id и перезапускает процесс. В работающем процессе database handle не переключается.
 
 Diagnostic export не является копией SQLite: он выводит только счётчики и обезличенные статусы. Для backup/restore при закрытом приложении копируется весь app-data каталог вместе с SQLite WAL/SHM, как описано в `USER_GUIDE.md`.
 

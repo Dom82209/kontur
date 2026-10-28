@@ -31,6 +31,12 @@ import {
   type Unsubscribe,
   type Week,
   type WorkflowCommandOptions,
+  type Workspace,
+  type WorkspaceActivation,
+  type WorkspaceOverview,
+  type WorkspaceTransition,
+  type WorkspaceTransitionPreview,
+  type WorkspaceTransitionRequest,
 } from "../types";
 import {
   CATEGORY_FOLDER,
@@ -78,6 +84,14 @@ const DEMO_ROOT_PATHS: Record<SelectableRootKind, string> = {
 
 function buildRoots(): ManagedRoots {
   return {
+    workspace: {
+      id: "demo-browser-workspace",
+      kind: "demo",
+      vaultCanonical: DEMO_ROOT_PATHS.vault,
+      vaultFingerprint: "browser-demo-fingerprint",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      state: "active",
+    },
     vault: { kind: "vault", state: "ok", displayPath: DEMO_ROOT_PATHS.vault, message: null },
     inbox: { kind: "inbox", state: "ok", displayPath: `${DEMO_ROOT_PATHS.vault}/Предметы/00 Входящие`, message: null },
     backup: { kind: "backup", state: "not_configured", displayPath: null, message: "Не выбрана" },
@@ -112,6 +126,10 @@ export class MockDesktopBridge implements DesktopBridge {
   private undoers = new Map<string, () => void>();
   private homeworkCandidates = new Map<string, FileRef[]>();
   private roots: ManagedRoots = buildRoots();
+  private knownWorkspaces: Workspace[] = this.roots.workspace ? [clone(this.roots.workspace)] : [];
+  private transitions: WorkspaceTransition[] = [];
+  private pendingTransitions = new Map<string, WorkspaceTransitionRequest>();
+  private transitionSeq = 0;
   private importResults = new Map<string, OperationResult<InboxImportReport>>();
   private codexAttempts = 0;
   private candidateSeq = 0;
@@ -402,10 +420,71 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(this.roots);
   }
 
-  async createDemoWorkspace(): Promise<ManagedRoots> {
+  async getWorkspaces(): Promise<WorkspaceOverview> {
+    const active = this.roots.workspace ? clone(this.roots.workspace) : null;
+    const others = this.knownWorkspaces.filter((item) => item.id !== active?.id).map((item) => ({ ...clone(item), state: "archived" as const }));
+    return { active, workspaces: active ? [active, ...others] : others, recentTransitions: clone(this.transitions) };
+  }
+
+  /** Mock повторяет контракт backend: preview ничего не меняет, confirm одноразовый. */
+  async previewWorkspaceTransition(request: WorkspaceTransitionRequest): Promise<WorkspaceTransitionPreview> {
+    await this.wait(60);
+    const current = this.roots.workspace ? clone(this.roots.workspace) : null;
+    const target = request.kind === "activate" ? this.knownWorkspaces.find((item) => item.id === request.workspaceId) ?? null : null;
+    if (request.kind === "activate" && !target) throw new BridgeError("not_found", "Рабочее пространство не найдено");
+    if (target && current && target.id === current.id) throw new BridgeError("conflict", "Это рабочее пространство уже активно");
+    const id = `transition-${++this.transitionSeq}`;
+    const effects =
+      request.kind === "create_demo"
+        ? ["Создать демо-хранилище только в каталоге данных приложения.", "Создать отдельную базу SQLite с «Демо-курсом».", "Сделать демо активным и перезапустить приложение."]
+        : request.kind === "create_real"
+          ? [".kontur-workspace.json в корне vault (только идентификатор).", "Отдельная база SQLite.", "Перезапуск приложения."]
+          : ["Сделать это пространство активным и перезапустить приложение.", "Vault и учебные данные не изменяются."];
+    this.transitions.unshift({ id, action: request.kind, state: "previewed", fromWorkspaceId: current?.id ?? null, targetWorkspaceId: target?.id ?? null, message: null, createdAt: new Date().toISOString(), finishedAt: null });
+    this.pendingTransitions.set(id, request);
+    return {
+      id,
+      action: request.kind,
+      currentWorkspace: current,
+      targetWorkspace: target ? clone(target) : null,
+      targetKind: request.kind === "create_demo" ? "demo" : target?.kind ?? "real",
+      vaultDisplayPath: request.kind === "create_demo" ? null : DEMO_ROOT_PATHS.vault,
+      effects,
+      warnings: request.kind === "create_real" ? ["Данные текущего пространства не переносятся."] : [],
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    };
+  }
+
+  async confirmWorkspaceTransition(transitionId: string): Promise<WorkspaceActivation> {
     await this.wait(120);
-    this.roots = buildRoots();
-    return clone(this.roots);
+    const request = this.pendingTransitions.get(transitionId);
+    const entry = this.transitions.find((item) => item.id === transitionId);
+    if (!request || !entry || entry.state !== "previewed") throw new BridgeError("conflict", "Переход уже применён, отменён или не найден");
+    this.pendingTransitions.delete(transitionId);
+    let workspace: Workspace;
+    if (request.kind === "activate") {
+      workspace = { ...clone(this.knownWorkspaces.find((item) => item.id === request.workspaceId)!), state: "active" };
+    } else {
+      workspace = {
+        id: `browser-${request.kind}-${this.transitionSeq}`,
+        kind: request.kind === "create_demo" ? "demo" : "real",
+        vaultCanonical: DEMO_ROOT_PATHS.vault,
+        vaultFingerprint: `browser-fingerprint-${this.transitionSeq}`,
+        createdAt: new Date().toISOString(),
+        state: "active",
+      };
+      this.knownWorkspaces.push(clone(workspace));
+    }
+    this.roots = { ...buildRoots(), workspace };
+    Object.assign(entry, { state: "applied", targetWorkspaceId: workspace.id, finishedAt: new Date().toISOString() });
+    return { workspace: clone(workspace), restartRequired: true };
+  }
+
+  async cancelWorkspaceTransition(transitionId: string): Promise<void> {
+    const entry = this.transitions.find((item) => item.id === transitionId);
+    if (!entry || entry.state !== "previewed") throw new BridgeError("conflict", "Переход уже применён, отменён или не найден");
+    this.pendingTransitions.delete(transitionId);
+    Object.assign(entry, { state: "cancelled", finishedAt: new Date().toISOString() });
   }
 
   async exportDiagnosticReport(): Promise<{ cancelled: boolean; fileName: string | null }> {

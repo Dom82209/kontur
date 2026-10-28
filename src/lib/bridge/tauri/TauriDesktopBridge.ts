@@ -41,7 +41,10 @@ export interface TauriIpcClient {
   checkManagedRoots: typeof ipc.checkManagedRoots;
   chooseManagedRoot: typeof ipc.chooseManagedRoot;
   prepareInboxRoot: typeof ipc.prepareInboxRoot;
-  createDemoWorkspace: typeof ipc.createDemoWorkspace;
+  getWorkspaces: typeof ipc.getWorkspaces;
+  previewWorkspaceTransition: typeof ipc.previewWorkspaceTransition;
+  confirmWorkspaceTransition: typeof ipc.confirmWorkspaceTransition;
+  cancelWorkspaceTransition: typeof ipc.cancelWorkspaceTransition;
   exportDiagnosticReport: typeof ipc.exportDiagnosticReport;
   openObsidianNote: typeof ipc.openObsidianNote;
   pickImportFiles: typeof ipc.pickImportFiles;
@@ -190,7 +193,10 @@ export class TauriDesktopBridge implements DesktopBridge {
   getManagedRoots: DesktopBridge["getManagedRoots"] = () => this.ipcClient.checkManagedRoots();
   chooseManagedRoot: DesktopBridge["chooseManagedRoot"] = (kind) => this.ipcClient.chooseManagedRoot(kind);
   prepareInboxRoot: DesktopBridge["prepareInboxRoot"] = () => this.ipcClient.prepareInboxRoot();
-  createDemoWorkspace: DesktopBridge["createDemoWorkspace"] = () => this.ipcClient.createDemoWorkspace();
+  getWorkspaces: DesktopBridge["getWorkspaces"] = () => this.ipcClient.getWorkspaces();
+  previewWorkspaceTransition: DesktopBridge["previewWorkspaceTransition"] = (request) => this.ipcClient.previewWorkspaceTransition(request);
+  confirmWorkspaceTransition: DesktopBridge["confirmWorkspaceTransition"] = (id) => this.ipcClient.confirmWorkspaceTransition(id);
+  cancelWorkspaceTransition: DesktopBridge["cancelWorkspaceTransition"] = (id) => this.ipcClient.cancelWorkspaceTransition(id);
   exportDiagnosticReport: DesktopBridge["exportDiagnosticReport"] = () => this.ipcClient.exportDiagnosticReport();
   openObsidianNote: DesktopBridge["openObsidianNote"] = (relativePath) => this.ipcClient.openObsidianNote(relativePath);
 

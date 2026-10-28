@@ -2,7 +2,7 @@
 
 ## Дополнение этапа 9.2
 
-Модуль `ai::isolation` является единственной production-границей запуска внешних AI CLI: `IsolationRunner`, `IsolationCapability`, `IsolationReport`, `IsolationSelfTest`, `ProviderExecutionPolicy` и versioned macOS Seatbelt profile. Все version/help/auth/execute проходят через runner; неизолированного fallback нет. Self-test и consent хранятся безопасно в `app_settings`, текущая схема SQLite — v8. Codex получает полный обязательный набор флагов; в изоляцию монтируется только account-сессия Codex `auth_mode=chatgpt` без `OPENAI_API_KEY`. Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP. Подробности — `docs/AI_ISOLATION_SECURITY.md`.
+Модуль `ai::isolation` является единственной production-границей запуска внешних AI CLI: `IsolationRunner`, `IsolationCapability`, `IsolationReport`, `IsolationSelfTest`, `ProviderExecutionPolicy` и versioned macOS Seatbelt profile. Все version/help/auth/execute проходят через runner; неизолированного fallback нет. Self-test и consent хранятся безопасно в `app_settings`, текущая схема SQLite — v9. Codex получает полный обязательный набор флагов; в изоляцию монтируется только account-сессия Codex `auth_mode=chatgpt` без `OPENAI_API_KEY`. Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP. Подробности — `docs/AI_ISOLATION_SECURITY.md`.
 
 Статус документа: этап 13. Основной UI в native runtime использует только `TauriDesktopBridge`; все файловые, учебные и AI-команды подключены к реальному IPC. Mock доступен тестам и явному browser demo.
 
@@ -41,7 +41,7 @@
 
 Production-файл открывается как `<app_data_dir>/kontur.sqlite3`. Для него включены foreign keys, busy timeout 5 секунд, WAL и `synchronous=NORMAL`. Тесты используют только отдельные in-memory базы.
 
-Текущая версия схемы — `8`. Неизменяемые v1–v7 и добавочная v8 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тесты миграций заполненных старых схем проверяют сохранение строк.
+Текущая версия схемы — `9`. Неизменяемые v1–v8 и добавочная v9 встроены через `include_str!`, выполняются последовательно в транзакциях и повторно безопасны. Версия хранится одновременно в `PRAGMA user_version` и журнале `schema_migrations`. База с версией выше поддерживаемой отклоняется ошибкой `conflict`, чтобы старый бинарник не изменял новую схему. Тесты миграций заполненных старых схем проверяют сохранение строк.
 
 Схема содержит таблицы:
 
@@ -58,6 +58,21 @@ Production-файл открывается как `<app_data_dir>/kontur.sqlite3
 - `style_confirmations` (v6);
 - `ai_jobs` (v7);
 - `route_operation_items`, `managed_notes`, `style_profile_sources` и manifests неизменяемого submission snapshot (v8).
+- `workspace_identity` — единственная стабильная identity конкретной workspace-БД (v9); триггеры запрещают менять UUID/kind/created_at и удалять строку.
+
+## Workspace boundary — этап 14A
+
+Учебные данные физически разделены: каждый workspace открывает собственный SQLite-файл. Поэтому subjects, weeks, homework, versions, operations, AI jobs, packages и receipts не требуют ненадёжного фильтра `workspace_id` в каждом запросе и не могут смешаться из-за пропущенного WHERE. Отдельный `workspace-catalog.sqlite3` не содержит учебных данных: только UUID, demo/real, canonical vault, SHA-256 fingerprint, относительный путь БД, дату, active/archived и active workspace id.
+
+Новый real vault получает marker `.kontur-workspace.json` с UUID и случайным nonce; fingerprint вычисляется из versioned marker и не раскрывает путь. Повторное подключение требует совпадения marker, каталога и `workspace_identity` внутри целевой БД. Копия vault с тем же marker не подключается, пока исходный vault лежит на зарегистрированном месте. Marker читается и создаётся с `O_NOFOLLOW`/`O_EXCL`; symlink-marker, symlink-корень vault, vault внутри app data и symlink-каталог баз отклоняются. Путь БД в каталоге принимается только как `kontur.sqlite3` или `workspaces/<uuid>.sqlite3`.
+
+Legacy v8 мигрирует на месте: пустая конфигурация или прежний `demo-workspace` внутри app data становятся demo, любой выбранный пользователем vault — real. Legacy fingerprint вычисляется из canonical path и dev/inode корня (marker в пользовательский vault при upgrade не пишется). Если vault был недоступен при upgrade, он привязывается при первом старте, когда снова доступен.
+
+### Переходы: preview → confirm/cancel
+
+`preview_workspace_transition` (create_real / connect_existing / create_demo / activate) проверяет vault и записывает только строку `workspace_transitions` в каталоге: ни vault, ни базы workspace не изменяются. Preview хранит canonical path, dev/inode и SHA-256 содержимого marker, действует 10 минут и привязан к активному на тот момент пространству. `confirm_workspace_transition` атомарно переводит запись в `applying` (повторное подтверждение — conflict), повторно снимает vault и сравнивает снимок; при любом расхождении — `blocked` без побочных эффектов. Ошибка при создании откатывает только собственные артефакты: marker удаляется лишь если в нём наш UUID/nonce, БД с UUID-именем и каталог demo с UUID удаляются. Запись `applying`, оставшаяся после аварийного закрытия, при старте становится `failed`.
+
+Активная БД выбирается только на старте процесса. После успешного confirm backend сохраняет active id и вызывает `AppHandle::request_restart()`; перезагрузки WebView недостаточно, потому что `AppState` держит открытый handle старой БД. На старте `verify_active_database` сверяет `workspace_identity` с активной записью каталога, а `RootsService::open_vault`/status сверяют fingerprint vault: подменённая папка с тем же путём даёт `unsafe` и блокирует файловые операции. Прямая смена vault активного workspace запрещена (разрешён только повторный выбор того же vault); demo нельзя превратить в real.
 
 Foreign keys задают владение и политику удаления, уникальные ограничения защищают номера недель, одну карточку ДЗ на неделю, номера/метки версий и единственный receipt. Индексы добавлены для основных связей и выборок по статусу. Статусы и этапы ограничены `CHECK`. Постоянно хранятся только относительные пути; `sourcePath` native intake является транзитным значением и не сохраняется как абсолютный пользовательский путь.
 
@@ -227,7 +242,7 @@ Capabilities: `build.rs` → `tauri_build::AppManifest::commands(COMMANDS)` ге
 | `mark_ready_to_submit { operationId, homeworkId, noTeacherComments, expectedRevision }` | `markReadyToSubmit` | переход через state machine |
 | `transition_workflow { operationId, homeworkId, to, reason, expectedRevision }` | `transitionWorkflow` | допустимый переход (кроме «Готово к сдаче» и «Отправлено») |
 
-Capability содержит ровно 78 команд (64 до этапа 9 + 14 этапа 9); тесты сверяют `ipc_commands::COMMANDS` с capability и с `generate_handler!`.
+Capability содержит ровно 81 команд; тесты сверяют `ipc_commands::COMMANDS` с capability и с `generate_handler!`. Production workflow, этап 1, заменяет `create_demo_workspace` командами `get_workspaces`, `preview_workspace_transition`, `confirm_workspace_transition`, `cancel_workspace_transition`.
 
 ### События
 

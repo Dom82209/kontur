@@ -62,6 +62,10 @@ import type {
   SubmissionReceipt,
   SubmissionConfirmation,
   PackageCheckId,
+  WorkspaceActivation,
+  WorkspaceOverview,
+  WorkspaceTransitionPreview,
+  WorkspaceTransitionRequest,
 } from "../types";
 import { BridgeError } from "../types";
 import { toBridgeError } from "./errors";
@@ -238,8 +242,20 @@ export function prepareInboxRoot(): Promise<ManagedRoots> {
   return call("prepare_inbox_root");
 }
 
-export function createDemoWorkspace(): Promise<ManagedRoots> {
-  return call("create_demo_workspace");
+export function getWorkspaces(): Promise<WorkspaceOverview> {
+  return call("get_workspaces");
+}
+
+export function previewWorkspaceTransition(request: WorkspaceTransitionRequest): Promise<WorkspaceTransitionPreview | null> {
+  return call("preview_workspace_transition", { request });
+}
+
+export function confirmWorkspaceTransition(transitionId: string): Promise<WorkspaceActivation> {
+  return call("confirm_workspace_transition", { transitionId });
+}
+
+export function cancelWorkspaceTransition(transitionId: string): Promise<void> {
+  return call("cancel_workspace_transition", { transitionId });
 }
 
 export function exportDiagnosticReport(): Promise<import("../types").DiagnosticExport> {

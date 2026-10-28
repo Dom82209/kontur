@@ -248,3 +248,11 @@ WebView не может попросить backend прочитать произ
 - Undo сначала повторно проверяет SHA-256 и запреты submitted/already-undone, затем переименовывает каждый созданный inode во временное имя. До commit SQLite RAII возвращает исходное имя; после commit удаляется только тот же inode.
 - Файл подтверждения отправки читается только по краткоживущему разрешению native picker; абсолютный source path не сохраняется. В receipt попадает только относительная копия внутри snapshot и её SHA-256.
 - Автотесты создают vault/backup и учебные файлы исключительно внутри `TempDir`.
+
+## Workspace и vault fingerprint (этап 14A)
+
+Vault больше не является изменяемым корнем общей базы. Новый real workspace создаёт отдельную SQLite и малый marker `.kontur-workspace.json`; marker содержит только UUID workspace и случайный nonce, без учебных данных и credentials. SHA-256 fingerprint marker хранится в каталоге и workspace identity. Подключение отклоняется при неизвестном UUID, повреждённом marker, несовпадающем fingerprint или несовпадении identity базы.
+
+Marker создаётся `O_CREAT|O_EXCL|O_NOFOLLOW` и читается `O_NOFOLLOW` с лимитом 4 KiB; symlink-marker, symlink-корень vault, vault внутри каталога данных приложения и symlink-каталог `workspaces` отклоняются. Перед каждым открытием vault `RootsService` сверяет fingerprint: папка, подменённая под тем же путём, блокирует импорт и раскладку. Между preview и confirm перехода сверяются canonical path, dev/inode и SHA-256 marker.
+
+Пути файлов остаются относительными внутри БД конкретного workspace. Нельзя заменить vault настроенного workspace через `choose_managed_root`; пользователь создаёт новое пространство, подключает прежнее или отменяет. Demo хранится под app-data в отдельном каталоге и отдельной БД. Тесты workspace создают и читают только `TempDir`.

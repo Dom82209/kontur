@@ -221,7 +221,66 @@ export interface ManagedRootStatus {
   message: string | null;
 }
 
+export type WorkspaceKind = "demo" | "real";
+export type WorkspaceState = "active" | "archived";
+
+export interface Workspace {
+  id: string;
+  kind: WorkspaceKind;
+  vaultCanonical: string | null;
+  vaultFingerprint: string | null;
+  createdAt: ISODate;
+  state: WorkspaceState;
+}
+
+export interface WorkspaceActivation {
+  workspace: Workspace;
+  /** Всегда true: новая база открывается только после перезапуска приложения. */
+  restartRequired: boolean;
+}
+
+/** Переход между пространствами: preview → confirm/cancel. */
+export type WorkspaceTransitionRequest =
+  | { kind: "create_real" }
+  | { kind: "connect_existing" }
+  | { kind: "create_demo" }
+  | { kind: "activate"; workspaceId: string };
+
+export type WorkspaceTransitionAction = WorkspaceTransitionRequest["kind"];
+export type WorkspaceTransitionState = "previewed" | "applying" | "applied" | "cancelled" | "failed";
+
+export interface WorkspaceTransitionPreview {
+  id: string;
+  action: WorkspaceTransitionAction;
+  currentWorkspace: Workspace | null;
+  targetWorkspace: Workspace | null;
+  targetKind: WorkspaceKind;
+  vaultDisplayPath: string | null;
+  /** Что именно будет создано/изменено после подтверждения. */
+  effects: string[];
+  warnings: string[];
+  expiresAt: ISODate;
+}
+
+export interface WorkspaceTransition {
+  id: string;
+  action: WorkspaceTransitionAction;
+  state: WorkspaceTransitionState;
+  fromWorkspaceId: string | null;
+  targetWorkspaceId: string | null;
+  message: string | null;
+  createdAt: ISODate;
+  finishedAt: ISODate | null;
+}
+
+export interface WorkspaceOverview {
+  active: Workspace | null;
+  workspaces: Workspace[];
+  recentTransitions: WorkspaceTransition[];
+}
+
 export interface ManagedRoots {
+  workspace: Workspace | null;
   vault: ManagedRootStatus;
   inbox: ManagedRootStatus;
   backup: ManagedRootStatus;
@@ -891,8 +950,16 @@ export interface DesktopBridge {
   chooseManagedRoot(kind: SelectableRootKind): Promise<RootSelection>;
   /** Создать «Входящие» внутри хранилища, если папки ещё нет. */
   prepareInboxRoot(): Promise<ManagedRoots>;
-  /** Создаёт изолированное демонстрационное пространство только в каталоге данных приложения. */
-  createDemoWorkspace(): Promise<ManagedRoots>;
+  /** Каталог рабочих пространств: активное, все зарегистрированные и журнал переходов. */
+  getWorkspaces(): Promise<WorkspaceOverview>;
+  /**
+   * Шаг 1 перехода. Для create_real/connect_existing backend показывает системный
+   * диалог выбора папки (null — диалог отменён). Ничего не пишет в vault и базы.
+   */
+  previewWorkspaceTransition(request: WorkspaceTransitionRequest): Promise<WorkspaceTransitionPreview | null>;
+  /** Шаг 2: повторная проверка и применение; затем приложение перезапускается. */
+  confirmWorkspaceTransition(transitionId: string): Promise<WorkspaceActivation>;
+  cancelWorkspaceTransition(transitionId: string): Promise<void>;
   /** Сохраняет обезличенную диагностику без текстов, путей и credentials. */
   exportDiagnosticReport(): Promise<DiagnosticExport>;
   /** Открывает только зарегистрированную managed Markdown-заметку. */

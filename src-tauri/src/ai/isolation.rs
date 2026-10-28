@@ -7,6 +7,10 @@
 //! proved at runtime by the self-test below and automatic execution remains an
 //! optional, versioned capability.
 
+// Сборка и проверки вне macOS (CI/Linux): Seatbelt-ветки отключены cfg, поэтому их
+// импорты и поля не используются. На macOS предупреждения остаются строгими.
+#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+
 use std::{
     ffi::OsString,
     fs,

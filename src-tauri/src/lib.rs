@@ -25,6 +25,7 @@ pub mod submission;
 mod submission_commands;
 pub mod workflow;
 mod workflow_commands;
+pub mod workspace;
 
 use app_state::AppState;
 use db::Database;
@@ -41,13 +42,20 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir)?;
             let home_dir = app.path().home_dir().ok();
 
-            let database = Database::open_file(app_data_dir.join("kontur.sqlite3"))?;
+            let (workspace_catalog, active_database_path) =
+                workspace::WorkspaceCatalog::bootstrap(&app_data_dir, home_dir.as_deref())?;
+            let database = Database::open_file(active_database_path)?;
             database.migrate()?;
+            // Граница workspace: база обязана совпадать с активной записью каталога.
+            workspace_catalog.verify_active_database(&database)?;
             // Этап 9: задания, выполнявшиеся при закрытии, честно завершаются ошибкой.
             database.with_transaction(|transaction| {
                 ai::store::recover_interrupted(transaction).map(|_| ())
             })?;
-            app.manage(AppState::new(app_data_dir, home_dir, database));
+            app.manage(
+                AppState::new(app_data_dir, home_dir, database)
+                    .with_workspace_catalog(workspace_catalog),
+            );
             // Watcher загрузок запускается только если пользователь включил его ранее.
             lms_commands::resume_watcher(app.handle());
             Ok(())
@@ -85,7 +93,10 @@ pub fn run() {
             intake_commands::check_managed_roots,
             intake_commands::choose_managed_root,
             intake_commands::prepare_inbox_root,
-            intake_commands::create_demo_workspace,
+            intake_commands::get_workspaces,
+            intake_commands::preview_workspace_transition,
+            intake_commands::confirm_workspace_transition,
+            intake_commands::cancel_workspace_transition,
             intake_commands::open_obsidian_note,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,

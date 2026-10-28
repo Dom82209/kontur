@@ -11,6 +11,7 @@ use crate::{
     extraction::{ExtractionJobs, ExtractionLimits, OcrEngine, TesseractOcr},
     intake::IntakeGrants,
     lms::{CandidateRegistry, WatcherService},
+    workspace::WorkspaceCatalog,
 };
 
 pub struct AppState {
@@ -27,6 +28,7 @@ pub struct AppState {
     extraction_limits: ExtractionLimits,
     ocr: OnceLock<Option<Arc<dyn OcrEngine>>>,
     providers: Arc<ProviderRuntime>,
+    workspace_catalog: Option<WorkspaceCatalog>,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
         let providers = Arc::new(ProviderRuntime::new(&app_data_dir, home_dir.as_deref()));
         Self {
             providers,
+            workspace_catalog: None,
             app_data_dir,
             home_dir,
             database,
@@ -47,6 +50,17 @@ impl AppState {
             extraction_limits: ExtractionLimits::default(),
             ocr: OnceLock::new(),
         }
+    }
+
+    pub fn with_workspace_catalog(mut self, catalog: WorkspaceCatalog) -> Self {
+        self.workspace_catalog = Some(catalog);
+        self
+    }
+
+    pub fn workspace_catalog(&self) -> Result<&WorkspaceCatalog, AppError> {
+        self.workspace_catalog
+            .as_ref()
+            .ok_or_else(|| BackendError::database("Каталог рабочих пространств недоступен"))
     }
 
     /// Лимиты извлечения (тесты задают меньшие значения до регистрации состояния).

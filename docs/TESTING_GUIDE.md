@@ -2,6 +2,14 @@
 
 Все автоматические файловые сценарии используют `tempfile::TempDir`. Они не должны указывать на домашнюю папку, Desktop, настоящий Obsidian vault или реальные учебные материалы.
 
+## Workspace isolation (этап 14A)
+
+Тесты `workspace::tests` (`src-tauri/src/workspace_tests.rs`) создают только временные vault: два пространства с одинаковыми относительными путями, отдельный demo, submitted receipt, запрет rebind и demo→real, перемещённый vault, копия vault, подменённая папка, повреждённый fingerprint, preview без записи, cancel/повтор/expiry, изменение vault между preview и confirm, rollback marker/БД/demo-каталога, symlink marker/vault/каталога баз, traversal путей БД, append-only каталог, restart и legacy v8 (без vault, с vault, старое демо, vault недоступен при upgrade).
+
+Ручной smoke: «Настройки → Управляемые каталоги → Новое демо» показывает предпросмотр; «Отмена» ничего не меняет; «Подтвердить и перезапустить» перезапускает приложение в новом пространстве. Прямой замены активного vault в UI быть не должно.
+
+На Linux 20 тестов `ai::*` с fake CLI через `sandbox-exec` падают по причине окружения (Seatbelt есть только в macOS); полный `cargo test` обязателен на Mac.
+
 ## Полный набор
 
 ```bash

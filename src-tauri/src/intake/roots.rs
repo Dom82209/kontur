@@ -73,6 +73,7 @@ pub struct RootStatusDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedRootsDto {
+    pub workspace: Option<crate::workspace::WorkspaceDto>,
     pub vault: RootStatusDto,
     pub inbox: RootStatusDto,
     pub backup: RootStatusDto,
@@ -117,6 +118,7 @@ impl<'a> RootsService<'a> {
         let import_ready = vault.state == RootState::Ok
             && matches!(inbox.state, RootState::Ok | RootState::Missing);
         Ok(ManagedRootsDto {
+            workspace: crate::workspace::try_read_identity(self.database)?,
             vault,
             inbox,
             backup,
@@ -147,6 +149,23 @@ impl<'a> RootsService<'a> {
             .to_owned();
 
         let mut config = self.config()?;
+        if kind == RootKind::Vault {
+            if let Some(workspace) = crate::workspace::try_read_identity(self.database)? {
+                if workspace.kind == crate::workspace::WorkspaceKind::Demo {
+                    return Err(BackendError::blocked(
+                        "Демо нельзя превратить в реальное пространство сменой пути. Создайте новое рабочее пространство.",
+                    ));
+                }
+                // Реальное пространство навсегда привязано к своему vault: разрешено только
+                // повторно выбрать тот же vault (например, после переподключения диска).
+                if workspace.vault_canonical.as_deref() != Some(canonical_string.as_str()) {
+                    return Err(BackendError::blocked(
+                        "Vault активного пространства нельзя заменить. Создайте новое пространство, подключите прежний vault или отмените действие.",
+                    ));
+                }
+                crate::workspace::verify_vault_binding(self.database, &canonical)?;
+            }
+        }
         match kind {
             RootKind::Vault => config.vault_path = Some(canonical_string),
             RootKind::Backup => config.backup_path = Some(canonical_string),
@@ -173,7 +192,9 @@ impl<'a> RootsService<'a> {
 
     pub fn open_vault(&self) -> Result<VaultRoot, AppError> {
         let path = self.vault_path()?;
-        VaultRoot::new(&path, self.home.as_deref())
+        let root = VaultRoot::new(&path, self.home.as_deref())?;
+        crate::workspace::verify_vault_binding(self.database, &path)?;
+        Ok(root)
     }
 
     /// Абсолютный путь файла внутри хранилища для действий ОС (Finder/приложение).
@@ -237,7 +258,8 @@ impl<'a> RootsService<'a> {
         }
         let home = self.home.as_deref();
         let opened = match kind {
-            RootKind::Vault => VaultRoot::new(&path_buf, home).map(|_| ()),
+            RootKind::Vault => VaultRoot::new(&path_buf, home)
+                .and_then(|_| crate::workspace::verify_vault_binding(self.database, &path_buf)),
             RootKind::Backup => BackupRoot::new(&path_buf, home).map(|_| ()),
             RootKind::Downloads => DownloadsRoot::new(&path_buf, home).map(|_| ()),
             RootKind::Inbox => Ok(()),

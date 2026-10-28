@@ -29,6 +29,10 @@ use crate::{
         InboxImporter, ManagedRootsDto, RootKind, RootSelectionDto, RootsService,
     },
     repositories::ReadRepository,
+    workspace::{
+        TransitionRequest, WorkspaceActivationDto, WorkspaceOverviewDto,
+        WorkspaceTransitionPreviewDto,
+    },
 };
 
 /// Официальный системный диалог (NSOpenPanel на macOS).
@@ -107,35 +111,74 @@ pub async fn prepare_inbox_root<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn create_demo_workspace<R: Runtime>(
+pub async fn get_workspaces<R: Runtime>(
     app: AppHandle<R>,
-) -> Result<ManagedRootsDto, AppError> {
+) -> Result<WorkspaceOverviewDto, AppError> {
+    blocking(move || app.state::<AppState>().workspace_catalog()?.overview()).await
+}
+
+/// Шаг 1 перехода: только проверка и журнал. Для create/connect открывает
+/// системный диалог выбора папки; отмена диалога возвращает `null`.
+#[tauri::command]
+pub async fn preview_workspace_transition<R: Runtime>(
+    app: AppHandle<R>,
+    request: TransitionRequest,
+) -> Result<Option<WorkspaceTransitionPreviewDto>, AppError> {
     blocking(move || {
+        let vault = match &request {
+            TransitionRequest::CreateReal | TransitionRequest::ConnectExisting => {
+                let title = if request == TransitionRequest::CreateReal {
+                    "Создать рабочее пространство для этого vault"
+                } else {
+                    "Подключить ранее использованный vault"
+                };
+                let picker = DialogPicker { app: app.clone() };
+                let Some(path) = picker.pick_folder(title, None) else {
+                    return Ok(None);
+                };
+                Some(path)
+            }
+            TransitionRequest::CreateDemo | TransitionRequest::Activate { .. } => None,
+        };
         let state = app.state::<AppState>();
-        let base = state.app_data_dir().join("demo-workspace");
-        let vault = base.join("Учебное хранилище");
-        let backup = base.join("Резервные копии");
-        let downloads = base.join("Загрузки");
-        for directory in [&vault, &backup, &downloads] {
-            std::fs::create_dir_all(directory).map_err(|_| {
-                BackendError::io("Не удалось создать безопасное демонстрационное пространство")
-            })?;
-        }
-        let service = roots_service(&state);
-        service.set_root(RootKind::Vault, &vault)?;
-        service.set_root(RootKind::Backup, &backup)?;
-        service.set_root(RootKind::Downloads, &downloads)?;
-        let roots = service.prepare_inbox()?;
-        state.database().with_transaction(|transaction| {
-            transaction.execute(
-                "INSERT INTO subjects(id, name, short_name, folder_path)
-                 VALUES ('demo-course', 'Демо-курс', 'Демо', 'Предметы/Демо-курс')
-                 ON CONFLICT(id) DO NOTHING",
-                [],
-            )?;
-            Ok(())
-        })?;
-        Ok(roots)
+        state
+            .workspace_catalog()?
+            .preview_transition(&request, vault.as_deref())
+            .map(Some)
+    })
+    .await
+}
+
+/// Шаг 2: повторная валидация и применение. После успеха процесс перезапускается,
+/// чтобы ни одна команда не продолжила работу со старой базой.
+#[tauri::command]
+pub async fn confirm_workspace_transition<R: Runtime>(
+    app: AppHandle<R>,
+    transition_id: String,
+) -> Result<WorkspaceActivationDto, AppError> {
+    let handle = app.clone();
+    let activation = blocking(move || {
+        app.state::<AppState>()
+            .workspace_catalog()?
+            .confirm_transition(&transition_id)
+    })
+    .await?;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        handle.request_restart();
+    });
+    Ok(activation)
+}
+
+#[tauri::command]
+pub async fn cancel_workspace_transition<R: Runtime>(
+    app: AppHandle<R>,
+    transition_id: String,
+) -> Result<(), AppError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .workspace_catalog()?
+            .cancel_transition(&transition_id)
     })
     .await
 }
@@ -422,7 +465,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{create_demo_workspace, run_import};
+    use super::run_import;
     use crate::{
         app_state::AppState,
         db::Database,
@@ -569,24 +612,18 @@ mod tests {
     fn demo_workspace_is_created_only_under_temp_app_data() {
         let tmp = TempDir::new().unwrap();
         let data = tmp.path().join("app-data");
-        let database = Database::open_in_memory().unwrap();
-        database.migrate().unwrap();
-        let app = tauri::test::mock_builder()
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        let (catalog, _) = crate::workspace::WorkspaceCatalog::bootstrap(&data, None).unwrap();
+        let preview = catalog
+            .preview_transition(&crate::workspace::TransitionRequest::CreateDemo, None)
             .unwrap();
-        app.manage(AppState::new(data.clone(), None, database));
-
-        let roots =
-            tauri::async_runtime::block_on(create_demo_workspace(app.handle().clone())).unwrap();
-        assert!(roots.import_ready);
-        assert!(data
-            .join("demo-workspace/Учебное хранилище/Предметы/00 Входящие")
-            .is_dir());
-        assert!(data.join("demo-workspace/Резервные копии").is_dir());
-        assert!(data.join("demo-workspace/Загрузки").is_dir());
-        let subject = app
-            .state::<AppState>()
-            .database()
+        let activation = catalog.confirm_transition(&preview.id).unwrap();
+        let base = data.join("demo-workspaces").join(&activation.workspace.id);
+        assert!(base.join("Учебное хранилище").is_dir());
+        assert!(base.join("Резервные копии").is_dir());
+        assert!(base.join("Загрузки").is_dir());
+        let (_, active_path) = crate::workspace::WorkspaceCatalog::bootstrap(&data, None).unwrap();
+        let database = Database::open_file(active_path).unwrap();
+        let subject = database
             .with_connection(|connection| {
                 Ok(connection.query_row(
                     "SELECT name, folder_path FROM subjects WHERE id = 'demo-course'",

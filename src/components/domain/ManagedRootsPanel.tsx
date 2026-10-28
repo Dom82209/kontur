@@ -1,10 +1,11 @@
-import { FolderOpen, FolderPlus, RefreshCw } from "lucide-react";
+import { FolderOpen, FolderPlus, Link, Plus, RefreshCw, Repeat } from "lucide-react";
 import { useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import { bridge, type ManagedRootKind, type ManagedRootState, type ManagedRootStatus, type ManagedRoots, type SelectableRootKind } from "../../lib/bridge";
 import { useBridgeQuery } from "../../lib/hooks/useBridgeQuery";
 import { ErrorState, SkeletonRows } from "../ui/States";
+import { useWorkspaceTransition, workspaceKindLabel, workspaceLabel } from "./WorkspaceTransitionDialog";
 
 const LABEL: Record<ManagedRootKind, { title: string; hint: string }> = {
   vault: { title: "Хранилище Obsidian", hint: "Структура предметов и недель создаётся внутри." },
@@ -67,19 +68,51 @@ export function ManagedRootsPanel() {
     }
   };
 
+  const workspaces = useBridgeQuery(() => bridge.getWorkspaces(), []);
+  const transition = useWorkspaceTransition(() => {
+    void q.reload();
+    void workspaces.reload();
+  });
+  const locked = busy !== null || transition.busy;
+
   if (q.error && !q.data) return <ErrorState message={q.error} onRetry={() => void q.reload()} />;
   if (!q.data) return <SkeletonRows count={4} />;
   const roots = q.data;
 
   return (
     <div className="roots">
+      {transition.dialog}
+      <div className="notice notice--info" data-testid="workspace-current">
+        <strong>Текущее пространство: {workspaceKindLabel(roots.workspace?.kind)}</strong>
+        <div className="field__hint mono">{roots.workspace?.id ?? "идентификатор ещё не создан"}</div>
+        <p className="field__hint">Vault пространства нельзя заменить. Новый vault получает отдельную базу; прежний подключается только после проверки fingerprint. Каждый переход сначала показывает предпросмотр.</p>
+        <div className="button-row">
+          <button className="btn btn--sm" disabled={locked} onClick={() => void transition.start({ kind: "create_real" })}><Plus /> Создать рабочее пространство</button>
+          <button className="btn btn--sm btn--ghost" disabled={locked} onClick={() => void transition.start({ kind: "connect_existing" })}><Link /> Подключить существующее</button>
+          <button className="btn btn--sm btn--ghost" disabled={locked} onClick={() => void transition.start({ kind: "create_demo" })}>Новое демо</button>
+        </div>
+        {(workspaces.data?.workspaces.length ?? 0) > 1 && (
+          <ul className="workspace-list">
+            {workspaces.data!.workspaces
+              .filter((item) => item.id !== roots.workspace?.id)
+              .map((item) => (
+                <li key={item.id}>
+                  <span>{workspaceLabel(item)}</span>
+                  <button className="btn btn--sm btn--ghost" disabled={locked} onClick={() => void transition.start({ kind: "activate", workspaceId: item.id })}>
+                    <Repeat /> Переключиться…
+                  </button>
+                </li>
+              ))}
+          </ul>
+        )}
+      </div>
       {ORDER.map((kind) => (
         <RootRow
           key={kind}
           status={roots[kind]}
           busy={busy === kind}
-          disabled={busy !== null}
-          onChoose={kind === "inbox" ? undefined : () => void choose(kind)}
+          disabled={locked}
+          onChoose={kind === "inbox" || kind === "vault" ? undefined : () => void choose(kind)}
           onPrepare={kind === "inbox" && roots.vault.state === "ok" && roots.inbox.state === "missing" ? () => void prepareInbox() : undefined}
         />
       ))}
@@ -87,7 +120,7 @@ export function ManagedRootsPanel() {
         <span className={roots.importReady ? "faint" : "roots__blocked"}>
           {roots.importReady ? "Импорт во «Входящие» доступен." : "Импорт недоступен, пока не выбрано хранилище."}
         </span>
-        <button className="btn btn--sm btn--ghost" onClick={() => void check()} disabled={busy !== null}>
+        <button className="btn btn--sm btn--ghost" onClick={() => void check()} disabled={locked}>
           <RefreshCw /> Проверить
         </button>
       </div>

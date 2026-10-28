@@ -4,7 +4,9 @@
 
 ## Текущий этап
 
-Этап 13 готовит сборку для пользовательского тестирования. Есть onboarding, demo workspace, диагностика корней, Finder-действия, журнал, подсказки следующего шага и обезличенный diagnostic export. Резервное копирование, восстановление, перенос и SHA-256 описаны в `docs/USER_GUIDE.md`. Schema version остаётся 8.
+Этап 13 готовит сборку для пользовательского тестирования. Есть onboarding, demo workspace, диагностика корней, Finder-действия, журнал, подсказки следующего шага и обезличенный diagnostic export. Резервное копирование, восстановление, перенос и SHA-256 описаны в `docs/USER_GUIDE.md`.
+
+Production workflow, этап 1 (`docs/PRODUCTION_WORKFLOW_PLAN.md`) вводит workspace boundary. Каждый demo/real workspace имеет стабильный UUID, fingerprint vault и отдельную SQLite; глобальный каталог хранит только identity, относительное имя БД, активный выбор и журнал переходов. Любой переход проходит preview → confirm/cancel с повторной проверкой vault и перезапуском процесса. Смена vault существующего workspace запрещена, подключение прежнего выполняется по marker/fingerprint. Legacy schema v8 мигрирует в v9 на месте: пустая конфигурация и прежнее демо — demo, выбранный пользователем vault — real; учебные строки не переносятся между базами. Текущая schema version — 9.
 
 AI использует только account subscription: Codex принимает существующую официальную ChatGPT/Codex CLI-сессию лишь после проверки внутри изоляции; API-key auth не монтируется. Claude остаётся manual-only до доказанной изоляции settings/hooks/MCP. Полей API-ключей нет.
 

@@ -5,12 +5,15 @@ import { BridgeError } from "../types";
 import { __setListenForTests, listenToIntakeEvent } from "./events";
 import {
   __setInvokeForTests,
+  cancelWorkspaceTransition,
   chooseManagedRoot,
-  createDemoWorkspace,
+  confirmWorkspaceTransition,
   exportDiagnosticReport,
+  getWorkspaces,
   importInboxFiles,
   openObsidianNote,
   pickImportFiles,
+  previewWorkspaceTransition,
   revealInFinder,
 } from "./ipc";
 import { __setTauriRuntimeForTests } from "./runtime";
@@ -64,6 +67,7 @@ const report: InboxImportReport = {
 };
 
 const roots: ManagedRoots = {
+  workspace: null,
   vault: { kind: "vault", state: "ok", displayPath: "~/Учёба", message: null },
   inbox: { kind: "inbox", state: "missing", displayPath: "~/Учёба/Предметы/00 Входящие", message: null },
   backup: { kind: "backup", state: "not_configured", displayPath: null, message: "Не выбрана" },
@@ -85,9 +89,12 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     updateAutomationRules: fail("updateAutomationRules"),
     updateClassification: fail("updateClassification"),
     checkManagedRoots: fail("checkManagedRoots"),
+    getWorkspaces: fail("getWorkspaces"),
+    previewWorkspaceTransition: fail("previewWorkspaceTransition"),
+    confirmWorkspaceTransition: fail("confirmWorkspaceTransition"),
+    cancelWorkspaceTransition: fail("cancelWorkspaceTransition"),
     chooseManagedRoot: fail("chooseManagedRoot"),
     prepareInboxRoot: fail("prepareInboxRoot"),
-    createDemoWorkspace: fail("createDemoWorkspace"),
     exportDiagnosticReport: fail("exportDiagnosticReport"),
     openObsidianNote: fail("openObsidianNote"),
     pickImportFiles: fail("pickImportFiles"),
@@ -227,11 +234,36 @@ describe("Tauri native intake", () => {
   });
 
   it("каталоги и Finder делегируются backend-командам", async () => {
+    const activation = {
+      workspace: {
+        id: "workspace-1",
+        kind: "demo" as const,
+        vaultCanonical: "/tmp/demo",
+        vaultFingerprint: "fingerprint",
+        createdAt: "2026-10-27T00:00:00Z",
+        state: "active" as const,
+      },
+      restartRequired: true,
+    };
+    const preview = {
+      id: "transition-1",
+      action: "create_demo" as const,
+      currentWorkspace: null,
+      targetWorkspace: null,
+      targetKind: "demo" as const,
+      vaultDisplayPath: null,
+      effects: ["Создать демо"],
+      warnings: [],
+      expiresAt: "2026-10-27T00:10:00Z",
+    };
     const calls = {
       checkManagedRoots: vi.fn(async () => roots),
       chooseManagedRoot: vi.fn(async () => ({ cancelled: true, roots })),
       prepareInboxRoot: vi.fn(async () => roots),
-      createDemoWorkspace: vi.fn(async () => roots),
+      getWorkspaces: vi.fn(async () => ({ active: activation.workspace, workspaces: [activation.workspace], recentTransitions: [] })),
+      previewWorkspaceTransition: vi.fn(async () => preview),
+      confirmWorkspaceTransition: vi.fn(async () => activation),
+      cancelWorkspaceTransition: vi.fn(async () => undefined),
       exportDiagnosticReport: vi.fn(async () => ({ cancelled: false, fileName: "kontur-diagnostic.json" })),
       openObsidianNote: vi.fn(async () => undefined),
       openInboxFile: vi.fn(async () => undefined),
@@ -242,7 +274,12 @@ describe("Tauri native intake", () => {
     await adapter.getManagedRoots();
     await expect(adapter.chooseManagedRoot("backup")).resolves.toMatchObject({ cancelled: true });
     await adapter.prepareInboxRoot();
-    await adapter.createDemoWorkspace();
+    await adapter.getWorkspaces();
+    await expect(adapter.previewWorkspaceTransition({ kind: "create_demo" })).resolves.toEqual(preview);
+    await adapter.confirmWorkspaceTransition("transition-1");
+    await adapter.cancelWorkspaceTransition("transition-1");
+    expect(calls.previewWorkspaceTransition).toHaveBeenCalledWith({ kind: "create_demo" });
+    expect(calls.confirmWorkspaceTransition).toHaveBeenCalledWith("transition-1");
     await adapter.exportDiagnosticReport();
     await adapter.openObsidianNote("Предметы/ОБА/Неделя 07/03 ДЗ/Карточка ДЗ.md");
     await adapter.openInboxFile("inbox-1");
@@ -323,7 +360,10 @@ describe("IPC команды этапа 5", () => {
     await pickImportFiles();
     await importInboxFiles(operation.id, [{ sourcePath: "/x/a.pdf", origin: "drop" }]);
     await chooseManagedRoot("vault");
-    await createDemoWorkspace();
+    await getWorkspaces();
+    await previewWorkspaceTransition({ kind: "activate", workspaceId: "w-1" });
+    await confirmWorkspaceTransition("t-1");
+    await cancelWorkspaceTransition("t-1");
     await exportDiagnosticReport();
     await openObsidianNote("Предметы/ОБА/Заметка.md");
     await revealInFinder("Предметы/00 Входящие/a.pdf");
@@ -331,7 +371,10 @@ describe("IPC команды этапа 5", () => {
       ["pick_import_files", undefined],
       ["import_inbox_files", { operationId: operation.id, items: [{ sourcePath: "/x/a.pdf", origin: "drop" }] }],
       ["choose_managed_root", { kind: "vault" }],
-      ["create_demo_workspace", undefined],
+      ["get_workspaces", undefined],
+      ["preview_workspace_transition", { request: { kind: "activate", workspaceId: "w-1" } }],
+      ["confirm_workspace_transition", { transitionId: "t-1" }],
+      ["cancel_workspace_transition", { transitionId: "t-1" }],
       ["export_diagnostic_report", undefined],
       ["open_obsidian_note", { relativePath: "Предметы/ОБА/Заметка.md" }],
       ["reveal_in_finder", { relativePath: "Предметы/00 Входящие/a.pdf" }],

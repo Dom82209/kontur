@@ -8,7 +8,9 @@
 
 ## Этап 11 — runtime и первый запуск
 
-Все методы, вызываемые UI, имеют обязательный IPC-клиент; временные stage-10 fallback удалены. Первый запуск показывает native-мастер: выбор единого учебного корня/Obsidian vault, папки загрузок и backup, read-only preview создаваемой структуры и отдельное подтверждение. Demo workspace создаётся только в app-data и проверяется TempDir-тестом.
+Все методы, вызываемые UI, имеют обязательный IPC-клиент; временные stage-10 fallback удалены. Первый запуск предлагает создать новый real workspace, повторно подключить известный vault или создать demo. Preview структуры остаётся локальным состоянием UI, а запись начинается только через `prepareInboxRoot`. Demo workspace создаётся только в app-data и проверяется TempDir-тестом.
+
+Production workflow, этап 1: `ManagedRoots.workspace` показывает активный workspace (`id`, `kind`, fingerprint, created/state). `getWorkspaces()` возвращает активное, все зарегистрированные пространства и журнал переходов. Любой переход — `previewWorkspaceTransition(request)` → `confirmWorkspaceTransition(id)` или `cancelWorkspaceTransition(id)`; `useWorkspaceTransition` показывает эффекты/предупреждения и не позволяет применить без подтверждения. После confirm backend перезапускает приложение (`restartRequired`), поэтому UI не делает `location.reload()`. Кнопки смены vault у активного workspace нет; backup/downloads остаются обычными управляемыми корнями.
 
 AI UI показывает один из режимов: «подписка аккаунта», «ручная передача», «не авторизован». API-key auth не поддерживается: в изоляцию Codex монтируется только официальный `auth.json` с `auth_mode=chatgpt`, без `OPENAI_API_KEY`; Claude production остаётся manual-only до доказанной изоляции settings/hooks/MCP.
 

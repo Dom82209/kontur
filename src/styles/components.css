@@ -797,3 +797,36 @@ button.row:focus-visible {
 .onboarding-steps p {
   margin: 3px 0 0;
 }
+
+/* Рабочие пространства: предпросмотр перехода и список */
+.workspace-preview {
+  display: grid;
+  gap: 8px;
+}
+.workspace-preview ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.workspace-preview__route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workspace-preview__route svg {
+  width: 16px;
+  height: 16px;
+}
+.workspace-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.workspace-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
