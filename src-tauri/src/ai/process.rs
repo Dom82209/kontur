@@ -392,7 +392,13 @@ mod tests {
     #[test]
     fn cancel_stops_the_process_and_ticks_report_progress() {
         let tmp = TempDir::new().unwrap();
-        let program = script(tmp.path(), "echo started; sleep 30");
+        let ready = tmp.path().join("ready");
+        // Отмена только после того, как скрипт сам сообщил о старте: под нагрузкой
+        // фиксированные 600 мс не гарантируют, что `echo` успел выполниться.
+        let program = script(
+            tmp.path(),
+            &format!("echo started; touch '{}'; sleep 30", ready.display()),
+        );
         let cancel = AtomicBool::new(false);
         let mut ticks = 0;
         let outcome = run_process(
@@ -400,7 +406,7 @@ mod tests {
             &cancel,
             &mut |tick| {
                 ticks += 1;
-                if tick.elapsed >= Duration::from_millis(600) {
+                if ready.exists() || tick.elapsed >= Duration::from_secs(20) {
                     cancel.store(true, Ordering::SeqCst);
                 }
             },
