@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn schema_version_includes_file_workflow_tables() {
         let database = database();
-        assert_eq!(CURRENT_SCHEMA_VERSION, 9);
+        const { assert!(CURRENT_SCHEMA_VERSION >= 10) };
         assert_eq!(database.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
     }
 

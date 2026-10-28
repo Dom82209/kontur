@@ -774,7 +774,10 @@ fn schema_v8_without_vault_is_preserved_as_legacy_demo_workspace() {
     let temp = TempDir::new().unwrap();
     legacy_v8(&app(&temp), None);
     let (_, database) = restart(&temp);
-    assert_eq!(database.schema_version().unwrap(), 9);
+    assert_eq!(
+        database.schema_version().unwrap(),
+        crate::db::migrations::CURRENT_SCHEMA_VERSION
+    );
     assert_eq!(read_identity(&database).unwrap().kind, WorkspaceKind::Demo);
     assert_eq!(count(&database, "subjects"), 1);
 }
@@ -846,4 +849,96 @@ fn all_workspace_files_stay_inside_tempdir() {
             assert!(Path::new(&path).starts_with(&canonical_temp));
         }
     }
+}
+
+// ----- review fixes: overlap, demo symlink, fingerprint immutability ---------------------------
+
+#[test]
+fn nested_real_vaults_are_rejected_in_both_directions() {
+    let (temp, catalog) = setup();
+    let outer = vault(&temp, "outer");
+    create_real(&catalog, &outer);
+    let inner = outer.join("Предметы");
+    fs::create_dir_all(&inner).unwrap();
+    let error = catalog
+        .preview_transition(&TransitionRequest::CreateReal, Some(&inner))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Blocked);
+
+    let (temp, catalog) = setup();
+    let inner = vault(&temp, "parent/child");
+    create_real(&catalog, &inner);
+    let parent = fs::canonicalize(temp.path().join("vaults").join("parent")).unwrap();
+    let error = catalog
+        .preview_transition(&TransitionRequest::CreateReal, Some(&parent))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Blocked);
+    assert!(!parent.join(MARKER_FILE).exists());
+}
+
+#[test]
+fn symlinked_demo_directory_cannot_place_demo_outside_app_data() {
+    let (temp, catalog) = setup();
+    let outside = vault(&temp, "real-looking");
+    let demo_root = app(&temp).join("demo-workspaces");
+    let _ = fs::remove_dir_all(&demo_root);
+    symlink(&outside, &demo_root).unwrap();
+    let preview = catalog
+        .preview_transition(&TransitionRequest::CreateDemo, None)
+        .unwrap();
+    assert_eq!(
+        catalog.confirm_transition(&preview.id).unwrap_err().code,
+        ErrorCode::Blocked
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(catalog.list().unwrap().len(), 1);
+}
+
+#[test]
+fn bound_vault_fingerprint_cannot_be_rewritten() {
+    let (temp, catalog) = setup();
+    create_real(&catalog, &vault(&temp, "a"));
+    let connection = catalog.lock().unwrap();
+    assert!(connection
+        .execute("UPDATE workspaces SET vault_fingerprint='forged'", [])
+        .is_err());
+    drop(connection);
+    drop(catalog);
+    let (_, database) = restart(&temp);
+    let error = database
+        .with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE workspace_identity SET vault_fingerprint='forged'",
+                    [],
+                )
+                .map_err(Into::into)
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Database);
+}
+
+#[test]
+fn catalog_fingerprint_mismatch_stops_startup() {
+    let (temp, catalog) = setup();
+    let id = create_real(&catalog, &vault(&temp, "a")).workspace.id;
+    let record = catalog.require_record(&id).unwrap();
+    let path = catalog.database_path(&record.database_relpath).unwrap();
+    drop(catalog);
+    // Подмена identity в обход приложения (триггер снимается вместе с проверкой).
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "DROP TRIGGER workspace_identity_fingerprint_bound_once;
+             UPDATE workspace_identity SET vault_fingerprint='forged';",
+        )
+        .unwrap();
+    drop(connection);
+    let (catalog, active) = WorkspaceCatalog::bootstrap(&app(&temp), None).unwrap();
+    let database = Database::open_file(active).unwrap();
+    database.migrate().unwrap();
+    assert_eq!(
+        catalog.verify_active_database(&database).unwrap_err().code,
+        ErrorCode::Blocked
+    );
 }

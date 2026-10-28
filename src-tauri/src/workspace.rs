@@ -272,10 +272,31 @@ impl WorkspaceCatalog {
                 "База рабочего пространства не совпадает с каталогом. Работа остановлена, чтобы не смешать данные.",
             ));
         }
-        if identity.vault_fingerprint.is_none() {
-            // Legacy-пространство, vault которого был недоступен при импорте:
-            // привязываем его при первом успешном доступе к прежнему пути.
-            self.bind_legacy_vault(database, &record)?;
+        match (&identity.vault_fingerprint, &record.vault_fingerprint) {
+            (None, None) => {
+                // Legacy-пространство, vault которого был недоступен при импорте:
+                // привязываем его при первом успешном доступе к прежнему пути.
+                self.bind_legacy_vault(database, &record)?;
+            }
+            (Some(_), None) => {
+                // База уже привязана, а запись каталога — нет (прерванная привязка):
+                // каталог восстанавливается из неизменяемой identity базы.
+                self.lock()?.execute(
+                    "UPDATE workspaces SET vault_canonical=?2, vault_fingerprint=?3
+                     WHERE id=?1 AND vault_fingerprint IS NULL",
+                    params![
+                        record.id,
+                        identity.vault_canonical,
+                        identity.vault_fingerprint
+                    ],
+                )?;
+            }
+            (identity_fp, record_fp) if identity_fp != record_fp => {
+                return Err(BackendError::blocked(
+                    "Fingerprint vault в базе не совпадает с каталогом. Работа остановлена, чтобы не смешать данные.",
+                ));
+            }
+            _ => {}
         }
         read_identity(database)
     }
@@ -453,14 +474,10 @@ impl WorkspaceCatalog {
             ));
         }
         self.ensure_not_inside_app_data(&snapshot.canonical)?;
-        let mut warnings = vec![
+        self.ensure_not_nested_in_registered_vault(&snapshot.canonical)?;
+        let warnings = vec![
             "Данные текущего пространства не переносятся: новое пространство начинается с пустой базы.".to_owned(),
         ];
-        if self.is_nested_in_registered_vault(&snapshot.canonical)? {
-            warnings.push(
-                "Выбранная папка находится внутри или содержит уже зарегистрированный vault. Проверьте, что это действительно отдельное хранилище.".to_owned(),
-            );
-        }
         Ok(TransitionPlan {
             target: None,
             target_kind: WorkspaceKind::Real,
@@ -542,6 +559,8 @@ impl WorkspaceCatalog {
         if self.record_by_canonical(&snapshot.canonical)?.is_some() {
             return Err(BackendError::conflict("Этот vault уже зарегистрирован"));
         }
+        self.ensure_not_inside_app_data(&snapshot.canonical)?;
+        self.ensure_not_nested_in_registered_vault(&snapshot.canonical)?;
         let id = Uuid::new_v4().to_string();
         let marker = VaultMarker {
             workspace_id: id.clone(),
@@ -568,7 +587,14 @@ impl WorkspaceCatalog {
 
     fn create_demo(&self) -> Result<WorkspaceActivationDto, AppError> {
         let id = Uuid::new_v4().to_string();
-        let base = self.app_data_dir.join(DEMO_DIR).join(&id);
+        let demo_root = self.app_data_dir.join(DEMO_DIR);
+        if fs::symlink_metadata(&demo_root).is_ok_and(|metadata| !metadata.file_type().is_dir()) {
+            // Symlink или файл на месте каталога демо: ничего не создаём и не удаляем.
+            return Err(BackendError::blocked(
+                "Каталог демо-пространств не может быть символической ссылкой",
+            ));
+        }
+        let base = demo_root.join(&id);
         let relative = format!("workspaces/{id}.sqlite3");
         let database_path = self.database_path(&relative)?;
         let result = (|| {
@@ -581,6 +607,7 @@ impl WorkspaceCatalog {
                 })?;
             }
             let canonical = fs::canonicalize(&vault)?;
+            self.ensure_inside_app_data(&canonical)?;
             let marker = VaultMarker {
                 workspace_id: id.clone(),
                 nonce: Uuid::new_v4().to_string(),
@@ -915,13 +942,37 @@ impl WorkspaceCatalog {
         Ok(())
     }
 
-    fn is_nested_in_registered_vault(&self, canonical: &Path) -> Result<bool, AppError> {
-        Ok(self.list()?.iter().any(|workspace| {
+    /// Вложенные друг в друга vault разных пространств делят файлы: сканер одного
+    /// пространства увидел бы материалы другого. Такое пересечение запрещено.
+    fn ensure_not_nested_in_registered_vault(&self, canonical: &Path) -> Result<(), AppError> {
+        let overlaps = self.list()?.iter().any(|workspace| {
             workspace.vault_canonical.as_deref().is_some_and(|other| {
                 let other = Path::new(other);
                 canonical.starts_with(other) || other.starts_with(canonical)
             })
-        }))
+        });
+        if overlaps {
+            return Err(BackendError::blocked(
+                "Выбранная папка находится внутри уже зарегистрированного vault или содержит его. Выберите отдельное хранилище.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Демо-хранилище обязано физически находиться внутри каталога данных приложения:
+    /// symlink `demo-workspaces` наружу (например, в реальный vault) запрещён.
+    fn ensure_inside_app_data(&self, canonical: &Path) -> Result<(), AppError> {
+        let app_data = fs::canonicalize(&self.app_data_dir)?;
+        let demo_root = self.app_data_dir.join(DEMO_DIR);
+        let demo_root_is_symlink = fs::symlink_metadata(&demo_root)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if demo_root_is_symlink || !canonical.starts_with(app_data.join(DEMO_DIR)) {
+            return Err(BackendError::blocked(
+                "Демо-пространство должно находиться внутри каталога данных приложения",
+            ));
+        }
+        Ok(())
     }
 
     // ----- журнал переходов ------------------------------------------------------------
@@ -1306,6 +1357,11 @@ fn migrate_catalog(connection: &Connection) -> Result<(), AppError> {
          CREATE TRIGGER IF NOT EXISTS workspaces_identity_stable
          BEFORE UPDATE OF id, kind, database_relpath, created_at ON workspaces
          BEGIN SELECT RAISE(ABORT, 'workspace identity is immutable'); END;
+         CREATE TRIGGER IF NOT EXISTS workspaces_fingerprint_bound_once
+         BEFORE UPDATE OF vault_fingerprint ON workspaces
+         WHEN OLD.vault_fingerprint IS NOT NULL
+           AND NEW.vault_fingerprint IS NOT OLD.vault_fingerprint
+         BEGIN SELECT RAISE(ABORT, 'workspace vault fingerprint is immutable'); END;
          CREATE TRIGGER IF NOT EXISTS workspaces_no_delete
          BEFORE DELETE ON workspaces
          BEGIN SELECT RAISE(ABORT, 'workspace records are append-only'); END;
