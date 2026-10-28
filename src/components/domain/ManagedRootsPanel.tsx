@@ -1,10 +1,11 @@
-import { FolderOpen, FolderPlus, Link, Plus, RefreshCw, Repeat } from "lucide-react";
+import { FolderInput, FolderOpen, FolderPlus, Link, Plus, RefreshCw, Repeat } from "lucide-react";
 import { useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import { bridge, type ManagedRootKind, type ManagedRootState, type ManagedRootStatus, type ManagedRoots, type SelectableRootKind } from "../../lib/bridge";
 import { useBridgeQuery } from "../../lib/hooks/useBridgeQuery";
 import { ErrorState, SkeletonRows } from "../ui/States";
+import { useVaultAdoption } from "./VaultAdoptionDialog";
 import { useWorkspaceTransition, workspaceKindLabel, workspaceLabel } from "./WorkspaceTransitionDialog";
 
 const LABEL: Record<ManagedRootKind, { title: string; hint: string }> = {
@@ -73,7 +74,8 @@ export function ManagedRootsPanel() {
     void q.reload();
     void workspaces.reload();
   });
-  const locked = busy !== null || transition.busy;
+  const adoption = useVaultAdoption(() => void q.reload());
+  const locked = busy !== null || transition.busy || adoption.busy;
 
   if (q.error && !q.data) return <ErrorState message={q.error} onRetry={() => void q.reload()} />;
   if (!q.data) return <SkeletonRows count={4} />;
@@ -82,6 +84,7 @@ export function ManagedRootsPanel() {
   return (
     <div className="roots">
       {transition.dialog}
+      {adoption.dialog}
       <div className="notice notice--info" data-testid="workspace-current">
         <strong>Текущее пространство: {workspaceKindLabel(roots.workspace?.kind)}</strong>
         <div className="field__hint mono">{roots.workspace?.id ?? "идентификатор ещё не создан"}</div>
@@ -116,6 +119,19 @@ export function ManagedRootsPanel() {
           onPrepare={kind === "inbox" && roots.vault.state === "ok" && roots.inbox.state === "missing" ? () => void prepareInbox() : undefined}
         />
       ))}
+      {roots.workspace?.vaultFingerprint && roots.vault.state === "ok" && (
+        <div className="roots__row" data-testid="vault-adoption">
+          <div className="roots__main">
+            <div className="roots__title">Материалы, уже лежащие в vault</div>
+            <div className="field__hint">
+              Предпросмотр только читает vault: предметы, недели, ДЗ и файлы сопоставляются по путям и SHA-256. Перед подключением можно проверить план без записи.
+            </div>
+          </div>
+          <button className="btn btn--sm" disabled={locked} aria-busy={adoption.busy} onClick={() => void adoption.start()}>
+            <FolderInput /> Подключить материалы…
+          </button>
+        </div>
+      )}
       <div className="roots__foot">
         <span className={roots.importReady ? "faint" : "roots__blocked"}>
           {roots.importReady ? "Импорт во «Входящие» доступен." : "Импорт недоступен, пока не выбрано хранилище."}

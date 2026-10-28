@@ -830,3 +830,50 @@ button.row:focus-visible {
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Этап 2: подключение материалов существующего vault */
+.adoption {
+  display: grid;
+  gap: 12px;
+}
+.adoption__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.adoption__stat {
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.adoption__stat dt {
+  font-size: var(--t-sm);
+  color: var(--text-2);
+}
+.adoption__stat dd {
+  margin: 2px 0 0;
+}
+.adoption__h {
+  font-size: var(--t-base);
+  margin: 0 0 4px;
+}
+.adoption__files,
+.adoption__list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.adoption__file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.adoption__skip {
+  margin-top: 8px;
+}
