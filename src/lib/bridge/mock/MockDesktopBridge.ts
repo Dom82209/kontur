@@ -1,4 +1,5 @@
 import { TypedEmitter } from "../emitter";
+import { MockAdoption } from "./adoption";
 import {
   BridgeError,
   type AutomationRules,
@@ -137,6 +138,7 @@ export class MockDesktopBridge implements DesktopBridge {
   private readonly workflow: MockWorkflow;
   private readonly lms: MockLms;
   private readonly extraction: MockExtraction;
+  private readonly adoption = new MockAdoption((ms) => this.wait(ms));
 
   constructor(options: MockOptions = {}) {
     this.latency = options.latency ?? 1;
@@ -487,6 +489,10 @@ export class MockDesktopBridge implements DesktopBridge {
     this.pendingTransitions.delete(transitionId);
     Object.assign(entry, { state: "cancelled", finishedAt: new Date().toISOString() });
   }
+
+  previewVaultAdoption: DesktopBridge["previewVaultAdoption"] = () => this.adoption.preview();
+  applyVaultAdoption: DesktopBridge["applyVaultAdoption"] = (planId, overrides, dryRun) => this.adoption.apply(planId, overrides, dryRun);
+  cancelVaultAdoption: DesktopBridge["cancelVaultAdoption"] = (planId) => this.adoption.cancel(planId);
 
   async exportDiagnosticReport(): Promise<{ cancelled: boolean; fileName: string | null }> {
     await this.wait(80);

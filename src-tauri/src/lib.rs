@@ -1,4 +1,5 @@
 pub mod adoption;
+mod adoption_commands;
 pub mod ai;
 mod ai_commands;
 mod app_state;
@@ -98,6 +99,9 @@ pub fn run() {
             intake_commands::preview_workspace_transition,
             intake_commands::confirm_workspace_transition,
             intake_commands::cancel_workspace_transition,
+            adoption_commands::preview_vault_adoption,
+            adoption_commands::apply_vault_adoption,
+            adoption_commands::cancel_vault_adoption,
             intake_commands::open_obsidian_note,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,

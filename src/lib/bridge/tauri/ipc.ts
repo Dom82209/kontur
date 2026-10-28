@@ -258,6 +258,22 @@ export function cancelWorkspaceTransition(transitionId: string): Promise<void> {
   return call("cancel_workspace_transition", { transitionId });
 }
 
+export function previewVaultAdoption(): Promise<import("../types").VaultAdoptionPreview> {
+  return call("preview_vault_adoption");
+}
+
+export function applyVaultAdoption(
+  planId: string,
+  overrides: import("../types").AdoptionCategoryOverride[],
+  dryRun: boolean,
+): Promise<import("../types").VaultAdoptionReport> {
+  return call("apply_vault_adoption", { planId, overrides, dryRun });
+}
+
+export function cancelVaultAdoption(planId: string): Promise<void> {
+  return call("cancel_vault_adoption", { planId });
+}
+
 export function exportDiagnosticReport(): Promise<import("../types").DiagnosticExport> {
   return call("export_diagnostic_report");
 }

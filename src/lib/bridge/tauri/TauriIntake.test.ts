@@ -6,6 +6,9 @@ import { __setListenForTests, listenToIntakeEvent } from "./events";
 import {
   __setInvokeForTests,
   cancelWorkspaceTransition,
+  applyVaultAdoption,
+  cancelVaultAdoption,
+  previewVaultAdoption,
   chooseManagedRoot,
   confirmWorkspaceTransition,
   exportDiagnosticReport,
@@ -93,6 +96,9 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     previewWorkspaceTransition: fail("previewWorkspaceTransition"),
     confirmWorkspaceTransition: fail("confirmWorkspaceTransition"),
     cancelWorkspaceTransition: fail("cancelWorkspaceTransition"),
+    previewVaultAdoption: fail("previewVaultAdoption"),
+    applyVaultAdoption: fail("applyVaultAdoption"),
+    cancelVaultAdoption: fail("cancelVaultAdoption"),
     chooseManagedRoot: fail("chooseManagedRoot"),
     prepareInboxRoot: fail("prepareInboxRoot"),
     exportDiagnosticReport: fail("exportDiagnosticReport"),
@@ -364,6 +370,9 @@ describe("IPC команды этапа 5", () => {
     await previewWorkspaceTransition({ kind: "activate", workspaceId: "w-1" });
     await confirmWorkspaceTransition("t-1");
     await cancelWorkspaceTransition("t-1");
+    await previewVaultAdoption();
+    await applyVaultAdoption("plan-1", [{ relativePath: "Предметы/ОБА/Неделя 05/03 ДЗ/week5.xlsx", category: "homework_data" }], true);
+    await cancelVaultAdoption("plan-1");
     await exportDiagnosticReport();
     await openObsidianNote("Предметы/ОБА/Заметка.md");
     await revealInFinder("Предметы/00 Входящие/a.pdf");
@@ -375,6 +384,12 @@ describe("IPC команды этапа 5", () => {
       ["preview_workspace_transition", { request: { kind: "activate", workspaceId: "w-1" } }],
       ["confirm_workspace_transition", { transitionId: "t-1" }],
       ["cancel_workspace_transition", { transitionId: "t-1" }],
+      ["preview_vault_adoption", undefined],
+      [
+        "apply_vault_adoption",
+        { planId: "plan-1", overrides: [{ relativePath: "Предметы/ОБА/Неделя 05/03 ДЗ/week5.xlsx", category: "homework_data" }], dryRun: true },
+      ],
+      ["cancel_vault_adoption", { planId: "plan-1" }],
       ["export_diagnostic_report", undefined],
       ["open_obsidian_note", { relativePath: "Предметы/ОБА/Заметка.md" }],
       ["reveal_in_finder", { relativePath: "Предметы/00 Входящие/a.pdf" }],

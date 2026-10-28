@@ -274,6 +274,136 @@ export interface WorkspaceTransition {
   finishedAt: ISODate | null;
 }
 
+// ───────────── Этап 2: подключение существующего vault ─────────────
+
+export type AdoptionStatus = "new" | "existing" | "changed" | "conflict";
+export type AdoptionFileCategory =
+  | "lecture"
+  | "seminar"
+  | "material"
+  | "homework_task"
+  | "homework_data"
+  | "homework_draft"
+  | "homework_final";
+export type AdoptionSkipReason =
+  | "obsidian_note"
+  | "service_folder"
+  | "subject_level"
+  | "week_zero"
+  | "outside_structure"
+  | "symlink"
+  | "special_file"
+  | "invalid_name"
+  | "unreadable"
+  | "parent_conflict";
+
+export interface PlannedSubject {
+  id: string;
+  name: string;
+  shortName: string;
+  folderPath: string;
+  status: AdoptionStatus;
+  reason: string | null;
+}
+
+export interface PlannedWeek {
+  id: string;
+  subjectId: string;
+  number: number;
+  folderPath: string;
+  status: AdoptionStatus;
+  reason: string | null;
+}
+
+export interface PlannedHomework {
+  id: string;
+  weekId: string;
+  title: string;
+  folderPath: string;
+  status: AdoptionStatus;
+  reason: string | null;
+}
+
+export interface PlannedFile {
+  id: string;
+  relativePath: string;
+  name: string;
+  kind: string;
+  sizeBytes: number;
+  modifiedNs: number;
+  sha256: string;
+  weekId: string;
+  /** ДЗ папки «03 ДЗ»; null — файл недели (лекция, семинар, материал). */
+  homeworkId: string | null;
+  category: AdoptionFileCategory;
+  confidence: number;
+  reasons: string[];
+  /** Категория определена неуверенно: стоит проверить вручную. */
+  needsReview: boolean;
+  status: AdoptionStatus;
+  existingSha256: string | null;
+}
+
+export interface SkippedEntry {
+  relativePath: string;
+  reason: AdoptionSkipReason;
+  detail: string;
+}
+
+export interface AdoptionPlan {
+  subjects: PlannedSubject[];
+  weeks: PlannedWeek[];
+  homeworks: PlannedHomework[];
+  files: PlannedFile[];
+  skipped: SkippedEntry[];
+  truncated: boolean;
+}
+
+export interface AdoptionSummary {
+  subjectsNew: number;
+  subjectsExisting: number;
+  weeksNew: number;
+  weeksExisting: number;
+  homeworksNew: number;
+  homeworksExisting: number;
+  filesNew: number;
+  filesExisting: number;
+  filesChanged: number;
+  conflicts: number;
+  skipped: number;
+  needsReview: number;
+  truncated: boolean;
+}
+
+/** Неизменяемый план, построенный только чтением vault. */
+export interface VaultAdoptionPreview {
+  id: string;
+  workspaceId: string;
+  createdAt: ISODate;
+  expiresAt: ISODate;
+  summary: AdoptionSummary;
+  plan: AdoptionPlan;
+}
+
+export interface AdoptionCategoryOverride {
+  relativePath: string;
+  category: AdoptionFileCategory;
+}
+
+export type AdoptionPlanStatus = "previewed" | "applied" | "cancelled" | "failed";
+
+export interface VaultAdoptionReport {
+  planId: string;
+  dryRun: boolean;
+  status: AdoptionPlanStatus;
+  created: { subjects: number; weeks: number; homeworks: number; files: number };
+  alreadyPresent: number;
+  changedNotApplied: number;
+  conflictsNotApplied: number;
+  skipped: number;
+  overridesApplied: number;
+}
+
 export interface WorkspaceOverview {
   active: Workspace | null;
   workspaces: Workspace[];
@@ -962,6 +1092,14 @@ export interface DesktopBridge {
   /** Шаг 2: повторная проверка и применение; затем приложение перезапускается. */
   confirmWorkspaceTransition(transitionId: string): Promise<WorkspaceActivation>;
   cancelWorkspaceTransition(transitionId: string): Promise<void>;
+  /** Этап 2: план подключения материалов vault. Только чтение vault; в базу пишется лишь план. */
+  previewVaultAdoption(): Promise<VaultAdoptionPreview>;
+  /**
+   * Повторно хэширует каждый новый файл и применяет план одной транзакцией.
+   * `dryRun` выполняет все проверки и откатывает транзакцию.
+   */
+  applyVaultAdoption(planId: string, overrides: AdoptionCategoryOverride[], dryRun: boolean): Promise<VaultAdoptionReport>;
+  cancelVaultAdoption(planId: string): Promise<void>;
   /** Сохраняет обезличенную диагностику без текстов, путей и credentials. */
   exportDiagnosticReport(): Promise<DiagnosticExport>;
   /** Открывает только зарегистрированную managed Markdown-заметку. */

@@ -45,6 +45,9 @@ export interface TauriIpcClient {
   previewWorkspaceTransition: typeof ipc.previewWorkspaceTransition;
   confirmWorkspaceTransition: typeof ipc.confirmWorkspaceTransition;
   cancelWorkspaceTransition: typeof ipc.cancelWorkspaceTransition;
+  previewVaultAdoption: typeof ipc.previewVaultAdoption;
+  applyVaultAdoption: typeof ipc.applyVaultAdoption;
+  cancelVaultAdoption: typeof ipc.cancelVaultAdoption;
   exportDiagnosticReport: typeof ipc.exportDiagnosticReport;
   openObsidianNote: typeof ipc.openObsidianNote;
   pickImportFiles: typeof ipc.pickImportFiles;
@@ -197,6 +200,9 @@ export class TauriDesktopBridge implements DesktopBridge {
   previewWorkspaceTransition: DesktopBridge["previewWorkspaceTransition"] = (request) => this.ipcClient.previewWorkspaceTransition(request);
   confirmWorkspaceTransition: DesktopBridge["confirmWorkspaceTransition"] = (id) => this.ipcClient.confirmWorkspaceTransition(id);
   cancelWorkspaceTransition: DesktopBridge["cancelWorkspaceTransition"] = (id) => this.ipcClient.cancelWorkspaceTransition(id);
+  previewVaultAdoption: DesktopBridge["previewVaultAdoption"] = () => this.ipcClient.previewVaultAdoption();
+  applyVaultAdoption: DesktopBridge["applyVaultAdoption"] = (planId, overrides, dryRun) => this.ipcClient.applyVaultAdoption(planId, overrides, dryRun);
+  cancelVaultAdoption: DesktopBridge["cancelVaultAdoption"] = (planId) => this.ipcClient.cancelVaultAdoption(planId);
   exportDiagnosticReport: DesktopBridge["exportDiagnosticReport"] = () => this.ipcClient.exportDiagnosticReport();
   openObsidianNote: DesktopBridge["openObsidianNote"] = (relativePath) => this.ipcClient.openObsidianNote(relativePath);
 
