@@ -289,7 +289,7 @@ export function HomeworkDetailPage() {
           </span>
           <h1 className="pagehead__title">{h.title}</h1>
           <p className="deadline-inline" data-tone={locked ? "past" : deadline.tone}>
-            Дедлайн {formatDateTime(h.deadline)} · {deadline.text}
+            {h.deadline ? `Дедлайн ${formatDateTime(h.deadline)} · ${deadline.text}` : `Дедлайн: ${deadline.text}`}
           </p>
         </div>
         <div className="pagehead__actions">

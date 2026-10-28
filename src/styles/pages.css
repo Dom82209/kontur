@@ -155,6 +155,11 @@
 .deadline-inline[data-tone="past"] {
   color: var(--text-3);
 }
+.deadline-inline[data-tone="unknown"],
+.hwcard__deadline[data-tone="unknown"] {
+  color: var(--text-3);
+  font-style: italic;
+}
 
 .checklist {
   display: grid;

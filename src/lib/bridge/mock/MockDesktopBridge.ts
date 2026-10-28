@@ -203,9 +203,10 @@ export class MockDesktopBridge implements DesktopBridge {
   async getDashboard(): Promise<Dashboard> {
     await this.wait((260));
     const active = this.homework.filter((h) => h.stage !== "submitted");
-    const deadlines = [...active]
-      .sort((a, b) => a.deadline.localeCompare(b.deadline))
-      .map((h) => ({ homeworkId: h.id, subjectId: h.subjectId, title: h.title, deadline: h.deadline, stage: h.stage }));
+    // Как и backend: ДЗ без известного срока в ленту сроков не попадают.
+    const deadlines = active
+      .flatMap((h) => (h.deadline ? [{ homeworkId: h.id, subjectId: h.subjectId, title: h.title, deadline: h.deadline, stage: h.stage }] : []))
+      .sort((a, b) => a.deadline.localeCompare(b.deadline));
     const allFiles: FileRef[] = [];
     for (const list of this.weeks.values())
       for (const w of list) allFiles.push(...w.lectures, ...w.seminars, ...w.materials);

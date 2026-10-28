@@ -53,7 +53,23 @@ export function formatRelative(iso: string): string {
 }
 
 /** «через 2 дня», «завтра, 18:00», «просрочено». */
-export function formatDeadline(iso: string): { text: string; tone: "danger" | "warn" | "calm" | "past" } {
+export const UNKNOWN_DEADLINE = "срок не указан";
+
+/** Сортировка по сроку: ДЗ с неизвестным сроком — в конце, порядок стабилен. */
+export function compareDeadlines(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a.localeCompare(b);
+}
+
+/** Диапазон дат недели или честное «даты не заданы». */
+export function formatWeekRange(startsAt: string | null, endsAt: string | null): string {
+  return startsAt && endsAt ? `${formatDate(startsAt)} — ${formatDate(endsAt)}` : "даты недели не заданы";
+}
+
+export function formatDeadline(iso: string | null): { text: string; tone: "danger" | "warn" | "calm" | "past" | "unknown" } {
+  if (!iso) return { text: UNKNOWN_DEADLINE, tone: "unknown" };
   const t = new Date(iso);
   const now = new Date();
   const ms = t.getTime() - now.getTime();

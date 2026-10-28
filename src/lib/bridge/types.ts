@@ -102,8 +102,9 @@ export interface Week {
   id: string;
   subjectId: string;
   number: number;
-  startsAt: ISODate;
-  endsAt: ISODate;
+  /** `null` — даты недели неизвестны (например, неделя подключена из существующего vault). */
+  startsAt: ISODate | null;
+  endsAt: ISODate | null;
   topic: string | null;
   lectures: FileRef[];
   seminars: FileRef[];
@@ -696,7 +697,8 @@ export interface Homework {
   subjectId: string;
   weekNumber: number;
   title: string;
-  deadline: ISODate;
+  /** `null` — срок неизвестен; приложение его не выдумывает. */
+  deadline: ISODate | null;
   stage: HomeworkStage;
   taskFiles: FileRef[];
   versions: HomeworkVersion[];

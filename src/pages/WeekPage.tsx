@@ -9,7 +9,7 @@ import { FileIcon } from "../components/ui/FileIcon";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
 import { StageBadge } from "../components/ui/StatusBadges";
 import { bridge, type FileRef } from "../lib/bridge";
-import { formatBytes, formatDate, formatDateTime, formatDeadline, formatRelative, pad2, WORKFLOW_STAGE_LABEL } from "../lib/format";
+import { formatBytes, formatDateTime, formatDeadline, formatRelative, formatWeekRange, pad2, WORKFLOW_STAGE_LABEL } from "../lib/format";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 
 export function WeekIndexRedirect() {
@@ -94,7 +94,7 @@ export function WeekPage() {
           </h1>
           {week && (
             <p className="muted">
-              {formatDate(week.startsAt)} — {formatDate(week.endsAt)} · <span className="mono">{subject?.name}/Неделя {pad2(weekNumber)}</span>
+              {formatWeekRange(week.startsAt, week.endsAt)} · <span className="mono">{subject?.name}/Неделя {pad2(weekNumber)}</span>
             </p>
           )}
         </div>
@@ -144,7 +144,8 @@ export function WeekPage() {
                   <div>
                     <div className="week__hwtitle">{homework.title}</div>
                     <div className={`deadline-inline`} data-tone={formatDeadline(homework.deadline).tone}>
-                      Дедлайн: {formatDateTime(homework.deadline)} · {formatDeadline(homework.deadline).text}
+                      Дедлайн: {homework.deadline ? `${formatDateTime(homework.deadline)} · ` : ""}
+                      {formatDeadline(homework.deadline).text}
                     </div>
                   </div>
                   <WorkflowRail homeworkId={homework.id} stage={homework.workflowStage} cycle={Math.max(1, homework.versions.length)} />

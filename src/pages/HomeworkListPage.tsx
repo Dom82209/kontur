@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { HomeworkRail } from "../components/domain/HomeworkRail";
 import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/States";
 import { bridge, HOMEWORK_STAGE_ORDER } from "../lib/bridge";
-import { formatDeadline, formatDateTime, STAGE_FOLDER, STAGE_LABEL, WORKFLOW_STAGE_LABEL } from "../lib/format";
+import { compareDeadlines, formatDeadline, formatDateTime, STAGE_FOLDER, STAGE_LABEL, WORKFLOW_STAGE_LABEL } from "../lib/format";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
 
@@ -32,7 +32,7 @@ export function HomeworkListPage() {
         <LayoutGroup id="hwboard">
           <div className="board">
             {HOMEWORK_STAGE_ORDER.map((stage, i) => {
-              const items = q.data!.filter((h) => h.stage === stage).sort((a, b) => a.deadline.localeCompare(b.deadline));
+              const items = q.data!.filter((h) => h.stage === stage).sort((a, b) => compareDeadlines(a.deadline, b.deadline));
               return (
                 <section key={stage} className="board__col" aria-label={STAGE_LABEL[stage]}>
                   <div className="board__head">
