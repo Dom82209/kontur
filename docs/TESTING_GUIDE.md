@@ -10,6 +10,11 @@
 
 На Linux 20 тестов `ai::*` с fake CLI через `sandbox-exec` падают по причине окружения (Seatbelt есть только в macOS); полный `cargo test` обязателен на Mac.
 
+## Подключение vault (этап 2)
+
+- `cargo test adoption` — 14 тестов на синтетическом vault в `TempDir`: read-only preview, идемпотентность, dry-run, изменение файла/базы после preview, symlink, ручные категории, конфликты, неизменяемость плана, эвристики на реальных именах.
+- Проверка на структуре настоящего vault без чтения содержимого: сохранить список путей (`find "Предметы" -type f -printf '%y\t%p\n' > paths.tsv` внутри vault) и выполнить `KONTUR_MIRROR_PATHS=paths.tsv cargo test --lib mirror_of_real_vault -- --ignored --nocapture`. Тест строит зеркало с заглушками в `TempDir`, делает preview и dry-run; настоящий vault не открывается.
+
 ## Полный набор
 
 ```bash

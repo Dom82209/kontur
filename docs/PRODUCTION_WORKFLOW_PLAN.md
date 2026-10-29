@@ -33,28 +33,28 @@
 | Этап | Статус | Коммит |
 |---|---|---|
 | 1. Workspace boundary | готов: preview/confirm/cancel, журнал, restart, legacy demo/real, symlink/traversal/rollback, 42 теста; ревью-фиксы (вложенные vault, symlink demo, неизменяемый fingerprint) | `feat(workspaces): isolate demo and real data`, `fix(workspaces): harden stage 1 workspace boundary` |
-| 2. Vault adoption | **в работе (WIP)**: backend готов и покрыт 13 тестами; IPC, DesktopBridge, mock и UI ещё не сделаны | `wip(adoption): …` |
+| 2. Vault adoption | готов: read-only scan, неизменяемый план, preview/dry-run/apply/cancel, стабильные id, повторный SHA-256 перед apply, ручные категории, UI-мастер; 14 Rust-тестов + mock/IPC/render-тесты; dry-run на зеркале структуры настоящего vault | `wip(adoption): …` ×2, `feat(adoption): …` ×2, `feat(ui): show unknown deadlines…` |
 
-## Checkpoint этапа 2 (WIP)
+## Этап 2: подключение существующего vault
 
-Сделано (`src-tauri`):
+Состав:
 
-- `file_service/scan.rs` — read-only fd-relative обход vault (`O_NOFOLLOW`, скрытые записи не открываются, symlink/спецфайлы/не-UTF-8 только в отчёт, лимиты) и потоковый SHA-256.
-- `adoption.rs` + миграция v11 — неизменяемый план `vault_adoption_plans` (preview → apply/dry-run/cancel, TTL 30 мин, SHA-256 плана), стабильные id из identity workspace и относительного пути, повторное хэширование каждого нового файла перед apply, одна транзакция, provenance в `vault_adoption_items`, ручные категории с приоритетом. `Неделя 00`, `00 Общие материалы`, служебные папки и заметки — в отчёт пропущенных.
-- Часть этапа 5 перенесена раньше, потому что у импортированных ДЗ нет известных дат: v11 разрешает `homeworks.deadline = NULL` и пустые даты недели; `HomeworkDto.deadline` и `WeekDto.startsAt/endsAt` стали `Option`. Лента сроков пропускает ДЗ без срока.
+- `file_service/scan.rs` — read-only fd-relative обход vault (`O_NOFOLLOW`; скрытые записи не открываются; symlink, спецфайлы и имена не в UTF-8 попадают только в отчёт; лимиты 50 000 записей / глубина 12) и потоковый SHA-256.
+- `adoption.rs` + миграция v11 — неизменяемый план `vault_adoption_plans` (preview → apply / dry-run / cancel, TTL 30 мин, SHA-256 плана, триггеры неизменяемости), стабильные id из identity пространства и относительного пути (идемпотентность), повторное хэширование каждого нового файла перед apply, одна транзакция, provenance в `vault_adoption_items`. Изменённые после импорта файлы и конфликты с базой не применяются, а показываются.
+- Классификация: папка недели задаёт категорию; внутри `03 ДЗ` — данные (имя), своя работа (фамилия из настроек, кириллица и латиница; версии `_v01`; `.tex`; решение/черновик), условие (LMS-хэш-суффикс `_xxxxxxxx`; PDF с «ДЗ»). Неуверенные случаи (< 0.7) помечены «проверьте категорию»; ручная категория имеет приоритет, категории ДЗ доступны только файлам из `03 ДЗ`.
+- Неизвестные сроки ДЗ и даты недель хранятся честно (`deadline = NULL`, даты `''`; DTO — `Option`/`null`), UI пишет «срок не указан» / «даты недели не заданы» (часть этапа 5, перенесена раньше).
+- Tauri-команды `preview_vault_adoption`, `apply_vault_adoption(planId, overrides, dryRun)`, `cancel_vault_adoption`; apply берёт общий замок файловых мутаций. UI: «Настройки → Управляемые каталоги → Подключить материалы…».
 
-Осталось для этапа 2:
-
-1. Frontend-типы: `deadline: ISODate | null`, `startsAt/endsAt: ISODate | null` и все места отображения/сортировки («срок не указан»). **До этого backend-изменение DTO не согласовано с TS-типами.**
-2. Tauri-команды `preview_vault_adoption`, `apply_vault_adoption(planId, overrides, dryRun)`, `cancel_vault_adoption`; регистрация в `lib.rs` и capabilities.
-3. `DesktopBridge` (types, ipc, TauriDesktopBridge, Mock + тесты).
-4. UI-мастер «Подключить материалы из vault» в настройках: сводка, пропущенные с причинами, ручные категории, dry-run, apply.
-5. Read-only preview на копии настоящего vault и полный прогон проверок на Mac (`logs/run-checks.command`).
+Проверка на настоящем vault (только чтение): из Obsidian взят лишь список путей (570 файлов, без содержимого); зеркало структуры с файлами-заглушками прогнано через preview и dry-run (`adoption::tests::mirror_of_real_vault_preview`, `#[ignore]`, путь списка в `KONTUR_MIRROR_PATHS`). Итог: 11 предметов, 43 недели, 39 ДЗ, 291 файл к подключению; пропущено 279 (139 заметок Obsidian, 136 файлов `00 Общие материалы`, 3 файла `Неделя 00`, 1 служебная папка); 63 файла с неуверенной категорией; dry-run прошёл без ошибок. Apply на настоящем vault не выполнялся.
 
 ## Известные ограничения
 
-- Legacy real-пространство (schema ≤ 8) без marker опознаётся по canonical path + dev/inode. Перенос такого vault на другой Mac или восстановление из копии меняет inode, и «Подключить существующее» будет заблокировано. Marker для legacy vault будет предлагаться явным действием (этап 2, vault adoption).
-- Проверки `cargo test` в Linux-окружении: 20 тестов `ai::*` требуют macOS `sandbox-exec`; окончательный прогон — на Mac.
+- Файлы `00 Общие материалы` и `Неделя 00` не подключаются: схема требует неделю с номером ≥ 1. Они перечислены в отчёте с причиной.
+- Изменённые после подключения файлы не обновляются планом (статус `changed`); обновление версий — этап 10.
+- Сроки и даты недель после подключения неизвестны до настройки семестра (этап 5).
+
+- Legacy real-пространство (schema ≤ 8) без marker опознаётся по canonical path + dev/inode. Перенос такого vault на другой Mac или восстановление из копии меняет inode, и «Подключить существующее» будет заблокировано. Явное действие «записать marker в legacy vault» пока не реализовано (подключение материалов его не требует); вынесено в этап 13.
+- Проверки `cargo test` в Linux-окружении: 20 тестов `ai::*` требуют macOS `sandbox-exec`; окончательный прогон — на Mac (`logs/run-checks.command`, логи в `logs/`).
 
 ## Ограничения до финального GO
 

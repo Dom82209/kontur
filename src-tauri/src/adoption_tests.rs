@@ -611,3 +611,108 @@ fn replaced_vault_blocks_preview() {
         ErrorCode::Blocked
     );
 }
+
+#[test]
+fn heuristics_recognise_student_work_and_lms_tasks_from_real_names() {
+    use super::{
+        classify_homework, has_lms_suffix, has_version_suffix, transliterate, StudentHints,
+    };
+    assert_eq!(transliterate("гончарова"), "goncharova");
+    let hints = StudentHints::new("Гончарова");
+    let category = |name: &str| {
+        let classified = classify_homework(&[name], name, &hints).unwrap();
+        (classified.category, classified.confidence >= 0.7)
+    };
+    // Своя работа: фамилия кириллицей через пробел и латиницей.
+    assert_eq!(
+        category("Кейс_1_Гончарова Доминика.pdf"),
+        (FileCategory::HomeworkDraft, true)
+    );
+    assert_eq!(
+        category("HW_5 Goncharova Dominika.pdf"),
+        (FileCategory::HomeworkDraft, true)
+    );
+    // Условие из LMS: хэш-суффикс.
+    assert!(has_lms_suffix("Неделя 2_Бизнес-студия_ДЗ 1.1_01b5a28b.pdf"));
+    assert!(!has_lms_suffix("Текст_защиты_ДЗ1.3.docx"));
+    assert_eq!(
+        category("Неделя 4_ОБА_ДЗ_0122060b.pdf"),
+        (FileCategory::HomeworkTask, true)
+    );
+    // Версии и LaTeX — собственная работа.
+    assert!(has_version_suffix("МіА — Домашняя работа 5 — v01.pdf"));
+    assert!(has_version_suffix("Кейс преза_v02.pptx"));
+    assert!(!has_version_suffix("Матан. Домашняя работа ~1.pdf"));
+    assert_eq!(
+        category("стата_дз2.tex"),
+        (FileCategory::HomeworkDraft, true)
+    );
+    // Документ с «ДЗ» без LMS-суффикса — только с ручной проверкой.
+    assert_eq!(
+        category("Текст_защиты_ДЗ1.3.docx"),
+        (FileCategory::HomeworkTask, false)
+    );
+    // Без настроенного имени фамилия не угадывается.
+    assert!(!StudentHints::new("Не задано").matches("гончарова"));
+}
+
+#[test]
+#[ignore]
+fn mirror_of_real_vault_preview() {
+    let list = fs::read_to_string(std::env::var("KONTUR_MIRROR_PATHS").unwrap()).unwrap();
+    let temp = TempDir::new().unwrap();
+    let app = temp.path().join("app");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let vault = fs::canonicalize(vault).unwrap();
+    for (index, line) in list.lines().enumerate() {
+        let path = line.split('\t').nth(1).unwrap();
+        write(&vault, path, &format!("placeholder {index}"));
+    }
+    let (catalog, _) = WorkspaceCatalog::bootstrap(&app, None).unwrap();
+    let preview = catalog
+        .preview_transition(&TransitionRequest::CreateReal, Some(&vault))
+        .unwrap();
+    catalog.confirm_transition(&preview.id).unwrap();
+    drop(catalog);
+    let (catalog, path) = WorkspaceCatalog::bootstrap(&app, None).unwrap();
+    let database = Database::open_file(path).unwrap();
+    database.migrate().unwrap();
+    catalog.verify_active_database(&database).unwrap();
+    database
+        .with_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO app_settings(key,value_json,created_at,updated_at) VALUES ('automation_rules','{\"studentName\":{\"lastName\":\"Гончарова\",\"firstName\":\"Доминика\"}}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let service = AdoptionService::new(&database, None);
+    let preview = service.preview().unwrap();
+    println!("SUMMARY {:?}", preview.summary);
+    let mut reasons = std::collections::BTreeMap::<String, usize>::new();
+    for item in &preview.plan.skipped {
+        *reasons.entry(format!("{:?}", item.reason)).or_default() += 1;
+    }
+    println!("SKIPPED {reasons:?}");
+    let mut cats = std::collections::BTreeMap::<String, usize>::new();
+    for file in &preview.plan.files {
+        *cats.entry(format!("{:?}", file.category)).or_default() += 1;
+    }
+    println!("CATEGORIES {cats:?}");
+    for file in preview.plan.files.iter().filter(|f| f.needs_review) {
+        println!("REVIEW {:?} {}", file.category, file.relative_path);
+    }
+    for file in preview
+        .plan
+        .files
+        .iter()
+        .filter(|f| f.category == FileCategory::HomeworkTask && !f.needs_review)
+        .take(8)
+    {
+        println!("TASK {}", file.relative_path);
+    }
+    let report = service.apply(&preview.id, &[], true).unwrap();
+    println!("DRYRUN {report:?}");
+}

@@ -271,7 +271,9 @@ impl<'a> AdoptionService<'a> {
         let root = PersistentPath::new(SUBJECTS_ROOT)?;
         let scan = vault.scan_tree(Some(&root), ScanLimits::default())?;
         let existing = self.existing()?;
-        let plan = build_plan(&identity.id, &scan, &existing, |relative| {
+        let rules = crate::repositories::ReadRepository::new(self.database).automation_rules()?;
+        let hints = StudentHints::new(&rules.student_name.last_name);
+        let plan = build_plan(&identity.id, &scan, &existing, &hints, |relative| {
             let hashed = vault.hash_file(&PersistentPath::new(relative)?)?;
             Ok((hashed.sha256.as_str().to_owned(), hashed.size_bytes))
         })?;
@@ -863,11 +865,13 @@ fn build_plan(
     workspace_id: &str,
     scan: &ScanOutcome,
     existing: &Existing,
+    hints: &StudentHints,
     mut hash: impl FnMut(&str) -> Result<(String, u64), AppError>,
 ) -> Result<AdoptionPlan, AppError> {
     let mut builder = PlanBuilder {
         workspace_id,
         existing,
+        hints,
         plan: AdoptionPlan {
             truncated: scan.truncated,
             ..AdoptionPlan::default()
@@ -911,6 +915,7 @@ fn build_plan(
 struct PlanBuilder<'p> {
     workspace_id: &'p str,
     existing: &'p Existing,
+    hints: &'p StudentHints,
     plan: AdoptionPlan,
     /// folder_path → индекс в plan.subjects
     subjects: BTreeMap<String, usize>,
@@ -1141,7 +1146,7 @@ impl PlanBuilder<'_> {
             );
             return Ok(());
         }
-        let Some(classified) = classify(rest, name) else {
+        let Some(classified) = classify(rest, name, self.hints) else {
             self.skip(
                 relative,
                 SkipReason::ServiceFolder,
@@ -1223,7 +1228,7 @@ struct Classified {
 }
 
 /// Категория по папке внутри недели и имени файла. `None` — служебная папка.
-fn classify(rest: &[&str], name: &str) -> Option<Classified> {
+fn classify(rest: &[&str], name: &str, hints: &StudentHints) -> Option<Classified> {
     let folder = if rest.len() > 1 { rest[0] } else { "" };
     let by_folder = |category, reason: &str| Classified {
         category,
@@ -1237,7 +1242,7 @@ fn classify(rest: &[&str], name: &str) -> Option<Classified> {
             FileCategory::Material,
             "Папка «04 Дополнительно»",
         )),
-        HOMEWORK_FOLDER => classify_homework(&rest[1..], name),
+        HOMEWORK_FOLDER => classify_homework(&rest[1..], name, hints),
         "" => Some(Classified {
             category: FileCategory::Material,
             confidence: 0.5,
@@ -1251,7 +1256,7 @@ fn classify(rest: &[&str], name: &str) -> Option<Classified> {
     }
 }
 
-fn classify_homework(rest: &[&str], name: &str) -> Option<Classified> {
+fn classify_homework(rest: &[&str], name: &str, hints: &StudentHints) -> Option<Classified> {
     let lower = name.to_lowercase();
     let ext = extension(name);
     let subfolder = if rest.len() > 1 { rest[0] } else { "" };
@@ -1283,6 +1288,15 @@ fn classify_homework(rest: &[&str], name: &str) -> Option<Classified> {
     if !subfolder.is_empty() {
         reasons.push(format!("Вложенная папка «{subfolder}»"));
     }
+    let task_words = [
+        "дз",
+        "задани",
+        "памятка",
+        "условие",
+        "homework",
+        "task",
+        "hw",
+    ];
     let (category, confidence, reason) =
         if contains_any(&["приложение", "данные", "data", "dataset"]) {
             (
@@ -1290,23 +1304,46 @@ fn classify_homework(rest: &[&str], name: &str) -> Option<Classified> {
                 0.8,
                 "Имя похоже на данные к заданию",
             )
-        } else if contains_any(&["решени", "финал", "исправл", "черновик", "draft", "final"])
+        } else if hints.matches(&lower) {
+            (
+                FileCategory::HomeworkDraft,
+                0.9,
+                "В имени ваша фамилия из настроек — это ваша работа",
+            )
+        } else if has_lms_suffix(name) && matches!(ext.as_str(), "pdf" | "docx" | "doc" | "pptx") {
+            (
+                FileCategory::HomeworkTask,
+                0.9,
+                "Файл из LMS (хэш-суффикс в имени)",
+            )
+        } else if contains_any(&[
+            "решени",
+            "solution",
+            "финал",
+            "исправл",
+            "черновик",
+            "draft",
+            "final",
+            "кейс",
+        ]) || has_version_suffix(name)
             || looks_like_personal_name(name)
+            || ext == "tex"
         {
             (
                 FileCategory::HomeworkDraft,
                 0.75,
-                "Имя похоже на работу студента",
+                "Имя похоже на работу студента (версия, решение, черновик)",
             )
-        } else if (ext == "pdf" || ext == "docx" || ext == "doc")
-            && contains_any(&["дз", "задани", "памятка", "условие", "homework", "task"])
-        {
+        } else if ext == "pdf" && contains_any(&task_words) {
+            (FileCategory::HomeworkTask, 0.75, "PDF с условием задания")
+        } else if matches!(ext.as_str(), "docx" | "doc" | "pptx") && contains_any(&task_words) {
+            // Без LMS-суффикса документ с «ДЗ» в имени часто оказывается собственным текстом.
             (
                 FileCategory::HomeworkTask,
-                0.8,
-                "Документ с условием задания",
+                0.6,
+                "Документ упоминает ДЗ, но не из LMS: проверьте, условие это или ваша работа",
             )
-        } else if is_table(&ext) || is_image(&ext) || ext == "ipynb" || ext == "tex" {
+        } else if is_table(&ext) || is_image(&ext) || ext == "ipynb" {
             (
                 FileCategory::HomeworkDraft,
                 0.5,
@@ -1333,6 +1370,103 @@ fn classify_homework(rest: &[&str], name: &str) -> Option<Classified> {
         confidence,
         reasons,
     })
+}
+
+/// Фамилия студента из настроек (кириллица и латиница) для распознавания своих работ.
+#[derive(Debug, Default)]
+pub(crate) struct StudentHints {
+    needles: Vec<String>,
+}
+
+impl StudentHints {
+    pub(crate) fn new(last_name: &str) -> Self {
+        let last = last_name.trim().to_lowercase();
+        if last.chars().count() < 3 || last == "не задано" {
+            return Self::default();
+        }
+        let latin = transliterate(&last);
+        let mut needles = vec![last];
+        if latin.chars().count() >= 3 && !needles.contains(&latin) {
+            needles.push(latin);
+        }
+        Self { needles }
+    }
+
+    fn matches(&self, lower_name: &str) -> bool {
+        self.needles
+            .iter()
+            .any(|needle| lower_name.contains(needle.as_str()))
+    }
+}
+
+fn transliterate(text: &str) -> String {
+    let mut output = String::new();
+    for c in text.chars() {
+        let mapped = match c {
+            'а' => "a",
+            'б' => "b",
+            'в' => "v",
+            'г' => "g",
+            'д' => "d",
+            'е' | 'ё' | 'э' => "e",
+            'ж' => "zh",
+            'з' => "z",
+            'и' | 'й' | 'ы' => "i",
+            'к' => "k",
+            'л' => "l",
+            'м' => "m",
+            'н' => "n",
+            'о' => "o",
+            'п' => "p",
+            'р' => "r",
+            'с' => "s",
+            'т' => "t",
+            'у' => "u",
+            'ф' => "f",
+            'х' => "kh",
+            'ц' => "ts",
+            'ч' => "ch",
+            'ш' => "sh",
+            'щ' => "shch",
+            'ю' => "yu",
+            'я' => "ya",
+            _ if c.is_ascii_alphanumeric() => {
+                output.push(c);
+                continue;
+            }
+            _ => "",
+        };
+        output.push_str(mapped);
+    }
+    output
+}
+
+/// Файлы, скачанные из LMS, имеют суффикс `_<8 hex>` перед расширением.
+fn has_lms_suffix(name: &str) -> bool {
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    stem.rsplit_once('_').is_some_and(|(_, tail)| {
+        tail.len() == 8
+            && tail
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+            && tail.chars().any(|c| c.is_ascii_digit())
+    })
+}
+
+/// `…_v01`, `… v2`, `… — v03` в конце имени — версия собственной работы.
+fn has_version_suffix(name: &str) -> bool {
+    let stem = name
+        .rsplit_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .to_lowercase();
+    let Some(position) = stem.rfind('v') else {
+        return false;
+    };
+    let digits = &stem[position + 1..];
+    let before = stem[..position].chars().last();
+    (1..=3).contains(&digits.len())
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && before.is_some_and(|c| c == '_' || c == ' ' || c == '-')
 }
 
 /// `Фамилия_Имя_…` — типичное имя файла студенческой работы.
