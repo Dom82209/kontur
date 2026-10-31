@@ -13,6 +13,11 @@ const subject: Subject = {
   currentWeek: 7,
   weekCount: 1,
   courseUrl: null,
+  folderPath: "Предметы/ОБА",
+  keywords: [],
+  archived: false,
+  mergedIntoId: null,
+  revision: 0,
 };
 
 const week: Week = {
@@ -119,6 +124,11 @@ function readClient(overrides: Partial<TauriIpcClient> = {}): TauriIpcClient {
     previewVaultAdoption: unexpected("previewVaultAdoption"),
     applyVaultAdoption: unexpected("applyVaultAdoption"),
     cancelVaultAdoption: unexpected("cancelVaultAdoption"),
+    createSubject: unexpected("createSubject"),
+    updateSubject: unexpected("updateSubject"),
+    setSubjectArchived: unexpected("setSubjectArchived"),
+    previewSubjectMerge: unexpected("previewSubjectMerge"),
+    mergeSubjects: unexpected("mergeSubjects"),
     chooseManagedRoot: unexpected("chooseManagedRoot"),
     prepareInboxRoot: unexpected("prepareInboxRoot"),
     exportDiagnosticReport: unexpected("exportDiagnosticReport"),

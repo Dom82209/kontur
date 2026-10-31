@@ -39,10 +39,12 @@ export function ClassificationFields({ file, layout = "inline", onDone }: Props)
         {stacked ? <span className="field__label">Предмет</span> : <span className="sr-only">Предмет</span>}
         <select className={`select${stacked ? "" : " select--sm"}`} value={c?.subjectId ?? ""} onChange={(e) => void patch({ subjectId: e.target.value || null })} data-autofocus>
           <option value="">— выберите предмет —</option>
-          {subjects.data?.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
+          {subjects.data
+            ?.filter((s) => !s.archived || s.id === c?.subjectId)
+            .map((s) => (
+              <option key={s.id} value={s.id} disabled={s.archived}>
+                {s.archived ? `${s.name} (в архиве)` : s.name}
+              </option>
           ))}
         </select>
       </label>

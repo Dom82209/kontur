@@ -96,6 +96,51 @@ export interface Subject {
   weekCount: number;
   /** Необязательная ссылка на курс в LMS (только https://my.centraluniversity.ru). */
   courseUrl: string | null;
+  /** Папка предмета в vault. Не меняется при переименовании. */
+  folderPath: string;
+  /** Ключевые слова автоматической классификации (нижний регистр). */
+  keywords: string[];
+  /** Архивный предмет не предлагается в классификации; данные сохраняются. */
+  archived: boolean;
+  /** Предмет слит в другой (всегда архивный). */
+  mergedIntoId: string | null;
+  /** Optimistic revision: передаётся в изменения предмета. */
+  revision: number;
+}
+
+export interface SubjectInput {
+  name: string;
+  shortName: string;
+  keywords: string[];
+}
+
+export interface MergedWeek {
+  number: number;
+  hasHomework: boolean;
+  files: number;
+}
+
+/** Что произойдёт при слиянии предметов. Ничего не записано. */
+export interface SubjectMergePreview {
+  source: Subject;
+  target: Subject;
+  movedWeeks: MergedWeek[];
+  /** Недели с одинаковыми номерами у обоих предметов: слияние заблокировано. */
+  conflictingWeeks: number[];
+  retargetedInbox: number;
+  addedKeywords: string[];
+  canMerge: boolean;
+  effects: string[];
+  warnings: string[];
+  /** Подтверждение действительно только для этого состояния. */
+  fingerprint: string;
+}
+
+export interface SubjectMergeResult {
+  target: Subject;
+  source: Subject;
+  movedWeeks: number;
+  retargetedInbox: number;
 }
 
 export interface Week {
@@ -1055,6 +1100,15 @@ export interface DesktopBridge {
 
   getDashboard(): Promise<Dashboard>;
   getSubjects(): Promise<Subject[]>;
+  /** Этап 3: предмет создаётся только в базе; папка в vault появится при раскладке. */
+  createSubject(input: SubjectInput): Promise<Subject>;
+  /** Переименование и ключевые слова; папка в vault не меняется. */
+  updateSubject(subjectId: string, revision: number, input: SubjectInput): Promise<Subject>;
+  setSubjectArchived(subjectId: string, revision: number, archived: boolean): Promise<Subject>;
+  /** Предпросмотр слияния: ничего не меняет. */
+  previewSubjectMerge(sourceId: string, targetId: string): Promise<SubjectMergePreview>;
+  /** Применяет слияние, только если состояние совпадает с предпросмотром (fingerprint). */
+  mergeSubjects(sourceId: string, targetId: string, fingerprint: string): Promise<SubjectMergeResult>;
   getWeeks(subjectId: string): Promise<Week[]>;
   getWeek(subjectId: string, weekNumber: number): Promise<Week | null>;
   createWeek(subjectId: string, weekNumber: number): Promise<OperationResult<Week>>;

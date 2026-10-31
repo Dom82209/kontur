@@ -29,6 +29,9 @@ import {
   type RouteDestination,
   type RoutePreview,
   type Subject,
+  type SubjectInput,
+  type SubjectMergePreview,
+  type SubjectMergeResult,
   type Unsubscribe,
   type Week,
   type WorkflowCommandOptions,
@@ -118,6 +121,7 @@ export class MockDesktopBridge implements DesktopBridge {
 
   private emitter = new TypedEmitter();
   private subjects: Subject[] = clone(SUBJECTS);
+  private subjectSeq = 0;
   private weeks = buildAllWeeks();
   private inbox: InboxFile[] = buildInbox();
   private homework: Homework[] = buildHomework();
@@ -237,7 +241,144 @@ export class MockDesktopBridge implements DesktopBridge {
 
   async getSubjects(): Promise<Subject[]> {
     await this.wait((120));
-    return clone(this.subjects);
+    // Как в backend: ключевые слова — у предмета, правила автоматизации их отражают.
+    return clone(this.subjects.map((s) => ({ ...s, keywords: this.keywordsOf(s.id) })));
+  }
+
+  // ───────────── Предметы (имитация этапа 3) ─────────────
+
+  private keywordsOf(subjectId: string): string[] {
+    return [...(this.rules.subjectRules.find((r) => r.subjectId === subjectId)?.keywords ?? [])].sort();
+  }
+
+  private setKeywords(subjectId: string, keywords: string[]): void {
+    const others = this.rules.subjectRules.filter((r) => r.subjectId !== subjectId);
+    this.rules = { ...this.rules, subjectRules: keywords.length ? [...others, { subjectId, keywords }] : others };
+  }
+
+  private normalizeSubject(input: SubjectInput, exceptId: string | null): { name: string; shortName: string; keywords: string[] } {
+    const name = input.name.split(/\s+/).filter(Boolean).join(" ");
+    if (!name) throw new BridgeError("blocked", "Укажите название предмета");
+    if (name.startsWith(".") || name.startsWith("00 ") || /[/\\:]/.test(name)) throw new BridgeError("blocked", "Название не должно начинаться с точки или «00 » и содержать / \\ :");
+    const shortName = input.shortName.trim();
+    if (!shortName || shortName.length > 12) throw new BridgeError("blocked", "Короткое название: от 1 до 12 символов");
+    if (this.subjects.some((s) => s.id !== exceptId && s.name.toLowerCase() === name.toLowerCase())) throw new BridgeError("conflict", `Предмет «${name}» уже существует`);
+    const keywords = [...new Set(input.keywords.map((k) => k.split(/\s+/).filter(Boolean).join(" ").toLowerCase()).filter(Boolean))].sort();
+    if (keywords.some((k) => k.length < 2 || k.length > 60)) throw new BridgeError("blocked", "Ключевое слово: от 2 до 60 символов");
+    this.ensureKeywordsFree(exceptId, keywords);
+    return { name, shortName, keywords };
+  }
+
+  private ensureKeywordsFree(subjectId: string | null, keywords: string[]): void {
+    for (const rule of this.rules.subjectRules) {
+      const owner = this.subjects.find((s) => s.id === rule.subjectId);
+      if (!owner || owner.id === subjectId || owner.archived) continue;
+      const taken = keywords.find((k) => rule.keywords.includes(k));
+      if (taken) throw new BridgeError("conflict", `Ключевое слово «${taken}» уже относится к предмету «${owner.name}»`);
+    }
+  }
+
+  private requireSubject(subjectId: string, revision: number): Subject {
+    const subject = this.subjects.find((s) => s.id === subjectId);
+    if (!subject) throw new BridgeError("not_found", "Предмет не найден");
+    if (subject.revision !== revision) throw new BridgeError("conflict", "Предмет изменился в другом окне. Обновите данные и повторите.");
+    return subject;
+  }
+
+  private subjectView(subjectId: string): Subject {
+    const subject = this.subjects.find((s) => s.id === subjectId)!;
+    return clone({ ...subject, keywords: this.keywordsOf(subjectId) });
+  }
+
+  async createSubject(input: SubjectInput): Promise<Subject> {
+    await this.wait(80);
+    const { name, shortName, keywords } = this.normalizeSubject(input, null);
+    const id = `subject-${++this.subjectSeq}`;
+    this.subjects.push({ id, name, shortName, currentWeek: 0, weekCount: 0, courseUrl: null, folderPath: `Предметы/${name}`, keywords: [], archived: false, mergedIntoId: null, revision: 0 });
+    this.weeks.set(id, []);
+    this.setKeywords(id, keywords);
+    return this.subjectView(id);
+  }
+
+  async updateSubject(subjectId: string, revision: number, input: SubjectInput): Promise<Subject> {
+    await this.wait(80);
+    const subject = this.requireSubject(subjectId, revision);
+    if (subject.mergedIntoId) throw new BridgeError("blocked", "Предмет слит с другим и не редактируется");
+    const { name, shortName, keywords } = this.normalizeSubject(input, subjectId);
+    Object.assign(subject, { name, shortName, revision: subject.revision + 1 });
+    this.setKeywords(subjectId, keywords);
+    return this.subjectView(subjectId);
+  }
+
+  async setSubjectArchived(subjectId: string, revision: number, archived: boolean): Promise<Subject> {
+    await this.wait(60);
+    const subject = this.requireSubject(subjectId, revision);
+    if (subject.mergedIntoId && !archived) throw new BridgeError("blocked", "Слитый предмет нельзя вернуть из архива: его недели принадлежат другому предмету");
+    if (!archived) this.ensureKeywordsFree(subjectId, this.keywordsOf(subjectId));
+    Object.assign(subject, { archived, revision: subject.revision + 1 });
+    return this.subjectView(subjectId);
+  }
+
+  private mergePlan(sourceId: string, targetId: string): SubjectMergePreview {
+    if (sourceId === targetId) throw new BridgeError("blocked", "Предмет нельзя слить с самим собой");
+    const source = this.subjects.find((s) => s.id === sourceId);
+    const target = this.subjects.find((s) => s.id === targetId);
+    if (!source || !target) throw new BridgeError("not_found", "Предмет не найден");
+    if (source.mergedIntoId) throw new BridgeError("blocked", "Этот предмет уже слит с другим");
+    if (target.archived) throw new BridgeError("blocked", "Сливать можно только в активный предмет: сначала верните его из архива");
+    const sourceWeeks = this.weeks.get(sourceId) ?? [];
+    const targetNumbers = new Set((this.weeks.get(targetId) ?? []).map((w) => w.number));
+    const conflictingWeeks = sourceWeeks.map((w) => w.number).filter((n) => targetNumbers.has(n));
+    const inbox = this.inbox.filter((f) => f.status !== "routed" && f.classification?.subjectId === sourceId);
+    const targetKeywords = this.keywordsOf(targetId);
+    const addedKeywords = this.keywordsOf(sourceId).filter((k) => !targetKeywords.includes(k));
+    const canMerge = conflictingWeeks.length === 0;
+    return {
+      source: this.subjectView(sourceId),
+      target: this.subjectView(targetId),
+      movedWeeks: sourceWeeks.map((w) => ({ number: w.number, hasHomework: w.homeworkId !== null, files: w.lectures.length + w.seminars.length + w.materials.length })),
+      conflictingWeeks,
+      retargetedInbox: inbox.length,
+      addedKeywords,
+      canMerge,
+      effects: [
+        `Недели «${source.name}» (${sourceWeeks.length}) станут неделями «${target.name}».`,
+        `«${source.name}» уйдёт в архив с пометкой «слит».`,
+        "Файлы в vault не перемещаются и не переименовываются: недели сохраняют свои папки.",
+      ],
+      warnings: canMerge ? [] : [`У обоих предметов есть недели ${conflictingWeeks.join(", ")}. Слияние таких недель не поддерживается: сначала разберите их вручную.`],
+      fingerprint: [source.id, source.revision, target.id, target.revision, sourceWeeks.length, targetNumbers.size, inbox.length].join(":"),
+    };
+  }
+
+  async previewSubjectMerge(sourceId: string, targetId: string): Promise<SubjectMergePreview> {
+    await this.wait(80);
+    return this.mergePlan(sourceId, targetId);
+  }
+
+  async mergeSubjects(sourceId: string, targetId: string, fingerprint: string): Promise<SubjectMergeResult> {
+    await this.wait(120);
+    const plan = this.mergePlan(sourceId, targetId);
+    if (plan.fingerprint !== fingerprint) throw new BridgeError("conflict", "Предметы изменились после предпросмотра. Выполните предпросмотр слияния заново.");
+    if (!plan.canMerge) throw new BridgeError("blocked", "Слияние заблокировано: у предметов есть недели с одинаковыми номерами");
+    const moved = (this.weeks.get(sourceId) ?? []).map((w) => ({ ...w, subjectId: targetId }));
+    this.weeks.set(targetId, [...(this.weeks.get(targetId) ?? []), ...moved].sort((a, b) => a.number - b.number));
+    this.weeks.set(sourceId, []);
+    const keywords = [...this.keywordsOf(targetId), ...plan.addedKeywords];
+    this.setKeywords(sourceId, []);
+    this.setKeywords(targetId, keywords);
+    let retargeted = 0;
+    for (const file of this.inbox) {
+      if (file.status !== "routed" && file.classification?.subjectId === sourceId) {
+        file.classification = { ...file.classification, subjectId: targetId };
+        retargeted += 1;
+      }
+    }
+    const source = this.subjects.find((s) => s.id === sourceId)!;
+    const target = this.subjects.find((s) => s.id === targetId)!;
+    Object.assign(source, { archived: true, mergedIntoId: targetId, revision: source.revision + 1, weekCount: 0 });
+    Object.assign(target, { revision: target.revision + 1, weekCount: this.weeks.get(targetId)!.length });
+    return { source: this.subjectView(sourceId), target: this.subjectView(targetId), movedWeeks: moved.length, retargetedInbox: retargeted };
   }
 
   async getWeeks(subjectId: string): Promise<Week[]> {

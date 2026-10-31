@@ -47,7 +47,14 @@ export function weekRange(n: number): { startsAt: string; endsAt: string } {
   return { startsAt: s.toISOString(), endsAt: e.toISOString() };
 }
 
-export const SUBJECTS: Subject[] = [
+type SubjectSeed = Pick<Subject, "id" | "name" | "shortName" | "currentWeek" | "weekCount" | "courseUrl">;
+
+/** Поля этапа 3: папка, ключевые слова (заполняются из правил), архив, ревизия. */
+function seedSubject(seed: SubjectSeed): Subject {
+  return { ...seed, folderPath: `Предметы/${seed.name}`, keywords: [], archived: false, mergedIntoId: null, revision: 0 };
+}
+
+export const SUBJECTS: Subject[] = ([
   { id: "eng", name: "Английский", shortName: "Англ", currentWeek: 8, weekCount: 8, courseUrl: null },
   { id: "bstudio", name: "Бизнес-студия", shortName: "Б-студия", currentWeek: 8, weekCount: 8, courseUrl: null },
   { id: "linal", name: "Линейная алгебра", shortName: "Линал", currentWeek: 8, weekCount: 8, courseUrl: null },
@@ -59,7 +66,7 @@ export const SUBJECTS: Subject[] = [
   { id: "oba-adv", name: "Основы бизнес-аналитики, продвинутый", shortName: "ОБА+", currentWeek: 8, weekCount: 7, courseUrl: null },
   { id: "stat", name: "Статистика", shortName: "Стат", currentWeek: 8, weekCount: 8, courseUrl: null },
   { id: "stress", name: "Стресс-менеджмент", shortName: "Стресс", currentWeek: 8, weekCount: 5, courseUrl: null },
-];
+] satisfies SubjectSeed[]).map(seedSubject);
 
 export function subjectName(id: string | null): string {
   return SUBJECTS.find((s) => s.id === id)?.name ?? "Без предмета";

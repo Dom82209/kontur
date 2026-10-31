@@ -36,7 +36,7 @@ export function Sidebar() {
       </ul>
       <div className="sidebar__section eyebrow">Предметы</div>
       <ul className="sidebar__subjects scroll">
-        {subjects.data?.map((s) => {
+        {subjects.data?.filter((s) => !s.archived).map((s) => {
           const active = pathname.startsWith(`/subjects/${s.id}/`);
           return (
             <li key={s.id}>

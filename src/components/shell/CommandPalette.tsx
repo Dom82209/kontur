@@ -34,7 +34,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     if (!open) return;
     setQuery("");
     setIndex(0);
-    void bridge.getSubjects().then(setSubjects);
+    void bridge.getSubjects().then((list) => setSubjects(list.filter((s) => !s.archived)));
     void bridge.getHomeworkList().then(setHomework);
     const t = setTimeout(() => inputRef.current?.focus(), 20);
     return () => clearTimeout(t);

@@ -228,10 +228,12 @@ export function CuExportDialog({ candidate, onClose, onImported }: Props) {
                   <span role="cell">
                     <select className="select select--sm" value={r.subjectId ?? ""} disabled={!entry.selectable || importing} onChange={(e) => patch(entry, { subjectId: e.target.value || null })} aria-label={`Предмет: ${entry.name}`}>
                       <option value="">— предмет —</option>
-                      {subjects.data?.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.shortName}
-                        </option>
+                      {subjects.data
+                        ?.filter((s) => !s.archived)
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.shortName}
+                          </option>
                       ))}
                     </select>
                   </span>

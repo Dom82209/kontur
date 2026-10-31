@@ -877,3 +877,69 @@ button.row:focus-visible {
 .adoption__skip {
   margin-top: 8px;
 }
+
+/* Этап 3: управление предметами */
+.subjects-panel {
+  display: grid;
+  gap: 12px;
+}
+.subjects-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.subjects-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.subjects-panel__row[data-archived] {
+  opacity: 0.75;
+}
+.subjects-panel__main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.subjects-panel__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.subjects-panel__keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.subjects-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.subjects-panel__merge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.subjects-panel__merge svg {
+  width: 14px;
+  height: 14px;
+}
+.subjects-panel__form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.subjects-panel__merge .select {
+  width: auto;
+  max-width: 220px;
+}

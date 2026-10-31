@@ -8,6 +8,11 @@ import {
   cancelWorkspaceTransition,
   applyVaultAdoption,
   cancelVaultAdoption,
+  createSubject,
+  mergeSubjects,
+  previewSubjectMerge,
+  setSubjectArchived,
+  updateSubject,
   previewVaultAdoption,
   chooseManagedRoot,
   confirmWorkspaceTransition,
@@ -99,6 +104,11 @@ function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {
     previewVaultAdoption: fail("previewVaultAdoption"),
     applyVaultAdoption: fail("applyVaultAdoption"),
     cancelVaultAdoption: fail("cancelVaultAdoption"),
+    createSubject: fail("createSubject"),
+    updateSubject: fail("updateSubject"),
+    setSubjectArchived: fail("setSubjectArchived"),
+    previewSubjectMerge: fail("previewSubjectMerge"),
+    mergeSubjects: fail("mergeSubjects"),
     chooseManagedRoot: fail("chooseManagedRoot"),
     prepareInboxRoot: fail("prepareInboxRoot"),
     exportDiagnosticReport: fail("exportDiagnosticReport"),
@@ -373,6 +383,11 @@ describe("IPC команды этапа 5", () => {
     await previewVaultAdoption();
     await applyVaultAdoption("plan-1", [{ relativePath: "Предметы/ОБА/Неделя 05/03 ДЗ/week5.xlsx", category: "homework_data" }], true);
     await cancelVaultAdoption("plan-1");
+    await createSubject({ name: "Статистика", shortName: "Стат", keywords: ["стат"] });
+    await updateSubject("s-1", 3, { name: "Статистика", shortName: "Стат", keywords: [] });
+    await setSubjectArchived("s-1", 4, true);
+    await previewSubjectMerge("s-1", "s-2");
+    await mergeSubjects("s-1", "s-2", "fp");
     await exportDiagnosticReport();
     await openObsidianNote("Предметы/ОБА/Заметка.md");
     await revealInFinder("Предметы/00 Входящие/a.pdf");
@@ -390,6 +405,11 @@ describe("IPC команды этапа 5", () => {
         { planId: "plan-1", overrides: [{ relativePath: "Предметы/ОБА/Неделя 05/03 ДЗ/week5.xlsx", category: "homework_data" }], dryRun: true },
       ],
       ["cancel_vault_adoption", { planId: "plan-1" }],
+      ["create_subject", { input: { name: "Статистика", shortName: "Стат", keywords: ["стат"] } }],
+      ["update_subject", { subjectId: "s-1", revision: 3, input: { name: "Статистика", shortName: "Стат", keywords: [] } }],
+      ["set_subject_archived", { subjectId: "s-1", revision: 4, archived: true }],
+      ["preview_subject_merge", { sourceId: "s-1", targetId: "s-2" }],
+      ["merge_subjects", { sourceId: "s-1", targetId: "s-2", fingerprint: "fp" }],
       ["export_diagnostic_report", undefined],
       ["open_obsidian_note", { relativePath: "Предметы/ОБА/Заметка.md" }],
       ["reveal_in_finder", { relativePath: "Предметы/00 Входящие/a.pdf" }],

@@ -114,6 +114,26 @@ export function backendHealth(): Promise<BackendHealth> {
   return call("backend_health");
 }
 
+export function createSubject(input: import("../types").SubjectInput): Promise<Subject> {
+  return call("create_subject", { input });
+}
+
+export function updateSubject(subjectId: string, revision: number, input: import("../types").SubjectInput): Promise<Subject> {
+  return call("update_subject", { subjectId, revision, input });
+}
+
+export function setSubjectArchived(subjectId: string, revision: number, archived: boolean): Promise<Subject> {
+  return call("set_subject_archived", { subjectId, revision, archived });
+}
+
+export function previewSubjectMerge(sourceId: string, targetId: string): Promise<import("../types").SubjectMergePreview> {
+  return call("preview_subject_merge", { sourceId, targetId });
+}
+
+export function mergeSubjects(sourceId: string, targetId: string, fingerprint: string): Promise<import("../types").SubjectMergeResult> {
+  return call("merge_subjects", { sourceId, targetId, fingerprint });
+}
+
 export function getSubjects(): Promise<Subject[]> {
   return call("get_subjects");
 }
