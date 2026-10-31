@@ -363,6 +363,51 @@ mod tests {
         let mut overwrite = saved.clone();
         overwrite.confirm.allow_overwrite = true;
         assert!(service.update_automation_rules(overwrite).is_err());
+
+        for change in [
+            |r: &mut AutomationRulesDto| r.confirm.low_confidence_route = false,
+            |r: &mut AutomationRulesDto| r.confirm.mark_final = false,
+            |r: &mut AutomationRulesDto| r.inbox_path = "Другое".into(),
+            |r: &mut AutomationRulesDto| r.final_name_pattern = "{Фамилия}".into(),
+            |r: &mut AutomationRulesDto| r.final_name_pattern = "{Неделя}/{Имя}".into(),
+            |r: &mut AutomationRulesDto| r.student_name.last_name = "a/b".into(),
+        ] {
+            let mut rules = saved.clone();
+            change(&mut rules);
+            assert!(service.update_automation_rules(rules).is_err());
+            assert_eq!(
+                QueryService::new(&database).automation_rules().unwrap(),
+                saved
+            );
+        }
+    }
+
+    #[test]
+    fn saved_rules_survive_restart() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("workspace.sqlite3");
+        let mut rules = AutomationRulesDto {
+            low_confidence_threshold: 0.85,
+            final_name_pattern: "ДЗ {Неделя} {Предмет}".into(),
+            ..Default::default()
+        };
+        rules.student_name.last_name = "Гончарова".into();
+        rules.workflow.style_threshold = 7;
+        let saved = {
+            let database = Database::open_file(&path).unwrap();
+            database.migrate().unwrap();
+            MutationService::new(&database)
+                .update_automation_rules(rules.clone())
+                .unwrap()
+                .value
+        };
+        assert_eq!(saved, rules);
+        let reopened = Database::open_file(&path).unwrap();
+        reopened.migrate().unwrap();
+        assert_eq!(
+            QueryService::new(&reopened).automation_rules().unwrap(),
+            rules
+        );
     }
 
     #[test]

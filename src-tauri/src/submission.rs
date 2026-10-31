@@ -44,6 +44,44 @@ impl<'a> SubmissionService<'a> {
         }
     }
 
+    /// Итоговое имя по шаблону из настроек (этап 6): фамилия, имя, неделя,
+    /// предмет и метка итоговой версии.
+    fn final_name(
+        &self,
+        homework_id: &str,
+        version_id: &str,
+        source_name: &str,
+    ) -> Result<String, AppError> {
+        let rules = crate::repositories::ReadRepository::new(self.database).automation_rules()?;
+        let (week, subject, version): (i64, String, String) =
+            self.database.with_connection(|c| {
+                c.query_row(
+                    "SELECT w.number, s.name, v.label FROM homeworks h
+                       JOIN weeks w ON w.id = h.week_id
+                       JOIN subjects s ON s.id = w.subject_id
+                       JOIN homework_versions v ON v.id = ?2 AND v.homework_id = h.id
+                      WHERE h.id = ?1",
+                    [homework_id, version_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(Into::into)
+            })?;
+        let extension = std::path::Path::new(source_name)
+            .extension()
+            .and_then(|x| x.to_str());
+        crate::naming::final_file_name(
+            &rules.final_name_pattern,
+            &crate::naming::NameTokens {
+                last_name: &rules.student_name.last_name,
+                first_name: &rules.student_name.first_name,
+                week,
+                subject: &subject,
+                version: &version,
+            },
+            extension,
+        )
+    }
+
     pub fn style_profile(&self) -> Result<Option<StyleProfileDto>, AppError> {
         self.database.with_connection(|c|{
   let row:Option<(String,String,String,String)>=c.query_row("SELECT id,relative_path,traits_json,created_at FROM style_profile_sources WHERE explicitly_selected=1 ORDER BY created_at DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
@@ -144,7 +182,7 @@ impl<'a> SubmissionService<'a> {
         let safe_name = match final_file_name {
             Some(name) if safe_package_name(&name) => name,
             Some(_) => return Err(BackendError::blocked("Итоговое имя файла небезопасно")),
-            None => final_name(homework_id, &source_name),
+            None => self.final_name(homework_id, &version_id, &source_name)?,
         };
         let target = PersistentPath::new(format!("{package_folder}/{safe_name}"))?;
         let copy = atomic_copy_committed(
@@ -511,15 +549,7 @@ fn now() -> String {
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()
 }
-fn final_name(homework_id: &str, source: &str) -> String {
-    let ext = std::path::Path::new(source)
-        .extension()
-        .and_then(|x| x.to_str());
-    match ext {
-        Some(e) => format!("Итог_{homework_id}.{e}"),
-        None => format!("Итог_{homework_id}"),
-    }
-}
+
 fn homework_folder(db: &Database, id: &str) -> Result<String, AppError> {
     db.with_connection(|c| {
         c.query_row("SELECT folder_path FROM homeworks WHERE id=?1", [id], |r| {
@@ -617,6 +647,38 @@ UPDATE homeworks SET final_version_id='v',final_file_name='Итог.md' WHERE id
             }
         }
     }
+    #[test]
+    fn package_file_name_follows_saved_pattern() {
+        let f = Fixture::new();
+        f.database
+            .with_connection(|c| {
+                c.execute("UPDATE homeworks SET final_file_name=NULL WHERE id='h'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let service = SubmissionService::new(&f.database, None);
+        // Шаблон использует фамилию, а она не задана: сборка останавливается.
+        assert_eq!(
+            service.build("h").unwrap_err().code,
+            crate::error::ErrorCode::Blocked
+        );
+        let rules = crate::dto::AutomationRulesDto {
+            student_name: crate::dto::StudentNameDto {
+                last_name: "Гончарова".into(),
+                first_name: "Доминика".into(),
+            },
+            final_name_pattern: "{Фамилия}_{Имя}_Неделя{Неделя} {Предмет} {Версия}".into(),
+            ..Default::default()
+        };
+        crate::mutation_service::MutationService::new(&f.database)
+            .update_automation_rules(rules)
+            .unwrap();
+        let built = service.build("h").unwrap();
+        let main = built.value.items[0].file.as_ref().unwrap();
+        assert_eq!(main.name, "Гончарова_Доминика_Неделя7 Математика v01.md");
+        assert!(f.vault.join(&main.relative_path).is_file());
+    }
+
     #[test]
     fn package_and_submitted_snapshot_are_real_and_immutable() {
         let f = Fixture::new();

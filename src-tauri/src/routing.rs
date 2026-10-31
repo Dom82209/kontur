@@ -105,12 +105,20 @@ impl<'a> RoutingService<'a> {
         // Тот же классификатор, что и для экспорта ЦУ: ключевые слова предметов и
         // порог неуверенности из настроек; архивные предметы не предлагаются.
         let context = crate::lms::export::classify_context(self.database, None)?;
+        let calendar = self.database.with_connection(crate::semester::calendar)?;
         self.database.with_transaction(|tx| {
             writes::insert_running_operation(tx, &operation_id, OperationKind::Classify, "Классификация файлов")?;
             for id in ids {
-                let (name, prior): (String, Option<String>) = tx.query_row("SELECT name,classification_json FROM inbox_files WHERE id=?1 AND status<>'routed'", [id], |r| Ok((r.get(0)?,r.get(1)?)))
+                let (name, prior, added_at): (String, Option<String>, String) = tx.query_row("SELECT name,classification_json,added_at FROM inbox_files WHERE id=?1 AND status<>'routed'", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))
                     .map_err(|e| match e { rusqlite::Error::QueryReturnedNoRows => BackendError::not_found("Файл во «Входящих» не найден"), other=>other.into() })?;
                 if prior.as_deref().and_then(|raw| serde_json::from_str::<ClassificationDto>(raw).ok()).is_some_and(|c| c.source==ClassificationSource::Manual) { continue; }
+                // Неделя по дате загрузки — из семестра (этап 6), только как подсказка.
+                let mut context = context.clone();
+                context.upload_week = calendar.as_ref().and_then(|calendar| {
+                    time::OffsetDateTime::parse(&added_at, &time::format_description::well_known::Rfc3339)
+                        .ok()
+                        .and_then(|at| calendar.week_at(at))
+                });
                 let classified = crate::lms::classify::classify_path(&name, &context);
                 writes::update_inbox_classification(tx, id, &classified.classification, classified.status)?;
             }

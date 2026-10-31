@@ -30,17 +30,10 @@ import {
 
 const rules: AutomationRules = {
   inboxPath: "Предметы/00 Входящие",
-  downloadsWatchPath: "Загрузки",
-  obsidianVaultPath: ".",
   studentName: { lastName: "Не задано", firstName: "Не задано" },
   finalNamePattern: "{Фамилия}_{Имя}_Неделя{Неделя} ДЗ",
-  versionPattern: "Работа_Неделя{Неделя}_v{Версия}",
-  weekDetection: "filename_then_calendar",
-  semesterStart: "1970-01-05T00:00:00Z",
   subjectRules: [],
   lowConfidenceThreshold: 0.7,
-  backupBeforeChange: true,
-  autoRouteHighConfidence: false,
   confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false },
   workflow: {
     roles: { analyst: "codex", author: "claude", reviewer: "codex" },

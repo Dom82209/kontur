@@ -71,6 +71,7 @@ import {
 } from "./data";
 import { AI_TASKS } from "../ai-types";
 import { plural } from "../../format";
+import { validateNamePattern } from "../../naming";
 import { lmsUrlProblem } from "../../lmsLinks";
 import { newOperationId } from "../intake";
 import { MockWorkflow, type MockContext } from "./workflow";
@@ -238,7 +239,7 @@ export class MockDesktopBridge implements DesktopBridge {
       activeHomework: active,
       deadlines,
       recentFiles,
-      automation: { state: "active", watchedPath: this.rules.downloadsWatchPath, lastRunAt: this.log[0]?.startedAt ?? at(0), pending: pending.length },
+      automation: { state: "active", watchedPath: "~/Downloads", lastRunAt: this.log[0]?.startedAt ?? at(0), pending: pending.length },
       providers: this.providers,
       weekProgress: { done: weekItems.filter((i) => i.done).length, total: weekItems.length, items: weekItems },
     });
@@ -1006,7 +1007,7 @@ export class MockDesktopBridge implements DesktopBridge {
         h.stage = "ready";
       },
       () => Object.assign(h, snapshot),
-      this.rules.backupBeforeChange ? `.kontur/backup/${Date.now()}/03 На сдачу` : null,
+      null,
       h.id,
     );
     return { operation: clone(op), value: clone(h) };
@@ -1081,11 +1082,13 @@ export class MockDesktopBridge implements DesktopBridge {
   }
 
   async updateAutomationRules(rules: AutomationRules): Promise<OperationResult<AutomationRules>> {
-    if (!rules.finalNamePattern.includes("{Неделя}")) throw new BridgeError("conflict", "Формат имени должен содержать {Неделя}, иначе имена недель совпадут");
+    const patternError = validateNamePattern(rules.finalNamePattern);
+    if (patternError) throw new BridgeError("conflict", patternError);
+    if (rules.inboxPath !== this.rules.inboxPath) throw new BridgeError("conflict", "Папка «Входящих» фиксирована и не задаётся правилами");
+    if (!rules.confirm.lowConfidenceRoute || !rules.confirm.markFinal || !rules.confirm.markSubmitted || rules.confirm.allowOverwrite) throw new BridgeError("database", "automation confirmation invariants are invalid");
     if (!Number.isInteger(rules.workflow.styleThreshold) || rules.workflow.styleThreshold < 0 || rules.workflow.styleThreshold > 10) {
       throw new BridgeError("conflict", "Порог расхождения со стилем должен быть целым числом от 0 до 10");
     }
-    const prev = clone(this.rules);
     const applyRules = (next: AutomationRules) => {
       this.rules = clone(next);
       for (const p of this.providers) {
@@ -1101,11 +1104,10 @@ export class MockDesktopBridge implements DesktopBridge {
       [".kontur/rules.json"],
       2,
       () => {
-        applyRules({ ...clone(rules), confirm: { ...rules.confirm, markSubmitted: true, allowOverwrite: false } });
+        applyRules({ ...clone(rules), confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false } });
       },
-      () => {
-        applyRules(prev);
-      },
+      // Как в backend: сохранение правил не отменяется через журнал.
+      null,
     );
     return { operation: clone(op), value: clone(this.rules) };
   }
@@ -1248,7 +1250,7 @@ export class MockDesktopBridge implements DesktopBridge {
 
   /** start → progress → commit → регистрация undo → completed → resolve. */
   private async runOp(kind: OperationKind, title: string, detail: string | null, paths: string[], steps: number, commit: () => void, undo: (() => void) | null, backupPath?: string | null, homeworkId: string | null = null): Promise<Operation> {
-    const backup = backupPath === undefined ? (this.rules.backupBeforeChange ? `.kontur/backup/${Date.now()}` : null) : backupPath;
+    const backup = backupPath ?? null;
     const op = this.startOp(kind, title, detail, paths, backup, homeworkId);
     const messages = ["Резервная копия", "Проверка конфликтов", "Перемещение", "Обновление Obsidian", "Готово"];
     for (let i = 1; i <= steps; i += 1) {

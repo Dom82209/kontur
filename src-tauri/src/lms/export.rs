@@ -206,10 +206,15 @@ pub fn classify_context(
             short_name: subject.short_name,
         })
         .collect();
+    // Файлы экспорта загружаются сейчас: неделя семестра на текущий момент.
+    let upload_week = database
+        .with_connection(crate::semester::calendar)?
+        .and_then(|calendar| calendar.week_at(time::OffsetDateTime::now_utc()));
     Ok(ClassifyContext {
         subjects,
         threshold: rules.low_confidence_threshold,
         course_title,
+        upload_week,
     })
 }
 

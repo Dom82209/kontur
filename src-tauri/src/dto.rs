@@ -456,13 +456,6 @@ pub enum ProviderId {
     Claude,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WeekDetection {
-    Calendar,
-    FilenameThenCalendar,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StudentNameDto {
@@ -542,19 +535,19 @@ pub struct WorkflowSettingsDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Этап 6: только настройки, которые backend действительно исполняет.
+/// Папки — в управляемых каталогах, даты недель — в семестре (этап 5).
 pub struct AutomationRulesDto {
+    /// Производное (только чтение): фиксированная папка «Входящих» внутри vault.
     pub inbox_path: String,
-    pub downloads_watch_path: String,
-    pub obsidian_vault_path: String,
+    /// Фамилия/имя: распознавание своей работы при подключении vault и итоговое имя.
     pub student_name: StudentNameDto,
+    /// Шаблон имени файла в «03 На сдачу» при сборке комплекта.
     pub final_name_pattern: String,
-    pub version_pattern: String,
-    pub week_detection: WeekDetection,
-    pub semester_start: String,
+    /// Производное: ключевые слова из `subject_keywords`.
     pub subject_rules: Vec<SubjectRuleDto>,
     pub low_confidence_threshold: f64,
-    pub backup_before_change: bool,
-    pub auto_route_high_confidence: bool,
+    /// Инварианты: все подтверждения включены, перезапись запрещена.
     pub confirm: ConfirmationRulesDto,
     pub workflow: WorkflowSettingsDto,
 }
@@ -589,20 +582,13 @@ impl Default for AutomationRulesDto {
     fn default() -> Self {
         Self {
             inbox_path: "Предметы/00 Входящие".to_owned(),
-            downloads_watch_path: "Загрузки".to_owned(),
-            obsidian_vault_path: ".".to_owned(),
             student_name: StudentNameDto {
                 last_name: "Не задано".to_owned(),
                 first_name: "Не задано".to_owned(),
             },
             final_name_pattern: "{Фамилия}_{Имя}_Неделя{Неделя} ДЗ".to_owned(),
-            version_pattern: "Работа_Неделя{Неделя}_v{Версия}".to_owned(),
-            week_detection: WeekDetection::FilenameThenCalendar,
-            semester_start: "1970-01-05T00:00:00Z".to_owned(),
             subject_rules: Vec::new(),
             low_confidence_threshold: 0.7,
-            backup_before_change: true,
-            auto_route_high_confidence: false,
             confirm: ConfirmationRulesDto {
                 low_confidence_route: true,
                 mark_final: true,

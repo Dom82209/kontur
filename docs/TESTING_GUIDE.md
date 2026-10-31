@@ -31,6 +31,13 @@
 - `cargo test semester` — границы недель по местной полуночи (Москва, UTC−5), граница года, до/после семестра, неверный ввод, пересчёт дат недель с ревизией, точный/неизвестный срок, неизменяемость сданного ДЗ, «приблизительные» старые сроки, честная неделя на главной.
 - `src/lib/bridge/mock/semester.test.ts`, `src/components/domain/semester-ui.test.ts` — контракт mock и преобразования времени в UI.
 
+## Автоматизация (этап 6)
+
+- `cargo test naming` — подстановка шаблона, очистка разделителей пути, блокировка без фамилии/имени, некорректные шаблоны.
+- `cargo test automation_rules`, `cargo test saved_rules_survive_restart`, `cargo test legacy_rules_with_retired_fields` — контракт настроек, инварианты без частичных изменений, перезапуск, старый JSON.
+- `cargo test package_file_name_follows_saved_pattern`, `cargo test classify::tests` — поведение: имя комплекта, порог, неделя по дате загрузки.
+- `src/lib/naming.test.ts`, `src/lib/bridge/mock/automation.test.ts` — те же правила во frontend и mock.
+
 ## Полный набор
 
 ```bash

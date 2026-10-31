@@ -981,23 +981,26 @@ export interface SubjectRule {
   keywords: string[];
 }
 
+/**
+ * Этап 6: только настройки, которые backend исполняет. Папки задаются в
+ * «Управляемых каталогах», даты недель — в «Семестре».
+ */
 export interface AutomationRules {
+  /** Только чтение: фиксированная папка «Входящих» внутри vault. */
   inboxPath: string;
-  downloadsWatchPath: string;
-  obsidianVaultPath: string;
+  /** Распознавание своей работы при подключении vault и итоговое имя файла. */
   studentName: { lastName: string; firstName: string };
-  /** Токены: {Фамилия} {Имя} {Неделя} {Предмет} {Версия}. */
+  /** Имя в «03 На сдачу» при сборке комплекта. Токены: {Фамилия} {Имя} {Неделя} {Предмет} {Версия}. */
   finalNamePattern: string;
-  versionPattern: string;
-  weekDetection: "calendar" | "filename_then_calendar";
-  semesterStart: ISODate;
+  /** Производное от ключевых слов предметов («Настройки → Предметы»). */
   subjectRules: SubjectRule[];
   lowConfidenceThreshold: number;
-  backupBeforeChange: boolean;
-  autoRouteHighConfidence: boolean;
+  /** Инварианты контракта: подтверждения всегда включены, перезапись запрещена. */
   confirm: {
-    lowConfidenceRoute: boolean;
-    markFinal: boolean;
+    /** Всегда true. Неуверенный файл раскладывается только после ручного подтверждения. */
+    lowConfidenceRoute: true;
+    /** Всегда true. Итоговая версия выбирается в диалоге подтверждения. */
+    markFinal: true;
     /** Всегда true. Отправка ДЗ никогда не автоматизируется. */
     markSubmitted: true;
     /** Всегда false. Перезапись файлов запрещена контрактом. */

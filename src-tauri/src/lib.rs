@@ -20,6 +20,7 @@ mod ipc_commands;
 pub mod lms;
 mod lms_commands;
 pub mod mutation_service;
+pub mod naming;
 pub mod query_service;
 pub mod repositories;
 pub mod routing;

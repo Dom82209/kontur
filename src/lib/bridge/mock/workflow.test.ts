@@ -68,10 +68,13 @@ beforeEach(async () => {
 
 describe("рабочий цикл ДЗ (mock)", () => {
   it("сохраняет роли и порог, обновляет ProviderStatus и применяет настройки к новым запускам", async () => {
-    const rules = await b.getAutomationRules();
+    const original = await b.getAutomationRules();
+    const rules = structuredClone(original);
     rules.workflow.roles = { analyst: "claude", author: "codex", reviewer: "claude" };
     rules.workflow.styleThreshold = 7;
     const saved = await b.updateAutomationRules(rules);
+    // Как в backend: сохранение правил не отменяется через журнал.
+    expect(saved.operation.undoable).toBe(false);
 
     expect((await b.getAutomationRules()).workflow).toMatchObject({
       roles: { analyst: "claude", author: "codex", reviewer: "claude" },
@@ -94,8 +97,7 @@ describe("рабочий цикл ДЗ (mock)", () => {
     expect(review).toMatchObject({ role: "reviewer", provider: "claude" });
     expect(review.result?.style?.threshold).toBe(7);
 
-    await b.undoOperation((await b.getActivityLog()).find((o) => o.kind === "update_rules" && o.undoable)!.id);
-    await b.undoOperation(saved.operation.id);
+    await b.updateAutomationRules(original);
     expect((await b.getAutomationRules()).workflow.roles).toEqual({ analyst: "codex", author: "claude", reviewer: "codex" });
     expect((await b.getProviderStatus("codex")).roles).toEqual(["analyst", "reviewer"]);
   });

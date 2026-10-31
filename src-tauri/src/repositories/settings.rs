@@ -31,9 +31,10 @@ pub(crate) fn load_automation_rules(
         defaults.subject_rules = active_subject_rules(connection)?;
         return Ok(defaults);
     };
-    let saved: Value = serde_json::from_str(&raw).map_err(|error| {
+    let mut saved: Value = serde_json::from_str(&raw).map_err(|error| {
         BackendError::database(format!("invalid automation rules JSON: {error}"))
     })?;
+    strip_retired_keys(&mut saved);
     if contains_secret_key(&saved) {
         return Err(BackendError::database(
             "stored automation rules contain a forbidden secret key",
@@ -51,8 +52,32 @@ pub(crate) fn load_automation_rules(
     }
     // Ключевые слова живут в `subject_keywords` (этап 3); JSON-копия не используется.
     rules.subject_rules = active_subject_rules(connection)?;
+    // Производные значения и инварианты всегда берутся из контракта, а не из JSON.
+    rules.inbox_path = AutomationRulesDto::default().inbox_path;
+    rules.confirm = AutomationRulesDto::default().confirm;
     validate_rules(&rules)?;
     Ok(rules)
+}
+
+/// Поля, которые до этапа 6 сохранялись, но не исполнялись backend: папки
+/// (теперь — управляемые каталоги), начало семестра и способ определения недели
+/// (теперь — семестр), шаблон версии, резервная копия и автораскладка.
+const RETIRED_KEYS: &[&str] = &[
+    "downloadsWatchPath",
+    "obsidianVaultPath",
+    "versionPattern",
+    "weekDetection",
+    "semesterStart",
+    "backupBeforeChange",
+    "autoRouteHighConfidence",
+];
+
+fn strip_retired_keys(saved: &mut Value) {
+    if let Value::Object(object) = saved {
+        for key in RETIRED_KEYS {
+            object.remove(*key);
+        }
+    }
 }
 
 fn active_subject_rules(
@@ -103,10 +128,34 @@ pub(crate) fn validate_rules(rules: &AutomationRulesDto) -> Result<(), BackendEr
             "automation styleThreshold must be between 0 and 10",
         ));
     }
-    if !rules.confirm.mark_submitted || rules.confirm.allow_overwrite {
+    let confirm = &rules.confirm;
+    if !confirm.mark_submitted
+        || confirm.allow_overwrite
+        || !confirm.low_confidence_route
+        || !confirm.mark_final
+    {
         return Err(BackendError::database(
             "automation confirmation invariants are invalid",
         ));
+    }
+    Ok(())
+}
+
+/// Проверки при сохранении: то, что пользователь вводит руками. При чтении
+/// старые значения не ломают загрузку — их заблокирует место использования.
+pub(crate) fn validate_rules_for_save(rules: &AutomationRulesDto) -> Result<(), BackendError> {
+    validate_rules(rules)?;
+    if rules.inbox_path != AutomationRulesDto::default().inbox_path {
+        return Err(BackendError::conflict(
+            "Папка «Входящих» фиксирована и не задаётся правилами",
+        ));
+    }
+    crate::naming::validate_pattern(&rules.final_name_pattern)?;
+    for part in [
+        &rules.student_name.last_name,
+        &rules.student_name.first_name,
+    ] {
+        crate::naming::validate_name_part(part)?;
     }
     Ok(())
 }

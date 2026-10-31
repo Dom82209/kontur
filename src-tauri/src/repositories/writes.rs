@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     parse_json,
-    settings::{contains_secret_key, validate_rules},
+    settings::{contains_secret_key, validate_rules_for_save},
 };
 
 pub struct InboxClassificationRow {
@@ -19,7 +19,7 @@ pub fn upsert_automation_rules(
     transaction: &Transaction<'_>,
     rules: &AutomationRulesDto,
 ) -> Result<(), BackendError> {
-    validate_rules(rules)?;
+    validate_rules_for_save(rules)?;
     // Ключевые слова предметов — в `subject_keywords`; JSON их не хранит.
     for rule in &rules.subject_rules {
         crate::subjects::replace_keywords(transaction, &rule.subject_id, &rule.keywords)?;

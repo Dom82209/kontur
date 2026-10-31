@@ -316,8 +316,39 @@ mod tests {
         let rules = QueryService::new(&database).automation_rules().unwrap();
         assert_eq!(rules.workflow.style_threshold, 4);
         assert_eq!(rules.inbox_path, "Предметы/00 Входящие");
-        assert!(rules.backup_before_change);
-        assert!(!rules.auto_route_high_confidence);
+        assert!(rules.confirm.low_confidence_route && rules.confirm.mark_final);
+    }
+
+    #[test]
+    fn legacy_rules_with_retired_fields_still_load() {
+        let database = migrated_database();
+        database
+            .with_connection(|c| {
+                c.execute(
+                    "INSERT INTO app_settings(key, value_json) VALUES ('automation_rules', ?1)",
+                    [r#"{"inboxPath":"Куда-то","downloadsWatchPath":"~/Downloads","obsidianVaultPath":".","versionPattern":"v{Версия}","weekDetection":"calendar","semesterStart":"1970-01-05T00:00:00Z","backupBeforeChange":false,"autoRouteHighConfidence":true,"lowConfidenceThreshold":0.8,"finalNamePattern":"{Неделя}","confirm":{"lowConfidenceRoute":false,"markFinal":false,"markSubmitted":true,"allowOverwrite":false}}"#],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let rules = QueryService::new(&database).automation_rules().unwrap();
+        assert_eq!(rules.low_confidence_threshold, 0.8);
+        assert_eq!(rules.final_name_pattern, "{Неделя}");
+        // Производные значения и инварианты — из контракта, а не из JSON.
+        assert_eq!(rules.inbox_path, "Предметы/00 Входящие");
+        assert!(rules.confirm.low_confidence_route && rules.confirm.mark_final);
+        let json = serde_json::to_value(&rules).unwrap();
+        for retired in [
+            "semesterStart",
+            "weekDetection",
+            "backupBeforeChange",
+            "versionPattern",
+        ] {
+            assert!(
+                json.get(retired).is_none(),
+                "{retired} must not be in the contract"
+            );
+        }
     }
 
     #[test]

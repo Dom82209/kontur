@@ -14,7 +14,7 @@ import { ErrorState, SkeletonRows } from "../components/ui/States";
 import { bridge, type AiTask } from "../lib/bridge";
 import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useRulesDraft } from "../lib/hooks/useRulesDraft";
-import { NAME_TOKENS, applyNamePattern } from "../lib/naming";
+import { NAME_TOKENS, applyNamePattern, validateNamePattern } from "../lib/naming";
 
 const PROVIDERS = [
   { value: "codex", label: "Codex" },
@@ -93,7 +93,8 @@ export function SettingsPage() {
                 <span className="eyebrow">Предпросмотр</span>
                 <span className="mono">{applyNamePattern(rules.finalNamePattern, { ...rules.studentName, week: 7, subject: "Основы бизнес-аналитики", version: "v02" }, "xlsx")}</span>
               </div>
-              {!rules.finalNamePattern.includes("{Неделя}") && <div className="notice notice--warn">Без {"{Неделя}"} имена разных недель совпадут — сохранение будет отклонено.</div>}
+              {validateNamePattern(rules.finalNamePattern) && <div className="notice notice--warn" data-testid="pattern-error">{validateNamePattern(rules.finalNamePattern)} — сохранение будет отклонено.</div>}
+              <p className="field__hint">Имя применяется при сборке комплекта в «03 На сдачу». Если шаблон использует фамилию или имя, без них сборка остановится с просьбой их указать.</p>
             </div>
           )}
         </section>

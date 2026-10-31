@@ -313,13 +313,8 @@ export function buildProviders(): ProviderStatus[] {
 export function buildRules(): AutomationRules {
   return {
     inboxPath: INBOX_FOLDER,
-    downloadsWatchPath: "~/Downloads",
-    obsidianVaultPath: "~/Documents/Obsidian/Учёба",
     studentName: { ...STUDENT },
     finalNamePattern: DEFAULT_FINAL_PATTERN,
-    versionPattern: "Работа_Неделя{Неделя}_v{Версия}",
-    weekDetection: "filename_then_calendar",
-    semesterStart: SEMESTER_START.toISOString(),
     subjectRules: [
       { subjectId: "eng", keywords: ["англ", "english", "essay", "eng_"] },
       { subjectId: "bstudio", keywords: ["бизнес-студ", "бизнес студ", "business studio", "кейс"] },
@@ -334,8 +329,6 @@ export function buildRules(): AutomationRules {
       { subjectId: "stress", keywords: ["стресс", "stress"] },
     ],
     lowConfidenceThreshold: 0.7,
-    backupBeforeChange: true,
-    autoRouteHighConfidence: false,
     confirm: { lowConfidenceRoute: true, markFinal: true, markSubmitted: true, allowOverwrite: false },
     workflow: {
       roles: { analyst: "codex", author: "claude", reviewer: "codex" },

@@ -1,22 +1,35 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
 import { bridge, type AutomationRules } from "../bridge";
 import { useBridgeQuery } from "./useBridgeQuery";
 
-/** Черновик правил автоматизации: правки копятся локально и сохраняются одной операцией. */
+const same = (a: AutomationRules | null, b: AutomationRules | null) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Черновик правил автоматизации: правки копятся локально и сохраняются одной
+ * операцией. Без несохранённых правок черновик всегда следует за сохранёнными
+ * правилами backend (например, после изменения ключевых слов в «Предметах»);
+ * с правками — не затирается, пока пользователь не сохранит или не сбросит их.
+ */
 export function useRulesDraft() {
   const q = useBridgeQuery(() => bridge.getAutomationRules(), [], ["operation:completed"]);
-  const { reportError, undo } = useOps();
+  const { reportError } = useOps();
   const toast = useToast();
   const [draft, setDraft] = useState<AutomationRules | null>(null);
   const [saving, setSaving] = useState(false);
+  const base = useRef<AutomationRules | null>(null);
 
   useEffect(() => {
-    if (q.data && !draft) setDraft(q.data);
-  }, [q.data, draft]);
+    if (!q.data) return;
+    setDraft((current) => {
+      const pristine = current === null || same(current, base.current);
+      base.current = q.data;
+      return pristine ? q.data : current;
+    });
+  }, [q.data]);
 
-  const dirty = !!draft && !!q.data && JSON.stringify(draft) !== JSON.stringify(q.data);
+  const dirty = !!draft && !!q.data && !same(draft, q.data);
 
   const update = useCallback((patch: Partial<AutomationRules> | ((r: AutomationRules) => AutomationRules)) => {
     setDraft((d) => (d ? (typeof patch === "function" ? patch(d) : { ...d, ...patch }) : d));
@@ -27,9 +40,10 @@ export function useRulesDraft() {
     setSaving(true);
     try {
       const res = await bridge.updateAutomationRules(draft);
+      base.current = res.value;
       setDraft(res.value);
       q.setData(() => res.value);
-      toast.push({ tone: "ok", title: "Правила сохранены", text: "Перед изменением создана резервная копия", action: { label: "Отменить", run: () => void undo(res.operation.id).then(() => setDraft(null)) } });
+      toast.push({ tone: "ok", title: "Правила сохранены", text: "Действуют сразу и сохраняются после перезапуска" });
     } catch (e) {
       reportError(e, "Правила не сохранены");
     } finally {

@@ -4,10 +4,10 @@ import { Link } from "react-router-dom";
 import { ActivityLog } from "../components/domain/ActivityLog";
 import { DownloadCandidates } from "../components/domain/DownloadsWatcher";
 import { SaveBar } from "../components/ui/SaveBar";
-import { Segmented } from "../components/ui/Segmented";
 import { ErrorState, SkeletonRows } from "../components/ui/States";
-import { Switch } from "../components/ui/Switch";
+import { bridge } from "../lib/bridge";
 import { formatDate } from "../lib/format";
+import { useBridgeQuery } from "../lib/hooks/useBridgeQuery";
 import { useRulesDraft } from "../lib/hooks/useRulesDraft";
 import { useSubjectNames } from "../lib/hooks/useSubjectNames";
 import { applyNamePattern } from "../lib/naming";
@@ -60,6 +60,7 @@ function KeywordEditor({ keywords, onChange, label }: { keywords: string[]; onCh
 export function AutomationPage() {
   const { rules, error, reload, dirty, saving, update, save, reset } = useRulesDraft();
   const names = useSubjectNames();
+  const semester = useBridgeQuery(() => bridge.getSemester(), [], ["operation:completed"]);
 
   if (error && !rules) return <ErrorState message={error} onRetry={() => void reload()} />;
 
@@ -109,18 +110,19 @@ export function AutomationPage() {
               </Rule>
 
               <Rule icon={<Hash />} n="03" title="Как определяется неделя">
-                <Segmented
-                  label="Способ определения недели"
-                  value={rules.weekDetection}
-                  onChange={(v) => update({ weekDetection: v })}
-                  options={[
-                    { value: "filename_then_calendar", label: "Имя файла, затем календарь" },
-                    { value: "calendar", label: "Только календарь" },
-                  ]}
-                />
                 <p className="rule__sentence">
-                  Неделя 1 начинается <span className="token">{formatDate(rules.semesterStart)}</span>. Файлы без номера в имени получают неделю по дате загрузки.
+                  Сначала по номеру в пути: папка «Неделя 07» или «нед7» в имени файла.
+                  {semester.data ? (
+                    <>
+                      {" "}Если номера нет, «Контур» предлагает неделю по дате загрузки: неделя 1 начинается <span className="token" data-testid="semester-start">{formatDate(semester.data.weeks[0]!.startsAt)}</span>. Такой файл всегда ждёт вашего подтверждения.
+                    </>
+                  ) : (
+                    <> Семестр не настроен, поэтому файл без номера недели ждёт ручного выбора.</>
+                  )}
                 </p>
+                <Link to="/settings" className="rule__link">
+                  Начало и длина семестра — в настройках <ArrowRight size={12} />
+                </Link>
                 <div className="rule__inline">
                   <label htmlFor="threshold">Файл считается неоднозначным, если уверенность ниже</label>
                   <input id="threshold" type="range" min={0.4} max={0.95} step={0.05} value={rules.lowConfidenceThreshold} onChange={(e) => update({ lowConfidenceThreshold: Number(e.target.value) })} className="range" />
@@ -130,65 +132,37 @@ export function AutomationPage() {
 
               <Rule icon={<GitBranch />} n="04" title="Как назначается версия">
                 <p className="rule__sentence">
-                  Каждый новый черновик в «02 Работа» получает следующий номер: <span className="token mono">v01</span> → <span className="token mono">v02</span> → <span className="token mono">v03</span>. Номера не переиспользуются, даже после отмены. Шаблон: <span className="token mono">{rules.versionPattern}</span>.
+                  Каждая новая версия ДЗ получает следующий номер: <span className="token mono">v01</span> → <span className="token mono">v02</span> → <span className="token mono">v03</span>. Номер хранится в «Контуре»; ваши файлы не переименовываются.
                 </p>
               </Rule>
 
               <Rule icon={<FileSignature />} n="05" title="Формат итогового имени">
                 <p className="rule__sentence">
-                  Итоговая версия копируется в «03 На сдачу» как <span className="token mono">{rules.finalNamePattern}</span>
+                  При сборке комплекта итоговая версия копируется в «03 На сдачу» как <span className="token mono">{rules.finalNamePattern}</span>. Шаблон меняется в настройках.
                 </p>
                 <p className="rule__example">
                   Пример: <span className="mono">{applyNamePattern(rules.finalNamePattern, { ...rules.studentName, week: 7, subject: "Статистика", version: "v03" }, "pdf")}</span>
                 </p>
               </Rule>
 
-              <Rule icon={<ShieldCheck />} n="06" title="Резервная копия и подтверждения">
+              <Rule icon={<ShieldCheck />} n="06" title="Подтверждения и защита файлов">
+                <p className="rule__sentence">Эти гарантии встроены в «Контур» и не отключаются.</p>
                 <ul className="toggles">
-                  <li>
-                    <div>
-                      <div className="toggles__title">Резервная копия перед любым изменением</div>
-                      <div className="toggles__hint">Копия кладётся в .kontur/backup, по ней работает «Отменить».</div>
-                    </div>
-                    <Switch label="Резервная копия" checked={rules.backupBeforeChange} onChange={(v) => update({ backupBeforeChange: v })} />
-                  </li>
-                  <li>
-                    <div>
-                      <div className="toggles__title">Раскладывать уверенные файлы без участия</div>
-                      <div className="toggles__hint">Если выключено, файлы ждут во «Входящих» нажатия «Разложить».</div>
-                    </div>
-                    <Switch label="Автораскладка" checked={rules.autoRouteHighConfidence} onChange={(v) => update({ autoRouteHighConfidence: v })} />
-                  </li>
-                  <li>
-                    <div>
-                      <div className="toggles__title">Подтверждать неуверенную раскладку</div>
-                    </div>
-                    <Switch label="Подтверждать неуверенную раскладку" checked={rules.confirm.lowConfidenceRoute} onChange={(v) => update((d) => ({ ...d, confirm: { ...d.confirm, lowConfidenceRoute: v } }))} />
-                  </li>
-                  <li>
-                    <div>
-                      <div className="toggles__title">Подтверждать назначение итоговой версии</div>
-                    </div>
-                    <Switch label="Подтверждать итоговую" checked={rules.confirm.markFinal} onChange={(v) => update((d) => ({ ...d, confirm: { ...d.confirm, markFinal: v } }))} />
-                  </li>
-                  <li data-locked>
-                    <div>
-                      <div className="toggles__title">
-                        <Lock size={12} /> Статус «Отправлено» — только вручную
+                  {[
+                    ["Неуверенная раскладка — только с подтверждением", "Файл с уверенностью ниже порога или с неделей по дате загрузки ждёт выбора во «Входящих». Раскладка всегда запускается вами."],
+                    ["Итоговая версия — через подтверждение", "Перед назначением показывается версия и итоговое имя файла."],
+                    ["Статус «Отправлено» — только вручную", "Всегда требует подтверждения. «Контур» не загружает работы на сайт."],
+                    ["Перезапись файлов запрещена", "Дубли сохраняются с суффиксом « (2)»; «Отменить» удаляет только файлы, созданные этой операцией."],
+                  ].map(([title, hint]) => (
+                    <li key={title} data-locked>
+                      <div>
+                        <div className="toggles__title">
+                          <Lock size={12} /> {title}
+                        </div>
+                        <div className="toggles__hint">{hint}</div>
                       </div>
-                      <div className="toggles__hint">Всегда требует подтверждения. «Контур» не загружает работы на сайт.</div>
-                    </div>
-                    <Switch label="Подтверждение отправки" checked onChange={() => undefined} disabled />
-                  </li>
-                  <li data-locked>
-                    <div>
-                      <div className="toggles__title">
-                        <Lock size={12} /> Перезапись файлов
-                      </div>
-                      <div className="toggles__hint">Запрещена. Дубли сохраняются с суффиксом « (2)».</div>
-                    </div>
-                    <Switch label="Перезапись" checked={false} onChange={() => undefined} disabled />
-                  </li>
+                    </li>
+                  ))}
                 </ul>
               </Rule>
             </>

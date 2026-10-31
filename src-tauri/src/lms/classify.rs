@@ -23,6 +23,9 @@ pub struct ClassifyContext {
     pub threshold: f64,
     /// Название курса: общий корневой каталог архива или имя архива.
     pub course_title: Option<String>,
+    /// Неделя семестра на момент загрузки файла (этап 6). Используется, только
+    /// если номера недели нет в пути, и всегда требует подтверждения.
+    pub upload_week: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,12 +88,21 @@ pub fn classify_path(path: &str, context: &ClassifyContext) -> EntryClassificati
         values.dedup();
         values
     };
-    let week_number = match distinct.as_slice() {
-        [] => {
+    let mut week_guessed = false;
+    let week_number = match (distinct.as_slice(), context.upload_week) {
+        ([], Some(week)) => {
+            reasons.push(format!(
+                "Номер недели в пути не найден; по дате загрузки и семестру — неделя {week}, подтвердите"
+            ));
+            week_score = 0.5;
+            week_guessed = true;
+            Some(week)
+        }
+        ([], None) => {
             reasons.push("Номер недели в пути не найден".to_owned());
             None
         }
-        [week] => {
+        ([week], _) => {
             let (_, source, in_directory) = weeks[0];
             reasons.push(format!(
                 "{} «{source}» → неделя {week}",
@@ -107,7 +119,7 @@ pub fn classify_path(path: &str, context: &ClassifyContext) -> EntryClassificati
             };
             Some(*week)
         }
-        many => {
+        (many, _) => {
             reasons.push(format!(
                 "В пути несколько номеров недель ({}) — уточните вручную",
                 many.iter()
@@ -192,7 +204,8 @@ pub fn classify_path(path: &str, context: &ClassifyContext) -> EntryClassificati
         / 100.0;
     let complete =
         subject_id.is_some() && week_number.is_some() && category != MaterialCategory::Unknown;
-    let status = if complete && confidence >= context.threshold {
+    // Неделя по дате загрузки — догадка: такой файл всегда ждёт подтверждения.
+    let status = if complete && !week_guessed && confidence >= context.threshold {
         InboxStatus::Classified
     } else {
         InboxStatus::Ambiguous
@@ -521,6 +534,7 @@ mod tests {
 
     fn context() -> ClassifyContext {
         ClassifyContext {
+            upload_week: None,
             subjects: vec![
                 SubjectMatcher {
                     id: "oba".to_owned(),
@@ -624,5 +638,38 @@ mod tests {
         assert_eq!(full.classification.confidence, 1.0);
         let partial = manual_classification(None, Some(2), MaterialCategory::Lecture);
         assert_eq!(partial.status, InboxStatus::Ambiguous);
+    }
+
+    #[test]
+    fn upload_week_is_a_suggestion_that_needs_confirmation() {
+        let mut context = context();
+        context.upload_week = Some(5);
+        let guessed = classify_path("ОБА/Лекции/лекция бизнес-аналитика.pdf", &context);
+        assert_eq!(guessed.classification.week_number, Some(5));
+        assert_eq!(guessed.status, InboxStatus::Ambiguous);
+        assert!(guessed
+            .classification
+            .reasons
+            .iter()
+            .any(|r| r.contains("по дате загрузки")));
+        // Номер в пути важнее даты загрузки.
+        let explicit = classify_path("ОБА/Неделя 03/Лекции/лекция.pdf", &context);
+        assert_eq!(explicit.classification.week_number, Some(3));
+    }
+
+    #[test]
+    fn threshold_from_settings_changes_the_status() {
+        let mut context = context();
+        let path = "ОБА/лекция бизнес-аналитика нед3.pdf";
+        context.threshold = 0.5;
+        let lenient = classify_path(path, &context);
+        context.threshold = 0.99;
+        let strict = classify_path(path, &context);
+        assert_eq!(
+            lenient.classification.confidence,
+            strict.classification.confidence
+        );
+        assert_eq!(lenient.status, InboxStatus::Classified);
+        assert_eq!(strict.status, InboxStatus::Ambiguous);
     }
 }
