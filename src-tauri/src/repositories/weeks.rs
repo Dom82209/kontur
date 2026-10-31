@@ -14,6 +14,7 @@ struct WeekRow {
     starts_at: String,
     ends_at: String,
     topic: Option<String>,
+    dates_source: String,
 }
 
 impl ReadRepository<'_> {
@@ -34,6 +35,14 @@ impl ReadRepository<'_> {
                     _ => {}
                 }
             }
+            // Даты не из семестра — приблизительные (записаны старым путём).
+            let dates_source = if row.starts_at.trim().is_empty() {
+                crate::dto::WeekDatesSource::Unknown
+            } else if row.dates_source == "semester" {
+                crate::dto::WeekDatesSource::Semester
+            } else {
+                crate::dto::WeekDatesSource::Legacy
+            };
             output.push(WeekDto {
                 homework_ids: homework_ids.remove(&row.id).unwrap_or_default(),
                 id: row.id,
@@ -41,6 +50,7 @@ impl ReadRepository<'_> {
                 number: row.number,
                 starts_at: known(row.starts_at),
                 ends_at: known(row.ends_at),
+                dates_source,
                 topic: row.topic,
                 lectures,
                 seminars,
@@ -60,10 +70,10 @@ impl ReadRepository<'_> {
     fn week_rows(&self, subject_id: Option<&str>) -> Result<Vec<WeekRow>, BackendError> {
         self.database.with_connection(|connection| {
             let sql = if subject_id.is_some() {
-                "SELECT id, subject_id, number, starts_at, ends_at, topic
+                "SELECT id, subject_id, number, starts_at, ends_at, topic, dates_source
                  FROM weeks WHERE subject_id = ?1 ORDER BY number, id"
             } else {
-                "SELECT id, subject_id, number, starts_at, ends_at, topic
+                "SELECT id, subject_id, number, starts_at, ends_at, topic, dates_source
                  FROM weeks ORDER BY subject_id, number, id"
             };
             let mut statement = connection.prepare(sql)?;
@@ -81,6 +91,7 @@ impl ReadRepository<'_> {
                     starts_at: row.get(3)?,
                     ends_at: row.get(4)?,
                     topic: row.get(5)?,
+                    dates_source: row.get(6)?,
                 });
             }
             Ok(output)

@@ -24,6 +24,8 @@ pub mod query_service;
 pub mod repositories;
 pub mod routing;
 mod routing_commands;
+pub mod semester;
+mod semester_commands;
 mod subject_commands;
 pub mod subjects;
 pub mod submission;
@@ -111,6 +113,9 @@ pub fn run() {
             subject_commands::preview_subject_merge,
             subject_commands::merge_subjects,
             subject_commands::create_homework,
+            semester_commands::get_semester,
+            semester_commands::set_semester,
+            semester_commands::set_homework_deadline,
             intake_commands::open_obsidian_note,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,

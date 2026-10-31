@@ -47,10 +47,14 @@ export function DashboardPage() {
       <motion.header className="dash__hero" variants={rise}>
         <div className="dash__week">
           <span className="eyebrow">Учебная неделя</span>
-          <span className="dash__weeknum num">{d ? pad2(d.academicWeek.number) : "··"}</span>
+          <span className="dash__weeknum num">{d?.academicWeek ? pad2(d.academicWeek.number) : "··"}</span>
           {d && (
             <span className="faint">
-              {formatDate(d.academicWeek.startsAt)} — {formatDate(d.academicWeek.endsAt)}
+              {d.academicWeek ? (
+                `${formatDate(d.academicWeek.startsAt)} — ${formatDate(d.academicWeek.endsAt)}`
+              ) : (
+                <Link to="/settings">семестр не настроен</Link>
+              )}
             </span>
           )}
         </div>

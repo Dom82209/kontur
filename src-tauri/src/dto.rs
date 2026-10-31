@@ -75,12 +75,56 @@ pub struct WeekDto {
     /// `None` — даты недели неизвестны до настройки семестра.
     pub starts_at: Option<String>,
     pub ends_at: Option<String>,
+    /// Этап 5: откуда даты недели (семестр, приблизительные старые или неизвестны).
+    pub dates_source: WeekDatesSource,
     pub topic: Option<String>,
     pub lectures: Vec<FileRefDto>,
     pub seminars: Vec<FileRefDto>,
     pub materials: Vec<FileRefDto>,
     /// Этап 4: все ДЗ недели в порядке `ordinal` (0..N).
     pub homework_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeekDatesSource {
+    /// Семестр не настроен: даты неизвестны.
+    Unknown,
+    /// Вычислены из настроенного семестра.
+    Semester,
+    /// Записаны до этапа 5 относительно даты раскладки — приблизительные.
+    Legacy,
+}
+
+impl WeekDatesSource {
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "semester" => Self::Semester,
+            "legacy" => Self::Legacy,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeadlineSource {
+    /// Задан пользователем.
+    Manual,
+    /// Записан до этапа 5 (часто условный «+7 дней»).
+    Legacy,
+    /// Из задания LMS.
+    Lms,
+}
+
+impl DeadlineSource {
+    pub fn from_db(value: Option<&str>) -> Self {
+        match value {
+            Some("manual") => Self::Manual,
+            Some("lms") => Self::Lms,
+            _ => Self::Legacy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,6 +337,8 @@ pub struct HomeworkDto {
     pub title: String,
     /// `None` — срок неизвестен (не выдумывается).
     pub deadline: Option<String>,
+    /// Этап 5: происхождение срока; `None`, если срок неизвестен.
+    pub deadline_source: Option<DeadlineSource>,
     pub stage: HomeworkStage,
     pub task_files: Vec<FileRefDto>,
     pub versions: Vec<HomeworkVersionDto>,

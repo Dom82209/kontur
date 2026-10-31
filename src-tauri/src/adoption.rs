@@ -677,11 +677,20 @@ fn insert_plan(
         if taken {
             return Err(stale(&week.folder_path));
         }
-        // Даты недели неизвестны до настройки семестра (этап 5): пустая строка = не задано.
+        // Даты недели — из семестра, если он настроен (этап 5), иначе неизвестны.
+        let (starts, ends, source) = crate::semester::new_week_dates(connection, week.number)?;
         connection.execute(
-            "INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path)
-             VALUES (?1,?2,?3,'','',?4)",
-            params![week.id, week.subject_id, week.number, week.folder_path],
+            "INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path,dates_source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                week.id,
+                week.subject_id,
+                week.number,
+                starts,
+                ends,
+                week.folder_path,
+                source
+            ],
         )?;
         record(
             connection,

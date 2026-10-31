@@ -7,6 +7,7 @@ import { useOps } from "../app/operations";
 import { useToast } from "../app/toasts";
 import { IterationChain } from "../components/domain/IterationChain";
 import { AiStepActions } from "../components/domain/AiStepActions";
+import { DeadlineEditor } from "../components/domain/DeadlineEditor";
 import { PromptBox } from "../components/domain/PromptBox";
 import { ReviewResultView } from "../components/domain/ReviewResultView";
 import { isOpenRun, RunMonitor } from "../components/domain/RunMonitor";
@@ -290,7 +291,9 @@ export function HomeworkDetailPage() {
           <h1 className="pagehead__title">{h.title}</h1>
           <p className="deadline-inline" data-tone={locked ? "past" : deadline.tone}>
             {h.deadline ? `Дедлайн ${formatDateTime(h.deadline)} · ${deadline.text}` : `Дедлайн: ${deadline.text}`}
+            {h.deadlineSource === "legacy" && <span className="faint"> · приблизительный, уточните</span>}
           </p>
+          <DeadlineEditor key={`${h.id}:${h.revision}`} homework={h} onSaved={() => void wf.reloadAll()} />
         </div>
         <div className="pagehead__actions">
           <button className="btn" onClick={() => void bridge.openObsidianNote(`${h.folderPath}/Карточка ДЗ.md`).catch((error: unknown) => reportError(error, "Заметка Obsidian не открыта"))}>

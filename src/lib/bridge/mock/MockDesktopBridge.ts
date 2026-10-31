@@ -29,6 +29,9 @@ import {
   type RouteDestination,
   type RoutePreview,
   type NewHomeworkInput,
+  type Semester,
+  type SemesterInput,
+  type SemesterSaveResult,
   type Subject,
   type SubjectInput,
   type SubjectMergePreview,
@@ -62,6 +65,7 @@ import {
   nextFileId,
   pad2,
   subjectName,
+  SEMESTER_START,
   weekFolder,
   weekRange,
 } from "./data";
@@ -727,6 +731,73 @@ export class MockDesktopBridge implements DesktopBridge {
     return clone(f);
   }
 
+  // ───────────── Семестр и сроки (имитация этапа 5) ─────────────
+
+  private semester: { input: SemesterInput; revision: number } | null = {
+    input: {
+      startDate: `${SEMESTER_START.getFullYear()}-${String(SEMESTER_START.getMonth() + 1).padStart(2, "0")}-${String(SEMESTER_START.getDate()).padStart(2, "0")}`,
+      utcOffsetMinutes: -SEMESTER_START.getTimezoneOffset(),
+      weekCount: 18,
+    },
+    revision: 0,
+  };
+
+  private semesterWeek(n: number): { startsAt: string; endsAt: string } | null {
+    if (!this.semester) return null;
+    const [y, mo, d] = this.semester.input.startDate.split("-").map(Number) as [number, number, number];
+    const start = Date.UTC(y, mo - 1, d) - this.semester.input.utcOffsetMinutes * 60_000 + (n - 1) * 7 * 86_400_000;
+    const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
+    return { startsAt: iso(start), endsAt: iso(start + 7 * 86_400_000 - 1000) };
+  }
+
+  private semesterView(): Semester | null {
+    if (!this.semester) return null;
+    const { input, revision } = this.semester;
+    const weeks = Array.from({ length: input.weekCount }, (_, i) => ({ number: i + 1, ...this.semesterWeek(i + 1)! }));
+    const now = Date.now();
+    const current = weeks.find((w) => Date.parse(w.startsAt) <= now && now <= Date.parse(w.endsAt))?.number ?? null;
+    const [y, mo, d] = input.startDate.split("-").map(Number) as [number, number, number];
+    const monday = new Date(Date.UTC(y, mo - 1, d)).getUTCDay() === 1;
+    return { ...input, revision, weeks, currentWeek: current, warnings: monday ? [] : ["Семестр начинается не с понедельника: недели будут идти от этого дня недели."] };
+  }
+
+  async getSemester(): Promise<Semester | null> {
+    await this.wait(60);
+    return clone(this.semesterView());
+  }
+
+  async setSemester(input: SemesterInput, expectedRevision: number | null): Promise<SemesterSaveResult> {
+    await this.wait(80);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) || Number.isNaN(Date.parse(`${input.startDate}T00:00:00Z`))) throw new BridgeError("blocked", "Дата начала семестра должна быть в формате ГГГГ-ММ-ДД");
+    if (input.utcOffsetMinutes < -720 || input.utcOffsetMinutes > 840 || input.utcOffsetMinutes % 15 !== 0) throw new BridgeError("blocked", "Часовой пояс: смещение от UTC−12:00 до UTC+14:00 с шагом 15 минут");
+    if (!Number.isInteger(input.weekCount) || input.weekCount < 1 || input.weekCount > 60) throw new BridgeError("blocked", "Число недель семестра: от 1 до 60");
+    if ((this.semester?.revision ?? null) !== expectedRevision) throw new BridgeError("conflict", "Семестр изменился в другом окне. Обновите данные и повторите.");
+    this.semester = { input: { ...input }, revision: this.semester ? this.semester.revision + 1 : 0 };
+    let updatedWeeks = 0;
+    for (const list of this.weeks.values())
+      for (const week of list) {
+        Object.assign(week, this.semesterWeek(week.number), { datesSource: "semester" });
+        updatedWeeks += 1;
+      }
+    return { semester: clone(this.semesterView()!), updatedWeeks };
+  }
+
+  async setHomeworkDeadline(homeworkId: string, revision: number, deadline: string | null): Promise<Homework> {
+    await this.wait(60);
+    const homework = this.homework.find((h) => h.id === homeworkId);
+    if (!homework) throw new BridgeError("not_found", "ДЗ не найдено");
+    if (homework.stage === "submitted") throw new BridgeError("blocked", "Сданное ДЗ неизменяемо: срок нельзя поменять");
+    if (homework.revision !== revision) throw new BridgeError("conflict", "ДЗ изменилось в другом окне. Обновите данные и повторите.");
+    let normalized: string | null = null;
+    if (deadline && deadline.trim()) {
+      const parsed = new Date(deadline);
+      if (Number.isNaN(parsed.getTime())) throw new BridgeError("blocked", "Срок должен быть датой и временем (RFC 3339)");
+      normalized = parsed.toISOString().replace(".000Z", "Z");
+    }
+    Object.assign(homework, { deadline: normalized, deadlineSource: normalized ? "manual" : null, revision: homework.revision + 1 });
+    return clone(homework);
+  }
+
   async createHomework(input: NewHomeworkInput): Promise<Homework> {
     await this.wait(80);
     const title = input.title.split(/\s+/).filter(Boolean).join(" ");
@@ -751,6 +822,7 @@ export class MockDesktopBridge implements DesktopBridge {
       ordinal,
       title,
       deadline,
+      deadlineSource: deadline ? "manual" : null,
       stage: "task",
       taskFiles: [],
       versions: [],
@@ -1222,7 +1294,8 @@ export class MockDesktopBridge implements DesktopBridge {
   }
 
   private makeWeek(subjectId: string, n: number): Week {
-    return { id: `${subjectId}-w${n}`, subjectId, number: n, ...weekRange(n), topic: null, lectures: [], seminars: [], materials: [], homeworkIds: [] };
+    const dates = this.semesterWeek(n);
+    return { id: `${subjectId}-w${n}`, subjectId, number: n, ...(dates ?? { startsAt: null, endsAt: null }), datesSource: dates ? "semester" : "unknown", topic: null, lectures: [], seminars: [], materials: [], homeworkIds: [] };
   }
 
   /** Как backend: одно ДЗ — оно; ни одного — будет создано; несколько — нужен выбор. */
@@ -1248,7 +1321,9 @@ export class MockDesktopBridge implements DesktopBridge {
       weekNumber: week.number,
       ordinal: 1,
       title: `Домашняя работа — неделя ${week.number}`,
-      deadline: week.endsAt,
+      // Как backend (этап 5): срок не выдумывается.
+      deadline: null,
+      deadlineSource: null,
       stage: "task",
       taskFiles: [],
       versions: [],

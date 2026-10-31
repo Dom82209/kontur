@@ -943,3 +943,24 @@ button.row:focus-visible {
   width: auto;
   max-width: 220px;
 }
+
+/* Этап 5: семестр и точные сроки */
+.semester-panel {
+  display: grid;
+  gap: 10px;
+}
+.semester-panel__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+.deadline-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.deadline-editor .input {
+  width: auto;
+}

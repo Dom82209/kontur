@@ -1186,7 +1186,8 @@ fn dashboard_is_built_without_extraction_text_or_absolute_paths() {
     database
         .with_connection(|connection| {
             connection.execute(
-                "INSERT INTO app_settings(key, value_json) VALUES ('automation_rules', '{\"semesterStart\":\"2026-09-01T00:00:00Z\"}')",
+                "INSERT INTO semester_settings(singleton,start_date,utc_offset_minutes,week_count,updated_at)
+                 VALUES (1,'2026-09-01',0,18,'2026-09-01T00:00:00Z')",
                 [],
             )?;
             Ok(())
@@ -1205,7 +1206,7 @@ fn dashboard_is_built_without_extraction_text_or_absolute_paths() {
         .statuses()
         .unwrap();
     let dashboard = projections::dashboard(&database, now, providers).unwrap();
-    assert_eq!(dashboard.academic_week.number, 8);
+    assert_eq!(dashboard.academic_week.as_ref().unwrap().number, 8);
     assert_eq!(dashboard.active_homework.len(), 1);
     assert_eq!(dashboard.inbox.total, 1);
     assert_eq!(dashboard.providers.len(), 2);

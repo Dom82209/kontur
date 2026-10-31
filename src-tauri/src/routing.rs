@@ -78,7 +78,9 @@ impl<'a> RoutingService<'a> {
         let operation_id = Uuid::new_v4().to_string();
         let result = self.database.with_transaction(|tx| {
             writes::insert_running_operation(tx, &operation_id, OperationKind::CreateWeek, "Создание учебной недели")?;
-            tx.execute("INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES(?1,?2,?3,strftime('%Y-%m-%dT00:00:00Z','now'),strftime('%Y-%m-%dT23:59:59Z','now','+6 days'),?4)", params![week_id,subject_id,number,week_path])?;
+            // Этап 5: даты недели — из семестра или неизвестны, не «от сегодня».
+            let (starts, ends, source) = crate::semester::new_week_dates(tx, number)?;
+            tx.execute("INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path,dates_source) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![week_id,subject_id,number,starts,ends,week_path,source])?;
             writes::complete_operation(tx, &operation_id)?;
             Ok(())
         });
@@ -627,16 +629,20 @@ fn ensure_week_and_homework(
     d: &RouteDestinationDto,
 ) -> Result<(), AppError> {
     if !row.week_exists {
-        c.execute("INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES(?1,?2,?3,strftime('%Y-%m-%dT00:00:00Z','now'),strftime('%Y-%m-%dT23:59:59Z','now','+6 days'),?4)",params![row.week_id,d.subject_id,d.week_number,row.week_folder])?;
+        let (starts, ends, source) = crate::semester::new_week_dates(c, d.week_number)?;
+        c.execute(
+            "INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path,dates_source) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![row.week_id, d.subject_id, d.week_number, starts, ends, row.week_folder, source],
+        )?;
     }
     if row.creates_homework {
-        // Первое ДЗ недели: ordinal 1, папка «03 ДЗ». Срок — до этапа 5 условный.
+        // Первое ДЗ недели: ordinal 1, папка «03 ДЗ». Срок неизвестен, пока его не зададут.
         let (Some(id), Some(folder)) = (&row.homework_id, &row.homework_folder) else {
             return Err(BackendError::database("План раскладки без ДЗ"));
         };
         c.execute(
             "INSERT INTO homeworks(id,week_id,ordinal,title,deadline,stage,workflow_stage,folder_path)
-             VALUES(?1,?2,1,?3,strftime('%Y-%m-%dT23:59:59Z','now','+7 days'),'task','materials',?4)",
+             VALUES(?1,?2,1,?3,NULL,'task','materials',?4)",
             params![id, row.week_id, format!("Домашнее задание — неделя {}", d.week_number), folder],
         )?;
     }

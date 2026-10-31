@@ -111,8 +111,8 @@ impl<'a> HomeworkRegistry<'a> {
                 return Err(BackendError::conflict("Папка нового ДЗ уже занята"));
             }
             transaction.execute(
-                "INSERT INTO homeworks(id,week_id,ordinal,title,deadline,stage,workflow_stage,folder_path)
-                 VALUES (?1,?2,?3,?4,?5,'task','materials',?6)",
+                "INSERT INTO homeworks(id,week_id,ordinal,title,deadline,deadline_source,stage,workflow_stage,folder_path)
+                 VALUES (?1,?2,?3,?4,?5,CASE WHEN ?5 IS NULL THEN NULL ELSE 'manual' END,'task','materials',?6)",
                 params![id, week_id, ordinal, title, deadline, folder],
             )?;
             Ok(())

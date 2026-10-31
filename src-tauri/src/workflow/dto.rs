@@ -804,7 +804,8 @@ pub struct WeekProgressDto {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardDto {
     pub today: String,
-    pub academic_week: AcademicWeekDto,
+    /// `None` — семестр не настроен или сейчас вне семестра.
+    pub academic_week: Option<AcademicWeekDto>,
     pub inbox: DashboardInboxDto,
     pub active_homework: Vec<HomeworkDto>,
     pub deadlines: Vec<DeadlineDto>,

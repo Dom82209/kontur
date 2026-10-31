@@ -6,6 +6,7 @@ import { DownloadsWatcherToggle } from "../components/domain/DownloadsWatcher";
 import { ExtractionSettingsPanel } from "../components/domain/ExtractionSettingsPanel";
 import { ManagedRootsPanel } from "../components/domain/ManagedRootsPanel";
 import { ProviderCard } from "../components/domain/ProviderCard";
+import { SemesterPanel } from "../components/domain/SemesterPanel";
 import { SubjectsPanel } from "../components/domain/SubjectsPanel";
 import { SaveBar } from "../components/ui/SaveBar";
 import { Segmented } from "../components/ui/Segmented";
@@ -44,6 +45,11 @@ export function SettingsPage() {
           <h2 className="settings__h">Управляемые каталоги</h2>
           <ManagedRootsPanel />
           <DownloadsWatcherToggle />
+        </section>
+
+        <section className="settings__group">
+          <h2 className="settings__h">Семестр</h2>
+          <SemesterPanel />
         </section>
 
         <section className="settings__group settings__group--wide">

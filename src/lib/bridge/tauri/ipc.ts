@@ -138,6 +138,18 @@ export function createHomework(input: import("../types").NewHomeworkInput): Prom
   return call("create_homework", { input });
 }
 
+export function getSemester(): Promise<import("../types").Semester | null> {
+  return call("get_semester");
+}
+
+export function setSemester(input: import("../types").SemesterInput, expectedRevision: number | null): Promise<import("../types").SemesterSaveResult> {
+  return call("set_semester", { input, expectedRevision });
+}
+
+export function setHomeworkDeadline(homeworkId: string, revision: number, deadline: string | null): Promise<import("../types").Homework> {
+  return call("set_homework_deadline", { homeworkId, revision, deadline });
+}
+
 export function getSubjects(): Promise<Subject[]> {
   return call("get_subjects");
 }

@@ -111,7 +111,7 @@ function buildWeeks(subject: Subject): Week[] {
     const lectures = subject.id === "eng" || subject.id === "meow" ? [] : [makeFile(`Лекция ${n}. ${topic ?? "Материалы"}.pdf`, `${folder}/01 Лекции`, at(-daysAgo - 1, 10), 1_200_000 + n * 90_000)];
     const seminars = subject.id === "stress" ? [] : [makeFile(`Семинар ${n}.${subject.id === "oba" || subject.id === "stat" ? "xlsx" : "pdf"}`, `${folder}/02 Семинары`, at(-daysAgo, 15), 240_000 + n * 11_000)];
     const materials = n % 3 === 0 ? [makeFile(`Доп. материалы — ${topic ?? "неделя"}.pdf`, `${folder}/04 Дополнительно`, at(-daysAgo + 1, 19), 880_000)] : [];
-    weeks.push({ id: `${subject.id}-w${n}`, subjectId: subject.id, number: n, startsAt, endsAt, topic, lectures, seminars, materials, homeworkIds: [] });
+    weeks.push({ id: `${subject.id}-w${n}`, subjectId: subject.id, number: n, startsAt, endsAt, datesSource: "semester", topic, lectures, seminars, materials, homeworkIds: [] });
   }
   return weeks;
 }
@@ -203,6 +203,7 @@ function hw(
     ordinal: 1,
     title,
     deadline,
+    deadlineSource: "manual",
     stage,
     taskFiles: [
       makeFile(`Условие ДЗ ${week}.pdf`, `${folder}/01 Условие и данные`, at(-5, 11), 310_000),

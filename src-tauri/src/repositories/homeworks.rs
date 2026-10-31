@@ -18,6 +18,7 @@ struct HomeworkRow {
     ordinal: i64,
     title: String,
     deadline: Option<String>,
+    deadline_source: Option<String>,
     stage: String,
     workflow_stage: String,
     final_version_id: Option<String>,
@@ -82,6 +83,10 @@ pub(crate) fn load_homeworks(
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
         // NULL — срок неизвестен (например, ДЗ подключено из существующего vault).
+        let deadline_source = row
+            .deadline
+            .as_ref()
+            .map(|_| crate::dto::DeadlineSource::from_db(row.deadline_source.as_deref()));
         let deadline = row.deadline;
         require_relative_path(&row.folder_path, "homeworks.folder_path")?;
         let stage = HomeworkStage::try_from_db(&row.stage)
@@ -97,6 +102,7 @@ pub(crate) fn load_homeworks(
             ordinal: row.ordinal,
             title: row.title,
             deadline,
+            deadline_source,
             stage,
             final_version_id: row.final_version_id,
             final_file_name: row.final_file_name,
@@ -116,7 +122,7 @@ fn homework_rows(
 ) -> Result<Vec<HomeworkRow>, BackendError> {
     let base = "SELECT h.id, w.subject_id, w.number, h.title, h.deadline, h.stage,
                        h.workflow_stage, h.final_version_id, h.final_file_name, h.submitted_at,
-                       h.folder_path, h.assignment_url, h.revision, h.ordinal
+                       h.folder_path, h.assignment_url, h.revision, h.ordinal, h.deadline_source
                 FROM homeworks h JOIN weeks w ON w.id = h.week_id";
     let sql = if homework_id.is_some() {
         format!("{base} WHERE h.id = ?1")
@@ -146,6 +152,7 @@ fn homework_rows(
             assignment_url: row.get(11)?,
             revision: row.get(12)?,
             ordinal: row.get(13)?,
+            deadline_source: row.get(14)?,
         });
     }
     Ok(output)

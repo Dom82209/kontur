@@ -23,6 +23,9 @@ export interface TauriIpcClient {
   previewSubjectMerge: typeof ipc.previewSubjectMerge;
   mergeSubjects: typeof ipc.mergeSubjects;
   createHomework: typeof ipc.createHomework;
+  getSemester: typeof ipc.getSemester;
+  setSemester: typeof ipc.setSemester;
+  setHomeworkDeadline: typeof ipc.setHomeworkDeadline;
   getWeeks: typeof ipc.getWeeks;
   getWeek: typeof ipc.getWeek;
   getInboxFiles: typeof ipc.getInboxFiles;
@@ -156,6 +159,9 @@ export class TauriDesktopBridge implements DesktopBridge {
   previewSubjectMerge: DesktopBridge["previewSubjectMerge"] = (sourceId, targetId) => this.ipcClient.previewSubjectMerge(sourceId, targetId);
   mergeSubjects: DesktopBridge["mergeSubjects"] = (sourceId, targetId, fingerprint) => this.ipcClient.mergeSubjects(sourceId, targetId, fingerprint);
   createHomework: DesktopBridge["createHomework"] = (input) => this.ipcClient.createHomework(input);
+  getSemester: DesktopBridge["getSemester"] = () => this.ipcClient.getSemester();
+  setSemester: DesktopBridge["setSemester"] = (input, expectedRevision) => this.ipcClient.setSemester(input, expectedRevision);
+  setHomeworkDeadline: DesktopBridge["setHomeworkDeadline"] = (homeworkId, revision, deadline) => this.ipcClient.setHomeworkDeadline(homeworkId, revision, deadline);
   getWeeks: DesktopBridge["getWeeks"] = (subjectId) => this.ipcClient.getWeeks(subjectId);
   getWeek: DesktopBridge["getWeek"] = (subjectId, weekNumber) =>
     nullWhenNotFound(() => this.ipcClient.getWeek(subjectId, weekNumber));

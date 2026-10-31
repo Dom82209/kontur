@@ -113,7 +113,9 @@ export function WeekPage() {
           </h1>
           {week && (
             <p className="muted">
-              {formatWeekRange(week.startsAt, week.endsAt)} · <span className="mono">{subject?.name}/Неделя {pad2(weekNumber)}</span>
+              {formatWeekRange(week.startsAt, week.endsAt)}
+              {week.datesSource === "legacy" && <Link to="/settings"> (приблизительно — настройте семестр)</Link>}
+              {week.datesSource === "unknown" && <Link to="/settings"> (настройте семестр)</Link>} · <span className="mono">{subject?.name}/Неделя {pad2(weekNumber)}</span>
             </p>
           )}
         </div>

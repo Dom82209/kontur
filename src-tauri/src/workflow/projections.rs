@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use crate::{
     domain::{HomeworkStage, HomeworkWorkflowStage, RequirementStatus},
-    dto::{AutomationRulesDto, HomeworkVersionDto},
+    dto::HomeworkVersionDto,
     error::{AppError, BackendError},
     repositories::{hydrate_file, load_homeworks, ReadRepository},
 };
@@ -499,37 +499,30 @@ pub fn compare_versions(
 
 // ───────────────────────── Главная ─────────────────────────
 
-const WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
-
 fn format_time(value: time::OffsetDateTime) -> Result<String, AppError> {
     value
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| BackendError::database(format!("cannot format time: {error}")))
 }
 
-/// Учебная неделя относительно начала семестра из правил автоматизации.
+/// Учебная неделя из настроенного семестра (этап 5). `None` — семестр не настроен
+/// или сейчас вне его: номер недели не выдумывается.
 pub fn academic_week(
-    rules: &AutomationRulesDto,
+    calendar: Option<&crate::semester::SemesterCalendar>,
     now: time::OffsetDateTime,
-) -> Result<AcademicWeekDto, AppError> {
-    let start = time::OffsetDateTime::parse(
-        &rules.semester_start,
-        &time::format_description::well_known::Rfc3339,
-    )
-    .map_err(|error| BackendError::database(format!("invalid semesterStart: {error}")))?;
-    let elapsed = (now - start).whole_seconds();
-    let index = if elapsed < 0 {
-        0
-    } else {
-        elapsed / WEEK_SECONDS
+) -> Result<Option<AcademicWeekDto>, AppError> {
+    let Some(calendar) = calendar else {
+        return Ok(None);
     };
-    let starts = start + time::Duration::seconds(index * WEEK_SECONDS);
-    let ends = starts + time::Duration::seconds(WEEK_SECONDS - 1);
-    Ok(AcademicWeekDto {
-        number: index + 1,
+    let Some(number) = calendar.week_at(now) else {
+        return Ok(None);
+    };
+    let (starts, ends) = calendar.week_range(number)?;
+    Ok(Some(AcademicWeekDto {
+        number,
         starts_at: format_time(starts)?,
         ends_at: format_time(ends)?,
-    })
+    }))
 }
 
 /// Главная: фиксированный набор запросов, без извлечённого текста.
@@ -540,7 +533,6 @@ pub fn dashboard(
 ) -> Result<DashboardDto, AppError> {
     let today = format_time(now)?;
     let repository = ReadRepository::new(database);
-    let rules = repository.automation_rules()?;
     let inbox = repository.inbox_files()?;
     let homework = database.with_connection(|connection| load_homeworks(connection, None))?;
     let (recent_files, watcher_enabled, last_run) = database.with_connection(|connection| {
@@ -550,7 +542,8 @@ pub fn dashboard(
             last_operation(connection)?,
         ))
     })?;
-    let week = academic_week(&rules, now)?;
+    let calendar = database.with_connection(crate::semester::calendar)?;
+    let week = academic_week(calendar.as_ref(), now)?;
     let pending_inbox: Vec<_> = inbox
         .iter()
         .filter(|file| file.status != crate::dto::InboxStatus::Routed)
@@ -585,7 +578,9 @@ pub fn dashboard(
         .iter()
         .filter(|item| {
             item.deadline.as_deref().is_some_and(|deadline| {
-                deadline >= week.starts_at.as_str() && deadline <= week.ends_at.as_str()
+                week.as_ref().is_some_and(|week| {
+                    deadline >= week.starts_at.as_str() && deadline <= week.ends_at.as_str()
+                })
             })
         })
         .collect();

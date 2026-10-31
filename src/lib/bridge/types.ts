@@ -151,6 +151,40 @@ export interface SubjectMergeResult {
   retargetedInbox: number;
 }
 
+export type WeekDatesSource = "unknown" | "semester" | "legacy";
+export type DeadlineSource = "manual" | "legacy" | "lms";
+
+export interface SemesterInput {
+  /** Местная дата начала недели 1, ГГГГ-ММ-ДД. */
+  startDate: string;
+  /** Смещение местного времени от UTC в минутах (Москва: 180). */
+  utcOffsetMinutes: number;
+  weekCount: number;
+}
+
+export interface SemesterWeek {
+  number: number;
+  startsAt: ISODate;
+  endsAt: ISODate;
+}
+
+export interface Semester {
+  startDate: string;
+  utcOffsetMinutes: number;
+  weekCount: number;
+  revision: number;
+  weeks: SemesterWeek[];
+  /** null — сейчас вне семестра. */
+  currentWeek: number | null;
+  warnings: string[];
+}
+
+export interface SemesterSaveResult {
+  semester: Semester;
+  /** Сколько недель получили даты из семестра. */
+  updatedWeeks: number;
+}
+
 export interface Week {
   id: string;
   subjectId: string;
@@ -158,6 +192,8 @@ export interface Week {
   /** `null` — даты недели неизвестны (например, неделя подключена из существующего vault). */
   startsAt: ISODate | null;
   endsAt: ISODate | null;
+  /** Этап 5: даты из семестра, приблизительные (записаны до настройки семестра) или неизвестны. */
+  datesSource: WeekDatesSource;
   topic: string | null;
   lectures: FileRef[];
   seminars: FileRef[];
@@ -891,6 +927,8 @@ export interface Homework {
   title: string;
   /** `null` — срок неизвестен; приложение его не выдумывает. */
   deadline: ISODate | null;
+  /** Этап 5: происхождение срока; null, если срок неизвестен. */
+  deadlineSource: DeadlineSource | null;
   stage: HomeworkStage;
   taskFiles: FileRef[];
   versions: HomeworkVersion[];
@@ -1027,7 +1065,8 @@ export interface Deadline {
 
 export interface Dashboard {
   today: ISODate;
-  academicWeek: { number: number; startsAt: ISODate; endsAt: ISODate };
+  /** null — семестр не настроен или сейчас вне семестра: номер недели не выдумывается. */
+  academicWeek: { number: number; startsAt: ISODate; endsAt: ISODate } | null;
   inbox: { total: number; ambiguous: number; preview: InboxFile[] };
   activeHomework: Homework[];
   deadlines: Deadline[];
@@ -1128,6 +1167,12 @@ export interface DesktopBridge {
   mergeSubjects(sourceId: string, targetId: string, fingerprint: string): Promise<SubjectMergeResult>;
   /** Этап 4: ещё одно ДЗ недели (только в базе, без записи в vault). */
   createHomework(input: NewHomeworkInput): Promise<Homework>;
+  /** Этап 5: семестр активного пространства; null — не настроен. */
+  getSemester(): Promise<Semester | null>;
+  /** Сохраняет семестр и пересчитывает даты недель. expectedRevision = null — первая настройка. */
+  setSemester(input: SemesterInput, expectedRevision: number | null): Promise<SemesterSaveResult>;
+  /** Точный срок (ISO с часовым поясом) или null — срок неизвестен. */
+  setHomeworkDeadline(homeworkId: string, revision: number, deadline: string | null): Promise<Homework>;
   getWeeks(subjectId: string): Promise<Week[]>;
   getWeek(subjectId: string, weekNumber: number): Promise<Week | null>;
   createWeek(subjectId: string, weekNumber: number): Promise<OperationResult<Week>>;
