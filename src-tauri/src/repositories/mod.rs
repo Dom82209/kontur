@@ -5,6 +5,7 @@ mod mutations;
 mod operations;
 mod settings;
 mod subjects;
+pub(crate) use subjects::load_subjects;
 mod weeks;
 pub(crate) mod writes;
 

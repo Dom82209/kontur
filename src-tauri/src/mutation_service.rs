@@ -114,6 +114,11 @@ impl<'a> MutationService<'a> {
                 if !writes::subject_exists(transaction, subject_id)? {
                     return Err(BackendError::not_found("subject not found"));
                 }
+                if writes::subject_archived(transaction, subject_id)? {
+                    return Err(BackendError::blocked(
+                        "Предмет в архиве: верните его из архива или выберите другой",
+                    ));
+                }
                 if let Some(week_number) = classification.week_number {
                     if !writes::week_exists_for_subject(transaction, subject_id, week_number)? {
                         return Err(BackendError::conflict(

@@ -20,8 +20,14 @@ pub fn upsert_automation_rules(
     rules: &AutomationRulesDto,
 ) -> Result<(), BackendError> {
     validate_rules(rules)?;
+    // Ключевые слова предметов — в `subject_keywords`; JSON их не хранит.
+    for rule in &rules.subject_rules {
+        crate::subjects::replace_keywords(transaction, &rule.subject_id, &rule.keywords)?;
+    }
+    let mut stored = rules.clone();
+    stored.subject_rules.clear();
     let value =
-        serde_json::to_value(rules).map_err(|error| BackendError::database(error.to_string()))?;
+        serde_json::to_value(&stored).map_err(|error| BackendError::database(error.to_string()))?;
     if contains_secret_key(&value) {
         return Err(BackendError::conflict(
             "automation rules contain a forbidden secret field",
@@ -71,6 +77,17 @@ pub fn subject_exists(
 ) -> Result<bool, BackendError> {
     Ok(transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM subjects WHERE id = ?1)",
+        [subject_id],
+        |row| row.get(0),
+    )?)
+}
+
+pub fn subject_archived(
+    transaction: &Transaction<'_>,
+    subject_id: &str,
+) -> Result<bool, BackendError> {
+    Ok(transaction.query_row(
+        "SELECT archived_at IS NOT NULL FROM subjects WHERE id = ?1",
         [subject_id],
         |row| row.get(0),
     )?)

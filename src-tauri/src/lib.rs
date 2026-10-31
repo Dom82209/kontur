@@ -23,6 +23,8 @@ pub mod query_service;
 pub mod repositories;
 pub mod routing;
 mod routing_commands;
+mod subject_commands;
+pub mod subjects;
 pub mod submission;
 mod submission_commands;
 pub mod workflow;
@@ -102,6 +104,11 @@ pub fn run() {
             adoption_commands::preview_vault_adoption,
             adoption_commands::apply_vault_adoption,
             adoption_commands::cancel_vault_adoption,
+            subject_commands::create_subject,
+            subject_commands::update_subject,
+            subject_commands::set_subject_archived,
+            subject_commands::preview_subject_merge,
+            subject_commands::merge_subjects,
             intake_commands::open_obsidian_note,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,

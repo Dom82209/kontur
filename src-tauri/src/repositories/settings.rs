@@ -25,8 +25,10 @@ pub(crate) fn load_automation_rules(
             |row| row.get(0),
         )
         .optional()?;
-    let defaults = AutomationRulesDto::default();
+    let mut defaults = AutomationRulesDto::default();
     let Some(raw) = stored else {
+        // Ключевые слова предметов есть и без сохранённых правил.
+        defaults.subject_rules = active_subject_rules(connection)?;
         return Ok(defaults);
     };
     let saved: Value = serde_json::from_str(&raw).map_err(|error| {
@@ -47,8 +49,32 @@ pub(crate) fn load_automation_rules(
         // Настройки до этапа 9: провайдеры задач берутся из прежних ролей.
         rules.workflow.tasks = crate::dto::AiTaskProvidersDto::from_roles(&rules.workflow.roles);
     }
+    // Ключевые слова живут в `subject_keywords` (этап 3); JSON-копия не используется.
+    rules.subject_rules = active_subject_rules(connection)?;
     validate_rules(&rules)?;
     Ok(rules)
+}
+
+fn active_subject_rules(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<crate::dto::SubjectRuleDto>, BackendError> {
+    let mut keywords = super::subjects::subject_keywords(connection)?;
+    let mut statement = connection.prepare(
+        "SELECT id FROM subjects WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|subject_id| {
+            let keywords = keywords.remove(&subject_id)?;
+            Some(crate::dto::SubjectRuleDto {
+                keywords,
+                subject_id,
+            })
+        })
+        .collect())
 }
 
 fn merge_json(base: &mut Value, overlay: Value) {

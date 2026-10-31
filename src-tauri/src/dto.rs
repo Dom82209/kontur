@@ -12,6 +12,16 @@ pub struct SubjectDto {
     pub week_count: i64,
     /// Необязательная ссылка на курс в LMS (allowlist HTTPS-домена).
     pub course_url: Option<String>,
+    /// Папка предмета в vault (относительный путь). Не меняется при переименовании.
+    pub folder_path: String,
+    /// Ключевые слова автоматической классификации (нижний регистр).
+    pub keywords: Vec<String>,
+    /// Архивный предмет не предлагается в классификации; данные сохраняются.
+    pub archived: bool,
+    /// Предмет слит в другой (всегда архивный).
+    pub merged_into_id: Option<String>,
+    /// Optimistic revision: меняется при каждом изменении предмета.
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

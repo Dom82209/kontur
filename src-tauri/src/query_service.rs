@@ -169,7 +169,12 @@ mod tests {
                 "shortName": "ОБА",
                 "currentWeek": 7,
                 "weekCount": 2,
-                "courseUrl": null
+                "courseUrl": null,
+                "folderPath": "Предметы/ОБА",
+                "keywords": [],
+                "archived": false,
+                "mergedIntoId": null,
+                "revision": 0
             })
         );
     }

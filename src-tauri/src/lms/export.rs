@@ -189,9 +189,11 @@ pub fn classify_context(
 ) -> Result<ClassifyContext, AppError> {
     let repository = ReadRepository::new(database);
     let rules = repository.automation_rules()?;
+    // Архивные предметы не предлагаются автоматической классификацией (этап 3).
     let subjects = repository
         .subjects()?
         .into_iter()
+        .filter(|subject| !subject.archived)
         .map(|subject| SubjectMatcher {
             keywords: rules
                 .subject_rules

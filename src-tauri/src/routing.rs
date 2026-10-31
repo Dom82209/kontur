@@ -100,17 +100,17 @@ impl<'a> RoutingService<'a> {
             return Err(BackendError::blocked("Не выбраны файлы для классификации"));
         }
         let operation_id = Uuid::new_v4().to_string();
+        // Тот же классификатор, что и для экспорта ЦУ: ключевые слова предметов и
+        // порог неуверенности из настроек; архивные предметы не предлагаются.
+        let context = crate::lms::export::classify_context(self.database, None)?;
         self.database.with_transaction(|tx| {
             writes::insert_running_operation(tx, &operation_id, OperationKind::Classify, "Классификация файлов")?;
-            let mut subjects = Vec::new();
-            { let mut q=tx.prepare("SELECT id,name,short_name FROM subjects")?; let rows=q.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?; for row in rows { subjects.push(row?); } }
             for id in ids {
                 let (name, prior): (String, Option<String>) = tx.query_row("SELECT name,classification_json FROM inbox_files WHERE id=?1 AND status<>'routed'", [id], |r| Ok((r.get(0)?,r.get(1)?)))
                     .map_err(|e| match e { rusqlite::Error::QueryReturnedNoRows => BackendError::not_found("Файл во «Входящих» не найден"), other=>other.into() })?;
                 if prior.as_deref().and_then(|raw| serde_json::from_str::<ClassificationDto>(raw).ok()).is_some_and(|c| c.source==ClassificationSource::Manual) { continue; }
-                let classification = classify_name(&name, &subjects);
-                let status = if classification.subject_id.is_some() && classification.week_number.is_some() && classification.category != MaterialCategory::Unknown && classification.confidence >= 0.7 { InboxStatus::Classified } else { InboxStatus::Ambiguous };
-                writes::update_inbox_classification(tx, id, &classification, status)?;
+                let classified = crate::lms::classify::classify_path(&name, &context);
+                writes::update_inbox_classification(tx, id, &classified.classification, classified.status)?;
             }
             writes::complete_operation(tx, &operation_id)?; Ok(())
         })?;
@@ -476,20 +476,38 @@ fn route_row_in(
     d: &RouteDestinationDto,
 ) -> Result<RouteRow, AppError> {
     let (source_path,name,kind,size):(String,String,String,i64)=c.query_row("SELECT relative_path,name,kind,size_bytes FROM inbox_files WHERE id=?1 AND status<>'routed'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|match e{rusqlite::Error::QueryReturnedNoRows=>BackendError::not_found("Файл во «Входящих» не найден"),o=>o.into()})?;
-    let subject_folder: String = c
+    let (subject_folder, archived): (String, bool) = c
         .query_row(
-            "SELECT folder_path FROM subjects WHERE id=?1",
+            "SELECT folder_path, archived_at IS NOT NULL FROM subjects WHERE id=?1",
             [&d.subject_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => BackendError::not_found("Предмет не найден"),
             o => o.into(),
         })?;
-    let week_folder = format!("{subject_folder}/Неделя {:02}", d.week_number);
-    let found:Option<(String,Option<String>)>=c.query_row("SELECT w.id,h.id FROM weeks w LEFT JOIN homeworks h ON h.week_id=w.id WHERE w.subject_id=?1 AND w.number=?2",params![d.subject_id,d.week_number],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    if archived {
+        return Err(BackendError::blocked(
+            "Предмет в архиве: верните его из архива или выберите другой",
+        ));
+    }
+    let found: Option<(String, Option<String>, String)> = c
+        .query_row(
+            "SELECT w.id,h.id,w.folder_path FROM weeks w LEFT JOIN homeworks h ON h.week_id=w.id WHERE w.subject_id=?1 AND w.number=?2",
+            params![d.subject_id, d.week_number],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
     let week_exists = found.is_some();
-    let (week_id, homework_id) = found.unwrap_or_else(|| (Uuid::new_v4().to_string(), None));
+    // Существующая неделя раскладывается в свою папку: после слияния предметов
+    // неделя сохраняет папку исходного предмета.
+    let week_folder = found
+        .as_ref()
+        .map(|(_, _, folder)| folder.clone())
+        .unwrap_or_else(|| format!("{subject_folder}/Неделя {:02}", d.week_number));
+    let (week_id, homework_id) = found
+        .map(|(week, homework, _)| (week, homework))
+        .unwrap_or_else(|| (Uuid::new_v4().to_string(), None));
     let folder = format!("{week_folder}/{}", category_folder(d.category));
     Ok(RouteRow {
         source_path,
@@ -567,58 +585,6 @@ fn classification_destination(db: &Database, id: &str) -> Result<RouteDestinatio
         week_number: c.week_number.unwrap(),
         category: c.category,
     })
-}
-fn classify_name(name: &str, subjects: &[(String, String, String)]) -> ClassificationDto {
-    let lower = name.to_lowercase();
-    let mut reasons = Vec::new();
-    let subject = subjects.iter().find(|(_, name, short)| {
-        lower.contains(&name.to_lowercase()) || lower.contains(&short.to_lowercase())
-    });
-    if subject.is_some() {
-        reasons.push("Название содержит предмет".into());
-    }
-    let week = (1..=60).find(|n| {
-        lower.contains(&format!("неделя {n}"))
-            || lower.contains(&format!("week{n}"))
-            || lower.contains(&format!("week {n}"))
-            || lower.contains(&format!("w{n:02}"))
-    });
-    if week.is_some() {
-        reasons.push("Номер недели найден в имени".into());
-    }
-    let category = if lower.contains("лекц") || lower.contains("lecture") {
-        MaterialCategory::Lecture
-    } else if lower.contains("семинар") || lower.contains("seminar") {
-        MaterialCategory::Seminar
-    } else if lower.contains("услов") || lower.contains("задан") || lower.contains("task")
-    {
-        MaterialCategory::HomeworkTask
-    } else if lower.contains("решен") || lower.contains("solution") || lower.contains("draft")
-    {
-        MaterialCategory::HomeworkDraft
-    } else if lower.contains("данн") || lower.contains("data") {
-        MaterialCategory::HomeworkData
-    } else {
-        MaterialCategory::Unknown
-    };
-    if category != MaterialCategory::Unknown {
-        reasons.push("Тип материала найден в имени".into());
-    }
-    let confidence = (if subject.is_some() { 0.4 } else { 0.0 })
-        + (if week.is_some() { 0.3 } else { 0.0 })
-        + (if category != MaterialCategory::Unknown {
-            0.3
-        } else {
-            0.0
-        });
-    ClassificationDto {
-        subject_id: subject.map(|x| x.0.clone()),
-        week_number: week,
-        category,
-        confidence,
-        reasons,
-        source: ClassificationSource::Auto,
-    }
 }
 fn ids_from_manifest(
     c: &rusqlite::Connection,
