@@ -28,6 +28,7 @@ import {
   type IsolationReport,
   type RouteDestination,
   type RoutePreview,
+  type NewHomeworkInput,
   type Subject,
   type SubjectInput,
   type SubjectMergePreview,
@@ -185,7 +186,7 @@ export class MockDesktopBridge implements DesktopBridge {
     // Привязываем ДЗ к неделям.
     for (const h of this.homework) {
       const w = this.weeks.get(h.subjectId)?.find((x) => x.number === h.weekNumber);
-      if (w) w.homeworkId = h.id;
+      if (w && !w.homeworkIds.includes(h.id)) w.homeworkIds.push(h.id);
     }
     // Стартовая история, чтобы журнал не был пустым.
     this.log = [
@@ -336,7 +337,7 @@ export class MockDesktopBridge implements DesktopBridge {
     return {
       source: this.subjectView(sourceId),
       target: this.subjectView(targetId),
-      movedWeeks: sourceWeeks.map((w) => ({ number: w.number, hasHomework: w.homeworkId !== null, files: w.lectures.length + w.seminars.length + w.materials.length })),
+      movedWeeks: sourceWeeks.map((w) => ({ number: w.number, hasHomework: w.homeworkIds.length > 0, files: w.lectures.length + w.seminars.length + w.materials.length })),
       conflictingWeeks,
       retargetedInbox: inbox.length,
       addedKeywords,
@@ -716,6 +717,7 @@ export class MockDesktopBridge implements DesktopBridge {
       ...(patch.subjectId !== undefined ? { subjectId: patch.subjectId } : {}),
       ...(patch.weekNumber !== undefined ? { weekNumber: patch.weekNumber } : {}),
       ...(patch.category !== undefined ? { category: patch.category ?? "unknown" } : {}),
+      ...(patch.homeworkId !== undefined ? { homeworkId: patch.homeworkId } : {}),
       source: "manual",
       confidence: 1,
       reasons: ["Указано вручную"],
@@ -723,6 +725,46 @@ export class MockDesktopBridge implements DesktopBridge {
     Object.assign(f, this.applyClassification(f, next));
     this.emitter.emit("inbox:classification-updated", { fileId, classification: clone(next), status: f.status });
     return clone(f);
+  }
+
+  async createHomework(input: NewHomeworkInput): Promise<Homework> {
+    await this.wait(80);
+    const title = input.title.split(/\s+/).filter(Boolean).join(" ");
+    if (!title || title.length > 120) throw new BridgeError("blocked", "Название ДЗ: от 1 до 120 символов");
+    const subject = this.subjects.find((s) => s.id === input.subjectId);
+    if (!subject) throw new BridgeError("not_found", "Предмет не найден");
+    if (subject.archived) throw new BridgeError("blocked", "Предмет в архиве: верните его из архива, чтобы добавить ДЗ");
+    const week = this.weeks.get(input.subjectId)?.find((w) => w.number === input.weekNumber);
+    if (!week) throw new BridgeError("not_found", "Неделя не найдена: сначала создайте неделю");
+    let deadline: string | null = null;
+    if (input.deadline && input.deadline.trim()) {
+      const parsed = new Date(input.deadline);
+      if (Number.isNaN(parsed.getTime())) throw new BridgeError("blocked", "Срок должен быть датой и временем");
+      deadline = parsed.toISOString().replace(".000Z", "Z");
+    }
+    const ordinal = Math.max(0, ...week.homeworkIds.map((id) => this.homework.find((h) => h.id === id)?.ordinal ?? 0)) + 1;
+    const base = weekFolder(input.subjectId, input.weekNumber);
+    const homework: Homework = {
+      id: `hw-${input.subjectId}-${input.weekNumber}-${ordinal}`,
+      subjectId: input.subjectId,
+      weekNumber: input.weekNumber,
+      ordinal,
+      title,
+      deadline,
+      stage: "task",
+      taskFiles: [],
+      versions: [],
+      finalVersionId: null,
+      finalFileName: null,
+      submittedAt: null,
+      folderPath: ordinal === 1 ? `${base}/03 ДЗ` : `${base}/03 ДЗ (${ordinal})`,
+      workflowStage: "materials_collected",
+      assignmentUrl: null,
+      revision: 0,
+    };
+    this.homework.push(homework);
+    week.homeworkIds = [...week.homeworkIds, homework.id];
+    return clone(homework);
   }
 
   async previewRoute(fileId: string, destination: RouteDestination): Promise<RoutePreview> {
@@ -766,7 +808,7 @@ export class MockDesktopBridge implements DesktopBridge {
           else if (dest.category === "seminar") week.seminars = [ref, ...week.seminars];
           else if (dest.category === "material") week.materials = [ref, ...week.materials];
           else {
-            const homework = this.ensureHomework(week);
+            const homework = this.ensureHomework(week, dest.homeworkId);
             if (dest.category === "homework_draft") {
               this.homeworkCandidates.set(homework.id, [ref, ...(this.homeworkCandidates.get(homework.id) ?? [])]);
             } else {
@@ -1180,21 +1222,31 @@ export class MockDesktopBridge implements DesktopBridge {
   }
 
   private makeWeek(subjectId: string, n: number): Week {
-    return { id: `${subjectId}-w${n}`, subjectId, number: n, ...weekRange(n), topic: null, lectures: [], seminars: [], materials: [], homeworkId: null };
+    return { id: `${subjectId}-w${n}`, subjectId, number: n, ...weekRange(n), topic: null, lectures: [], seminars: [], materials: [], homeworkIds: [] };
   }
 
-  private ensureHomework(week: Week): Homework {
-    const linked = week.homeworkId ? this.homework.find((h) => h.id === week.homeworkId) : null;
-    const existing = linked ?? this.homework.find((h) => h.subjectId === week.subjectId && h.weekNumber === week.number);
-    if (existing) {
-      week.homeworkId = existing.id;
-      return existing;
+  /** Как backend: одно ДЗ — оно; ни одного — будет создано; несколько — нужен выбор. */
+  private homeworkFor(dest: RouteDestination): Homework | null {
+    const week = this.weeks.get(dest.subjectId)?.find((w) => w.number === dest.weekNumber);
+    const list = (week?.homeworkIds ?? []).map((id) => this.homework.find((h) => h.id === id)).filter((h): h is Homework => !!h);
+    if (dest.homeworkId) {
+      const chosen = list.find((h) => h.id === dest.homeworkId);
+      if (!chosen) throw new BridgeError("conflict", "Выбранное ДЗ не относится к этой неделе");
+      return chosen;
     }
+    if (list.length > 1) throw new BridgeError("confirmation_required", "В этой неделе несколько ДЗ — выберите, к какому относится файл");
+    return list[0] ?? null;
+  }
+
+  private ensureHomework(week: Week, homeworkId?: string | null): Homework {
+    const existing = this.homeworkFor({ subjectId: week.subjectId, weekNumber: week.number, category: "homework_task", homeworkId });
+    if (existing) return existing;
     const id = `hw-${week.subjectId}-${week.number}`;
     const homework: Homework = {
       id,
       subjectId: week.subjectId,
       weekNumber: week.number,
+      ordinal: 1,
       title: `Домашняя работа — неделя ${week.number}`,
       deadline: week.endsAt,
       stage: "task",
@@ -1209,20 +1261,24 @@ export class MockDesktopBridge implements DesktopBridge {
       revision: 0,
     };
     this.homework.push(homework);
-    week.homeworkId = id;
+    week.homeworkIds = [...week.homeworkIds, id];
     return homework;
   }
 
   private destOf(f: InboxFile): RouteDestination {
     const c = f.classification;
-    return { subjectId: c?.subjectId ?? "", weekNumber: c?.weekNumber ?? CURRENT_WEEK, category: c?.category ?? "unknown" };
+    return { subjectId: c?.subjectId ?? "", weekNumber: c?.weekNumber ?? CURRENT_WEEK, category: c?.category ?? "unknown", homeworkId: c?.homeworkId ?? null };
   }
 
   private buildPreview(f: InboxFile, dest: RouteDestination, reserved: FileRef[] = []): RoutePreview {
     const exists = (this.weeks.get(dest.subjectId) ?? []).some((w) => w.number === dest.weekNumber);
     const ext = f.name.includes(".") ? `.${f.name.split(".").pop()}` : "";
     const stem = f.name.slice(0, f.name.length - ext.length);
-    const folder = `${weekFolder(dest.subjectId, dest.weekNumber)}/${CATEGORY_FOLDER[dest.category]}`;
+    const isHomework = dest.category === "homework_task" || dest.category === "homework_data" || dest.category === "homework_draft";
+    const homework = isHomework ? this.homeworkFor(dest) : null;
+    const folder = homework
+      ? `${homework.folderPath}/${dest.category === "homework_draft" ? "02 Работа" : "01 Условие и данные"}`
+      : `${weekFolder(dest.subjectId, dest.weekNumber)}/${CATEGORY_FOLDER[dest.category]}`;
     const dup = this.findDuplicate(f, dest, reserved);
     const targetName = dup ? dup.suggestedName : `${stem}${ext}`;
     const targetPath = `${folder}/${targetName}`;
@@ -1245,7 +1301,8 @@ export class MockDesktopBridge implements DesktopBridge {
 
   private findDuplicate(f: InboxFile, dest: RouteDestination, reserved: FileRef[] = []): InboxFile["duplicate"] {
     const week = this.weeks.get(dest.subjectId)?.find((w) => w.number === dest.weekNumber);
-    const homework = week?.homeworkId ? this.homework.find((h) => h.id === week.homeworkId) : this.homework.find((h) => h.subjectId === dest.subjectId && h.weekNumber === dest.weekNumber);
+    const homeworkId = dest.homeworkId ?? week?.homeworkIds[0];
+    const homework = homeworkId ? this.homework.find((h) => h.id === homeworkId) : undefined;
     const candidates = homework ? (this.homeworkCandidates.get(homework.id) ?? []) : [];
     const versionFiles = homework?.versions.flatMap((version) => version.files) ?? [];
     const all = [...(week?.lectures ?? []), ...(week?.seminars ?? []), ...(week?.materials ?? []), ...(homework?.taskFiles ?? []), ...candidates, ...versionFiles, ...reserved];

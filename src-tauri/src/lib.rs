@@ -12,6 +12,7 @@ pub mod events;
 pub mod extraction;
 mod extraction_commands;
 pub mod file_service;
+pub mod homework_registry;
 pub mod intake;
 mod intake_commands;
 #[cfg(test)]
@@ -109,6 +110,7 @@ pub fn run() {
             subject_commands::set_subject_archived,
             subject_commands::preview_subject_merge,
             subject_commands::merge_subjects,
+            subject_commands::create_homework,
             intake_commands::open_obsidian_note,
             intake_commands::pick_import_files,
             intake_commands::import_inbox_files,

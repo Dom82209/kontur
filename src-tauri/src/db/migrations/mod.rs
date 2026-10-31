@@ -2,61 +2,83 @@ use rusqlite::Connection;
 
 use crate::error::BackendError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 12;
+pub const CURRENT_SCHEMA_VERSION: u32 = 13;
 
 struct Migration {
     version: u32,
     sql: &'static str,
+    /// Перестройка таблицы, на которую ссылаются другие (12-шаговая процедура SQLite):
+    /// при `foreign_keys=ON` `DROP TABLE` выполнил бы каскадное удаление дочерних строк.
+    /// Миграция идёт с выключенными внешними ключами, перед коммитом обязательна
+    /// пустая `PRAGMA foreign_key_check`.
+    rebuilds_parent_table: bool,
 }
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         sql: include_str!("v1.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 2,
         sql: include_str!("v2.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 3,
         sql: include_str!("v3.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 4,
         sql: include_str!("v4.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 5,
         sql: include_str!("v5.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 6,
         sql: include_str!("v6.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 7,
         sql: include_str!("v7.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 8,
         sql: include_str!("v8.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 9,
         sql: include_str!("v9.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 10,
         sql: include_str!("v10.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 11,
         sql: include_str!("v11.sql"),
+        rebuilds_parent_table: false,
     },
     Migration {
         version: 12,
         sql: include_str!("v12.sql"),
+        rebuilds_parent_table: false,
+    },
+    Migration {
+        version: 13,
+        sql: include_str!("v13.sql"),
+        rebuilds_parent_table: true,
     },
 ];
 
@@ -74,13 +96,48 @@ pub fn migrate(connection: &mut Connection) -> Result<u32, BackendError> {
     }
 
     for migration in MIGRATIONS.iter().filter(|item| item.version > current) {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(migration.sql)?;
-        transaction.pragma_update(None, "user_version", migration.version)?;
-        transaction.commit()?;
+        if migration.rebuilds_parent_table {
+            run_with_foreign_keys_off(connection, migration)?;
+        } else {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(migration.sql)?;
+            transaction.pragma_update(None, "user_version", migration.version)?;
+            transaction.commit()?;
+        }
     }
 
     schema_version(connection)
+}
+
+fn run_with_foreign_keys_off(
+    connection: &mut Connection,
+    migration: &Migration,
+) -> Result<(), BackendError> {
+    let enabled: bool = connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    // PRAGMA foreign_keys игнорируется внутри транзакции: выключаем до неё.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(migration.sql)?;
+        let violations: i64 =
+            transaction.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        if violations > 0 {
+            // Транзакция откатывается при drop: база остаётся в прежней версии.
+            return Err(BackendError::database(format!(
+                "migration {} would leave {violations} foreign key violations",
+                migration.version
+            )));
+        }
+        transaction.pragma_update(None, "user_version", migration.version)?;
+        transaction.commit()?;
+        Ok(())
+    })();
+    // Внешние ключи возвращаются в исходное состояние при любом исходе.
+    connection.pragma_update(None, "foreign_keys", enabled)?;
+    connection.pragma_update(None, "legacy_alter_table", false)?;
+    result
 }
 
 #[cfg(test)]

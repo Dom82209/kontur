@@ -250,7 +250,7 @@ mod tests {
             week.materials[0].relative_path,
             "Предметы/ОБА/Неделя 07/04 Дополнительно/Пример.bpmn"
         );
-        assert_eq!(week.homework_id.as_deref(), Some("homework-7"));
+        assert_eq!(week.homework_ids, vec!["homework-7".to_owned()]);
     }
 
     #[test]

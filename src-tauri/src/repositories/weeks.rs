@@ -20,7 +20,7 @@ impl ReadRepository<'_> {
     pub fn weeks(&self, subject_id: Option<&str>) -> Result<Vec<WeekDto>, BackendError> {
         let rows = self.week_rows(subject_id)?;
         let mut files = group_week_files(self.week_files(subject_id)?);
-        let homework_ids = self.week_homework_ids(subject_id)?;
+        let mut homework_ids = self.week_homework_ids(subject_id)?;
         let mut output = Vec::with_capacity(rows.len());
         for row in rows {
             let mut lectures = Vec::new();
@@ -35,7 +35,7 @@ impl ReadRepository<'_> {
                 }
             }
             output.push(WeekDto {
-                homework_id: homework_ids.get(&row.id).cloned(),
+                homework_ids: homework_ids.remove(&row.id).unwrap_or_default(),
                 id: row.id,
                 subject_id: row.subject_id,
                 number: row.number,
@@ -90,13 +90,14 @@ impl ReadRepository<'_> {
     fn week_homework_ids(
         &self,
         subject_id: Option<&str>,
-    ) -> Result<HashMap<String, String>, BackendError> {
+    ) -> Result<HashMap<String, Vec<String>>, BackendError> {
         self.database.with_connection(|connection| {
             let sql = if subject_id.is_some() {
                 "SELECT h.week_id, h.id FROM homeworks h
-                 JOIN weeks w ON w.id = h.week_id WHERE w.subject_id = ?1"
+                 JOIN weeks w ON w.id = h.week_id WHERE w.subject_id = ?1
+                 ORDER BY h.week_id, h.ordinal"
             } else {
-                "SELECT week_id, id FROM homeworks"
+                "SELECT week_id, id FROM homeworks ORDER BY week_id, ordinal"
             };
             let mut statement = connection.prepare(sql)?;
             let mut rows = if let Some(id) = subject_id {
@@ -104,9 +105,9 @@ impl ReadRepository<'_> {
             } else {
                 statement.query([])?
             };
-            let mut output = HashMap::new();
+            let mut output: HashMap<String, Vec<String>> = HashMap::new();
             while let Some(row) = rows.next()? {
-                output.insert(row.get(0)?, row.get(1)?);
+                output.entry(row.get(0)?).or_default().push(row.get(1)?);
             }
             Ok(output)
         })

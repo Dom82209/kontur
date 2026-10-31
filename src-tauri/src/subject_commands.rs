@@ -4,8 +4,9 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
-    dto::SubjectDto,
+    dto::{HomeworkDto, SubjectDto},
     error::AppError,
+    homework_registry::{HomeworkRegistry, NewHomeworkInput},
     subjects::{SubjectInput, SubjectMergePreviewDto, SubjectMergeResultDto, SubjectService},
 };
 
@@ -56,4 +57,13 @@ pub fn merge_subjects(
 ) -> Result<SubjectMergeResultDto, AppError> {
     let _guard = state.lock_file_mutations()?;
     SubjectService::new(state.database()).merge(&source_id, &target_id, &fingerprint)
+}
+
+/// Этап 4: ещё одно ДЗ недели (только в базе, без записи в vault).
+#[tauri::command]
+pub fn create_homework(
+    state: State<'_, AppState>,
+    input: NewHomeworkInput,
+) -> Result<HomeworkDto, AppError> {
+    HomeworkRegistry::new(state.database()).create(&input)
 }

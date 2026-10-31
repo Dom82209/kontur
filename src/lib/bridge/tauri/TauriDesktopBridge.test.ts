@@ -30,13 +30,14 @@ const week: Week = {
   lectures: [],
   seminars: [],
   materials: [],
-  homeworkId: "homework-7",
+  homeworkIds: ["homework-7"],
 };
 
 const homework: Homework = {
   id: "homework-7",
   subjectId: subject.id,
   weekNumber: 7,
+  ordinal: 1,
   title: "Моделирование процесса",
   deadline: "2026-10-20T18:00:00Z",
   stage: "task",

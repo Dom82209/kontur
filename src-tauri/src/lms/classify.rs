@@ -205,6 +205,7 @@ pub fn classify_path(path: &str, context: &ClassifyContext) -> EntryClassificati
             confidence,
             reasons,
             source: ClassificationSource::Auto,
+            homework_id: None,
         },
         status,
     }
@@ -226,6 +227,7 @@ pub fn manual_classification(
             confidence: 1.0,
             reasons: vec!["Подтверждено пользователем в предпросмотре импорта".to_owned()],
             source: ClassificationSource::Manual,
+            homework_id: None,
         },
         status: if complete {
             InboxStatus::Classified

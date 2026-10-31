@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { useState } from "react";
 import { ArrowRight, BookOpen, ChevronLeft, ChevronRight, FilePlus, FolderTree, History, Plus } from "lucide-react";
 import { Navigate, Link, useNavigate, useParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
@@ -49,9 +50,27 @@ export function WeekPage() {
   const subjects = useBridgeQuery(() => bridge.getSubjects(), []);
   const weeks = useBridgeQuery(() => bridge.getWeeks(subjectId), [subjectId], ["operation:completed"]);
   const week = weeks.data?.find((w) => w.number === weekNumber) ?? null;
-  const hw = useBridgeQuery(() => (week?.homeworkId ? bridge.getHomework(week.homeworkId) : Promise.resolve(null)), [week?.homeworkId], ["operation:completed"]);
+  // Этап 4: у недели 0..N ДЗ; показывается выбранное (по умолчанию первое).
+  const [selectedHomework, setSelectedHomework] = useState<string | null>(null);
+  const [addingHomework, setAddingHomework] = useState(false);
+  const homeworkIds = week?.homeworkIds ?? [];
+  const homeworkId = selectedHomework && homeworkIds.includes(selectedHomework) ? selectedHomework : (homeworkIds[0] ?? null);
+  const homeworkList = useBridgeQuery(() => Promise.all(homeworkIds.map((id) => bridge.getHomework(id))), [homeworkIds.join("|")], ["operation:completed"]);
+  const hw = useBridgeQuery(() => (homeworkId ? bridge.getHomework(homeworkId) : Promise.resolve(null)), [homeworkId], ["operation:completed"]);
   const log = useBridgeQuery(() => bridge.getActivityLog(), [], ["operation:completed"]);
-  const readiness = useBridgeQuery(() => (week?.homeworkId ? bridge.getReadiness(week.homeworkId) : Promise.resolve(null)), [week?.homeworkId], ["operation:completed", "workflow:stage-changed"]);
+  const readiness = useBridgeQuery(() => (homeworkId ? bridge.getReadiness(homeworkId) : Promise.resolve(null)), [homeworkId], ["operation:completed", "workflow:stage-changed"]);
+
+  const addHomework = async (title: string, deadline: string | null) => {
+    try {
+      const created = await bridge.createHomework({ subjectId, weekNumber, title, deadline });
+      setAddingHomework(false);
+      setSelectedHomework(created.id);
+      await weeks.reload();
+      toast.push({ tone: "ok", title: "ДЗ добавлено", text: `${created.title} · ${created.folderPath}` });
+    } catch (e) {
+      reportError(e, "ДЗ не добавлено");
+    }
+  };
   const style = useBridgeQuery(() => bridge.getStyleProfile(), []);
   const subject = subjects.data?.find((s) => s.id === subjectId);
   const maxWeek = Math.max(0, ...(weeks.data?.map((w) => w.number) ?? [0]));
@@ -134,10 +153,26 @@ export function WeekPage() {
         <motion.div key={week.id} className="week__grid" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.2 }}>
           <section className="panel week__hw">
             <div className="panel__head">
-              <h2 className="panel__title">Домашняя работа</h2>
+              <h2 className="panel__title">{homeworkIds.length > 1 ? `Домашние работы · ${homeworkIds.length}` : "Домашняя работа"}</h2>
               {homework && <span className="badge badge--accent">{WORKFLOW_STAGE_LABEL[homework.workflowStage]}</span>}
               {homework && <StageBadge stage={homework.stage} />}
+              <button className="btn btn--sm btn--ghost" onClick={() => setAddingHomework((v) => !v)} aria-expanded={addingHomework} data-testid="week-add-homework">
+                <Plus /> Добавить ДЗ
+              </button>
             </div>
+            {homeworkIds.length > 1 && (
+              <div className="week__hwtabs" role="tablist" aria-label="ДЗ недели">
+                {homeworkIds.map((id, index) => {
+                  const item = homeworkList.data?.find((h) => h?.id === id);
+                  return (
+                    <button key={id} role="tab" aria-selected={id === homeworkId} className="week__hwtab" onClick={() => setSelectedHomework(id)}>
+                      <span className="num">{item?.ordinal ?? index + 1}</span> {item?.title ?? "…"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {addingHomework && <NewHomeworkForm onCancel={() => setAddingHomework(false)} onSubmit={(title, deadline) => void addHomework(title, deadline)} />}
             <div className="panel__body">
               {homework ? (
                 <div className="week__hwbody">
@@ -265,5 +300,39 @@ export function WeekPage() {
         </motion.div>
       )}
     </div>
+  );
+}
+
+/** Этап 4: ещё одно ДЗ недели. Срок можно не указывать — тогда он «не указан». */
+function NewHomeworkForm({ onSubmit, onCancel }: { onSubmit: (title: string, deadline: string | null) => void; onCancel: () => void }) {
+  const [title, setTitle] = useState("");
+  const [deadline, setDeadline] = useState("");
+  return (
+    <form
+      className="week__hwform"
+      onSubmit={(event) => {
+        event.preventDefault();
+        // datetime-local — местное время пользователя; в backend уходит ISO с часовым поясом.
+        onSubmit(title, deadline ? new Date(deadline).toISOString() : null);
+      }}
+    >
+      <label className="field">
+        <span className="field__label">Название ДЗ</span>
+        <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={120} data-autofocus />
+      </label>
+      <label className="field">
+        <span className="field__label">Срок (необязательно)</span>
+        <input className="input" type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
+      </label>
+      <p className="field__hint">ДЗ создаётся только в «Контуре»; папка в vault появится при раскладке файлов.</p>
+      <div className="button-row">
+        <button type="button" className="btn btn--ghost" onClick={onCancel}>
+          Отмена
+        </button>
+        <button type="submit" className="btn btn--primary">
+          Добавить
+        </button>
+      </div>
+    </form>
   );
 }

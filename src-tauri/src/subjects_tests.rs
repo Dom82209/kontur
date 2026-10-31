@@ -182,6 +182,7 @@ fn archived_subject_is_not_offered_and_manual_choice_is_blocked() {
         .update_classification(
             "inbox-1",
             ClassificationPatchDto {
+                homework_id: PatchField::Absent,
                 subject_id: PatchField::Value(subject.id.clone()),
                 week_number: PatchField::Absent,
                 category: PatchField::Value(MaterialCategory::Lecture),

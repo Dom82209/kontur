@@ -79,7 +79,8 @@ pub struct WeekDto {
     pub lectures: Vec<FileRefDto>,
     pub seminars: Vec<FileRefDto>,
     pub materials: Vec<FileRefDto>,
-    pub homework_id: Option<String>,
+    /// Этап 4: все ДЗ недели в порядке `ordinal` (0..N).
+    pub homework_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +111,9 @@ pub struct ClassificationDto {
     pub confidence: f64,
     pub reasons: Vec<String>,
     pub source: ClassificationSource,
+    /// Этап 4: ДЗ недели для файла ДЗ (ручной выбор, если в неделе несколько ДЗ).
+    #[serde(default)]
+    pub homework_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +222,9 @@ pub struct RouteDestinationDto {
     pub subject_id: String,
     pub week_number: i64,
     pub category: MaterialCategory,
+    /// Этап 4: ДЗ недели для файлов ДЗ. Обязателен, если в неделе несколько ДЗ.
+    #[serde(default)]
+    pub homework_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +288,8 @@ pub struct HomeworkDto {
     pub id: String,
     pub subject_id: String,
     pub week_number: i64,
+    /// Порядковый номер ДЗ в неделе (1..N).
+    pub ordinal: i64,
     pub title: String,
     /// `None` — срок неизвестен (не выдумывается).
     pub deadline: Option<String>,
@@ -504,9 +513,10 @@ pub struct AutomationRulesDto {
     pub workflow: WorkflowSettingsDto,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum PatchField<T> {
+    #[default]
     Absent,
     Null,
     Value(T),
@@ -518,6 +528,8 @@ pub struct ClassificationPatchDto {
     pub subject_id: PatchField<String>,
     pub week_number: PatchField<i64>,
     pub category: PatchField<MaterialCategory>,
+    #[serde(default)]
+    pub homework_id: PatchField<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

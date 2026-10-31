@@ -134,6 +134,10 @@ export function mergeSubjects(sourceId: string, targetId: string, fingerprint: s
   return call("merge_subjects", { sourceId, targetId, fingerprint });
 }
 
+export function createHomework(input: import("../types").NewHomeworkInput): Promise<import("../types").Homework> {
+  return call("create_homework", { input });
+}
+
 export function getSubjects(): Promise<Subject[]> {
   return call("get_subjects");
 }
@@ -175,6 +179,7 @@ interface ClassificationPatchIpc {
   subjectId: PatchField<string>;
   weekNumber: PatchField<number>;
   category: PatchField<NonNullable<ClassificationPatch["category"]>>;
+  homeworkId: PatchField<string>;
 }
 
 function patchField<K extends keyof ClassificationPatch>(
@@ -203,6 +208,7 @@ export function updateClassification(
     subjectId: patchField(patch, "subjectId"),
     weekNumber: patchField(patch, "weekNumber"),
     category: patchField(patch, "category"),
+    homeworkId: patchField(patch, "homeworkId"),
   };
   return call("update_classification", { fileId, patch: encoded });
 }

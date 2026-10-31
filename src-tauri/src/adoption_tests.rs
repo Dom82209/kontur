@@ -716,3 +716,50 @@ fn mirror_of_real_vault_preview() {
     let report = service.apply(&preview.id, &[], true).unwrap();
     println!("DRYRUN {report:?}");
 }
+
+#[test]
+fn week_with_an_existing_homework_gets_the_vault_homework_as_the_next_one() {
+    let fixture = fixture();
+    let oba = "Предметы/Основы бизнес-аналитики";
+    fixture
+        .database
+        .with_transaction(|tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO subjects(id,name,short_name,folder_path) VALUES ('oba','Основы бизнес-аналитики','ОБА','{oba}');
+                 INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES ('w5','oba',5,'','','{oba}/Неделя 05');
+                 INSERT INTO homeworks(id,week_id,ordinal,title,deadline,stage,workflow_stage,folder_path)
+                   VALUES ('manual','w5',1,'Кейс',NULL,'task','materials','{oba}/Неделя 05/03 ДЗ (кейс)');"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    let preview = service(&fixture).preview().unwrap();
+    let planned = preview
+        .plan
+        .homeworks
+        .iter()
+        .find(|h| h.folder_path == format!("{oba}/Неделя 05/03 ДЗ"))
+        .unwrap();
+    assert_eq!(
+        planned.status,
+        AdoptionStatus::New,
+        "второе ДЗ недели — не конфликт"
+    );
+    service(&fixture).apply(&preview.id, &[], false).unwrap();
+    let (ordinal, key): (i64, Option<String>) = fixture
+        .database
+        .with_connection(|c| {
+            Ok(c.query_row(
+                "SELECT ordinal, import_key FROM homeworks WHERE folder_path=?1",
+                [format!("{oba}/Неделя 05/03 ДЗ")],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(ordinal, 2);
+    assert_eq!(
+        key.as_deref(),
+        Some(format!("vault:{oba}/Неделя 05/03 ДЗ").as_str())
+    );
+    assert_eq!(count(&fixture.database, "homeworks"), 3);
+}

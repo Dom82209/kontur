@@ -32,6 +32,18 @@ export function ClassificationFields({ file, layout = "inline", onDone }: Props)
     }
   };
 
+  // Этап 4: если в неделе несколько ДЗ, файл ДЗ нужно отнести к конкретному.
+  const isHomework = c?.category === "homework_task" || c?.category === "homework_data" || c?.category === "homework_draft";
+  const weekHomeworks = useBridgeQuery(
+    async () => {
+      if (!isHomework || !c?.subjectId || !c.weekNumber) return [];
+      const week = await bridge.getWeek(c.subjectId, c.weekNumber);
+      const list = await Promise.all((week?.homeworkIds ?? []).map((id) => bridge.getHomework(id)));
+      return list.filter((h): h is NonNullable<typeof h> => !!h);
+    },
+    [isHomework, c?.subjectId, c?.weekNumber],
+  );
+
   const stacked = layout === "stacked";
   return (
     <div className={stacked ? "cfields cfields--stacked" : "cfields"} onClick={(e) => e.stopPropagation()}>
@@ -70,6 +82,19 @@ export function ClassificationFields({ file, layout = "inline", onDone }: Props)
           ))}
         </select>
       </label>
+      {(weekHomeworks.data?.length ?? 0) > 1 && (
+        <label className={stacked ? "field" : undefined}>
+          {stacked ? <span className="field__label">Какое ДЗ недели</span> : <span className="sr-only">ДЗ недели</span>}
+          <select className={`select${stacked ? "" : " select--sm"}`} value={c?.homeworkId ?? ""} onChange={(e) => void patch({ homeworkId: e.target.value || null })} aria-label="ДЗ недели">
+            <option value="">— выберите ДЗ —</option>
+            {weekHomeworks.data!.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.ordinal}. {h.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {onDone && (
         <button className="btn btn--sm btn--icon" onClick={onDone} aria-label="Готово" disabled={saving}>
           <Check />

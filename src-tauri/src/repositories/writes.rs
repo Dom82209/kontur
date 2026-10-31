@@ -93,6 +93,20 @@ pub fn subject_archived(
     )?)
 }
 
+pub fn homework_in_week(
+    transaction: &Transaction<'_>,
+    homework_id: &str,
+    subject_id: &str,
+    week_number: i64,
+) -> Result<bool, BackendError> {
+    Ok(transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM homeworks h JOIN weeks w ON w.id = h.week_id
+                       WHERE h.id = ?1 AND w.subject_id = ?2 AND w.number = ?3)",
+        params![homework_id, subject_id, week_number],
+        |row| row.get(0),
+    )?)
+}
+
 pub fn week_exists_for_subject(
     transaction: &Transaction<'_>,
     subject_id: &str,

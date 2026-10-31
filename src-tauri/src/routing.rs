@@ -343,7 +343,20 @@ impl<'a> RoutingService<'a> {
                     )
                     .map_err(Into::into)
                 })?;
-            let week_folder = format!("{subject_folder}/Неделя {:02}", dest.week_number);
+            // Папки берутся из фактического пути назначения: неделя после слияния и
+            // второе/третье ДЗ недели живут не там, где их вычислило бы имя предмета.
+            let target = std::path::Path::new(&preview.target_path);
+            let category_dir = target.parent().and_then(|p| p.parent());
+            let homework_folder = is_homework_category(dest.category)
+                .then(|| category_dir.map(|p| p.to_string_lossy().into_owned()))
+                .flatten();
+            let week_folder = match &homework_folder {
+                Some(folder) => std::path::Path::new(folder)
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned()),
+                None => category_dir.map(|p| p.to_string_lossy().into_owned()),
+            }
+            .unwrap_or_else(|| format!("{subject_folder}/Неделя {:02}", dest.week_number));
             let subject_note = format!("{subject_folder}/{subject_name}.md");
             if handled.insert(subject_note.clone()) {
                 let managed = format!(
@@ -358,21 +371,23 @@ impl<'a> RoutingService<'a> {
             let week_note = format!("{week_folder}/Обзор недели.md");
             if handled.insert(week_note.clone()) {
                 let links = self.note_links(&dest.subject_id, dest.week_number, previews)?;
-                let managed=format!("# {subject_name} · неделя {0:02}\n\n## Материалы\n{links}\n\n## Домашнее задание\n- [[03 ДЗ/Карточка ДЗ|Карточка ДЗ]]",dest.week_number);
+                let cards = self.homework_cards(&week_folder, previews)?;
+                let managed = format!(
+                    "# {subject_name} · неделя {0:02}\n\n## Материалы\n{links}\n\n## Домашнее задание\n{cards}",
+                    dest.week_number
+                );
                 push_note(
                     &mut writes_out,
                     write_managed_markdown(vault, PersistentPath::new(week_note)?, &managed),
                 )?;
             }
-            if matches!(
-                dest.category,
-                MaterialCategory::HomeworkTask
-                    | MaterialCategory::HomeworkData
-                    | MaterialCategory::HomeworkDraft
-            ) {
-                let hw_note = format!("{week_folder}/03 ДЗ/Карточка ДЗ.md");
+            if let Some(homework_folder) = homework_folder {
+                let hw_note = format!("{homework_folder}/Карточка ДЗ.md");
                 if handled.insert(hw_note.clone()) {
-                    let managed=format!("# Домашнее задание · неделя {0:02}\n\n## Файлы\n- [[../../{1}|{2}]]\n\n## Версии\n\n## Проверка\nСтатус: материалы собраны\n\n## Комментарии преподавателя\n\n## Итоговый комплект\n\n## Отправленный снимок",dest.week_number,preview.target_path.strip_prefix(&format!("{week_folder}/")).unwrap_or(&preview.target_path),preview.target_name);
+                    let managed = format!(
+                        "# Домашнее задание · неделя {0:02}\n\n## Файлы\n- [[{1}|{2}]]\n\n## Версии\n\n## Проверка\nСтатус: материалы собраны\n\n## Комментарии преподавателя\n\n## Итоговый комплект\n\n## Отправленный снимок",
+                        dest.week_number, preview.target_path, preview.target_name
+                    );
                     push_note(
                         &mut writes_out,
                         write_managed_markdown(vault, PersistentPath::new(hw_note)?, &managed),
@@ -382,6 +397,46 @@ impl<'a> RoutingService<'a> {
         }
         Ok(writes_out)
     }
+    /// Ссылки на карточки всех ДЗ недели: уже существующих и создаваемых раскладкой.
+    fn homework_cards(
+        &self,
+        week_folder: &str,
+        previews: &[(RoutePreviewDto, RouteDestinationDto)],
+    ) -> Result<String, AppError> {
+        let mut folders: Vec<String> = self.database.with_connection(|c| {
+            let mut q = c.prepare(
+                "SELECT h.folder_path FROM homeworks h JOIN weeks w ON w.id=h.week_id
+                 WHERE w.folder_path=?1 ORDER BY h.ordinal",
+            )?;
+            let rows = q.query_map([week_folder], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })?;
+        for (preview, dest) in previews {
+            if !is_homework_category(dest.category) {
+                continue;
+            }
+            let folder = std::path::Path::new(&preview.target_path)
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().into_owned());
+            if let Some(folder) = folder {
+                if folder.starts_with(&format!("{week_folder}/")) && !folders.contains(&folder) {
+                    folders.push(folder);
+                }
+            }
+        }
+        Ok(folders
+            .iter()
+            .map(|folder| {
+                let local = folder
+                    .strip_prefix(&format!("{week_folder}/"))
+                    .unwrap_or(folder);
+                format!("- [[{local}/Карточка ДЗ|{local}]]")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
     fn note_links(
         &self,
         subject_id: &str,
@@ -466,6 +521,9 @@ struct RouteRow {
     week_exists: bool,
     week_id: String,
     homework_id: Option<String>,
+    /// ДЗ ещё нет: будет создано (первое ДЗ недели) при раскладке.
+    creates_homework: bool,
+    homework_folder: Option<String>,
 }
 fn route_row(db: &Database, id: &str, d: &RouteDestinationDto) -> Result<RouteRow, AppError> {
     db.with_connection(|c| route_row_in(c, id, d))
@@ -491,24 +549,64 @@ fn route_row_in(
             "Предмет в архиве: верните его из архива или выберите другой",
         ));
     }
-    let found: Option<(String, Option<String>, String)> = c
+    let found: Option<(String, String)> = c
         .query_row(
-            "SELECT w.id,h.id,w.folder_path FROM weeks w LEFT JOIN homeworks h ON h.week_id=w.id WHERE w.subject_id=?1 AND w.number=?2",
+            "SELECT id, folder_path FROM weeks WHERE subject_id=?1 AND number=?2",
             params![d.subject_id, d.week_number],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
     let week_exists = found.is_some();
     // Существующая неделя раскладывается в свою папку: после слияния предметов
     // неделя сохраняет папку исходного предмета.
-    let week_folder = found
-        .as_ref()
-        .map(|(_, _, folder)| folder.clone())
-        .unwrap_or_else(|| format!("{subject_folder}/Неделя {:02}", d.week_number));
-    let (week_id, homework_id) = found
-        .map(|(week, homework, _)| (week, homework))
-        .unwrap_or_else(|| (Uuid::new_v4().to_string(), None));
-    let folder = format!("{week_folder}/{}", category_folder(d.category));
+    let (week_id, week_folder) = found.unwrap_or_else(|| {
+        (
+            Uuid::new_v4().to_string(),
+            format!("{subject_folder}/Неделя {:02}", d.week_number),
+        )
+    });
+    let mut homework_id = None;
+    let mut homework_folder = None;
+    let mut creates_homework = false;
+    if is_homework_category(d.category) {
+        let mut statement = c.prepare(
+            "SELECT id, folder_path FROM homeworks WHERE week_id=?1 ORDER BY ordinal, id",
+        )?;
+        let homeworks = statement
+            .query_map([&week_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let chosen = match (&d.homework_id, homeworks.len()) {
+            (Some(wanted), _) => Some(
+                homeworks
+                    .iter()
+                    .find(|(id, _)| id == wanted)
+                    .cloned()
+                    .ok_or_else(|| {
+                        BackendError::conflict("Выбранное ДЗ не относится к этой неделе")
+                    })?,
+            ),
+            (None, 0) => None,
+            (None, 1) => Some(homeworks[0].clone()),
+            (None, _) => {
+                return Err(BackendError::new(
+                    crate::error::ErrorCode::ConfirmationRequired,
+                    "В этой неделе несколько ДЗ — выберите, к какому относится файл",
+                ))
+            }
+        };
+        let (id, folder) = chosen.unwrap_or_else(|| {
+            creates_homework = true;
+            (Uuid::new_v4().to_string(), format!("{week_folder}/03 ДЗ"))
+        });
+        homework_id = Some(id);
+        homework_folder = Some(folder);
+    }
+    let folder = match &homework_folder {
+        Some(base) => format!("{base}/{}", homework_subfolder(d.category)),
+        None => format!("{week_folder}/{}", category_folder(d.category)),
+    };
     Ok(RouteRow {
         source_path,
         name,
@@ -519,6 +617,8 @@ fn route_row_in(
         week_exists,
         week_id,
         homework_id,
+        creates_homework,
+        homework_folder,
     })
 }
 fn ensure_week_and_homework(
@@ -529,17 +629,36 @@ fn ensure_week_and_homework(
     if !row.week_exists {
         c.execute("INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES(?1,?2,?3,strftime('%Y-%m-%dT00:00:00Z','now'),strftime('%Y-%m-%dT23:59:59Z','now','+6 days'),?4)",params![row.week_id,d.subject_id,d.week_number,row.week_folder])?;
     }
-    if matches!(
-        d.category,
-        MaterialCategory::HomeworkTask
-            | MaterialCategory::HomeworkData
-            | MaterialCategory::HomeworkDraft
-    ) && row.homework_id.is_none()
-    {
-        c.execute("INSERT INTO homeworks(id,week_id,title,deadline,stage,workflow_stage,folder_path) VALUES(?1,?2,?3,strftime('%Y-%m-%dT23:59:59Z','now','+7 days'),'task','materials',?4)",params![Uuid::new_v4().to_string(),row.week_id,format!("Домашнее задание — неделя {}",d.week_number),format!("{}/03 ДЗ",row.week_folder)])?;
+    if row.creates_homework {
+        // Первое ДЗ недели: ordinal 1, папка «03 ДЗ». Срок — до этапа 5 условный.
+        let (Some(id), Some(folder)) = (&row.homework_id, &row.homework_folder) else {
+            return Err(BackendError::database("План раскладки без ДЗ"));
+        };
+        c.execute(
+            "INSERT INTO homeworks(id,week_id,ordinal,title,deadline,stage,workflow_stage,folder_path)
+             VALUES(?1,?2,1,?3,strftime('%Y-%m-%dT23:59:59Z','now','+7 days'),'task','materials',?4)",
+            params![id, row.week_id, format!("Домашнее задание — неделя {}", d.week_number), folder],
+        )?;
     }
     Ok(())
 }
+fn is_homework_category(c: MaterialCategory) -> bool {
+    matches!(
+        c,
+        MaterialCategory::HomeworkTask
+            | MaterialCategory::HomeworkData
+            | MaterialCategory::HomeworkDraft
+    )
+}
+
+/// Подпапка внутри папки конкретного ДЗ.
+fn homework_subfolder(c: MaterialCategory) -> &'static str {
+    match c {
+        MaterialCategory::HomeworkDraft => "02 Работа",
+        _ => "01 Условие и данные",
+    }
+}
+
 fn category_folder(c: MaterialCategory) -> &'static str {
     match c {
         MaterialCategory::Lecture => "01 Лекции",
@@ -584,6 +703,7 @@ fn classification_destination(db: &Database, id: &str) -> Result<RouteDestinatio
         subject_id: c.subject_id.unwrap(),
         week_number: c.week_number.unwrap(),
         category: c.category,
+        homework_id: c.homework_id,
     })
 }
 fn ids_from_manifest(
@@ -682,6 +802,7 @@ mod tests {
             subject_id: "math".into(),
             week_number: 7,
             category: MaterialCategory::Lecture,
+            homework_id: None,
         };
         let preview = service.preview("i1", &dest).unwrap();
         assert_eq!(preview.action, RouteActionDto::Copy);
@@ -764,5 +885,176 @@ mod tests {
         service.classify_files(&["i2".into()]).unwrap();
         let error = service.route(&["i2".into()], None).unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::ConfirmationRequired);
+    }
+    #[test]
+    fn homework_files_go_to_the_chosen_homework_of_a_multi_homework_week() {
+        use crate::homework_registry::{HomeworkRegistry, NewHomeworkInput};
+        let f = Fixture::new();
+        let service = RoutingService::new(&f.database, None);
+        let hw = |category| RouteDestinationDto {
+            subject_id: "math".into(),
+            week_number: 3,
+            category,
+            homework_id: None,
+        };
+        // Неделя без ДЗ: раскладка создаёт первое ДЗ и привязывает к нему файл.
+        f.add("a", "Математика week 3 условие.md", None);
+        service
+            .route(&["a".into()], Some(&hw(MaterialCategory::HomeworkTask)))
+            .unwrap();
+        let (first_id, first_folder): (String, String) = f
+            .database
+            .with_connection(|c| {
+                Ok(
+                    c.query_row("SELECT id, folder_path FROM homeworks", [], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(first_folder, "Предметы/Математика/Неделя 03/03 ДЗ");
+        let linked: Option<String> = f
+            .database
+            .with_connection(|c| {
+                Ok(c.query_row(
+                    "SELECT homework_id FROM files WHERE name LIKE '%условие%'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            linked.as_deref(),
+            Some(first_id.as_str()),
+            "файл привязан к созданному ДЗ"
+        );
+
+        // Второе ДЗ недели: без выбора раскладка не угадывает.
+        let second = HomeworkRegistry::new(&f.database)
+            .create(&NewHomeworkInput {
+                subject_id: "math".into(),
+                week_number: 3,
+                title: "Контрольное ДЗ".into(),
+                deadline: None,
+            })
+            .unwrap();
+        assert_eq!(second.ordinal, 2);
+        f.add("b", "Математика week 3 решение.md", None);
+        let error = service
+            .preview("b", &hw(MaterialCategory::HomeworkDraft))
+            .unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::ConfirmationRequired);
+        let chosen = RouteDestinationDto {
+            homework_id: Some(second.id.clone()),
+            ..hw(MaterialCategory::HomeworkDraft)
+        };
+        let preview = service.preview("b", &chosen).unwrap();
+        assert!(preview
+            .target_path
+            .starts_with("Предметы/Математика/Неделя 03/03 ДЗ (2)/02 Работа/"));
+        service.route(&["b".into()], Some(&chosen)).unwrap();
+        let card = f
+            .vault
+            .join("Предметы/Математика/Неделя 03/03 ДЗ (2)/Карточка ДЗ.md");
+        assert!(card.is_file(), "карточка лежит в папке своего ДЗ");
+        let overview = fs::read_to_string(
+            f.vault
+                .join("Предметы/Математика/Неделя 03/Обзор недели.md"),
+        )
+        .unwrap();
+        assert!(overview.contains("[[03 ДЗ/Карточка ДЗ|03 ДЗ]]"));
+        assert!(overview.contains("[[03 ДЗ (2)/Карточка ДЗ|03 ДЗ (2)]]"));
+
+        // ДЗ из другой недели выбрать нельзя; лекция к ДЗ не привязывается.
+        f.add("c", "Математика week 4 условие.md", None);
+        let wrong = RouteDestinationDto {
+            week_number: 4,
+            homework_id: Some(second.id.clone()),
+            ..hw(MaterialCategory::HomeworkTask)
+        };
+        assert!(service.preview("c", &wrong).is_err());
+        f.add("d", "Математика week 3 лекция.md", None);
+        service
+            .route(&["d".into()], Some(&hw(MaterialCategory::Lecture)))
+            .unwrap();
+        let lecture_homework: Option<String> = f
+            .database
+            .with_connection(|c| {
+                Ok(c.query_row(
+                    "SELECT homework_id FROM files WHERE name LIKE '%лекция%'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(lecture_homework, None);
+    }
+    #[test]
+    fn manual_homework_choice_is_kept_in_classification_and_used_by_routing() {
+        use crate::{
+            dto::{ClassificationPatchDto, PatchField},
+            homework_registry::{HomeworkRegistry, NewHomeworkInput},
+            mutation_service::MutationService,
+        };
+        let f = Fixture::new();
+        let service = RoutingService::new(&f.database, None);
+        service.create_week("math", 2).unwrap();
+        let registry = HomeworkRegistry::new(&f.database);
+        let new = |title: &str| NewHomeworkInput {
+            subject_id: "math".into(),
+            week_number: 2,
+            title: title.into(),
+            deadline: None,
+        };
+        registry.create(&new("ДЗ 2")).unwrap();
+        let second = registry.create(&new("Мини-проект")).unwrap();
+        f.add("x", "Математика week 2 решение.md", None);
+        let mutations = MutationService::new(&f.database);
+        let set = |homework: PatchField<String>, week: PatchField<i64>| ClassificationPatchDto {
+            subject_id: PatchField::Value("math".into()),
+            week_number: week,
+            category: PatchField::Value(MaterialCategory::HomeworkDraft),
+            homework_id: homework,
+        };
+        let chosen = mutations
+            .update_classification(
+                "x",
+                set(PatchField::Value(second.id.clone()), PatchField::Value(2)),
+            )
+            .unwrap();
+        assert_eq!(
+            chosen.value.classification.unwrap().homework_id.as_deref(),
+            Some(second.id.as_str())
+        );
+        let routed = service.route(&["x".into()], None).unwrap();
+        assert!(routed.value[0]
+            .target_path
+            .contains("/03 ДЗ (2)/02 Работа/"));
+
+        f.add("y", "Математика week 2 решение 2.md", None);
+        service.create_week("math", 3).unwrap();
+        assert!(
+            mutations
+                .update_classification(
+                    "y",
+                    set(PatchField::Value(second.id.clone()), PatchField::Value(3))
+                )
+                .is_err(),
+            "ДЗ другой недели"
+        );
+        mutations
+            .update_classification(
+                "y",
+                set(PatchField::Value(second.id.clone()), PatchField::Value(2)),
+            )
+            .unwrap();
+        let moved = mutations
+            .update_classification("y", set(PatchField::Absent, PatchField::Value(3)))
+            .unwrap();
+        assert_eq!(
+            moved.value.classification.unwrap().homework_id,
+            None,
+            "смена недели сбрасывает выбор ДЗ"
+        );
     }
 }

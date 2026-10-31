@@ -89,6 +89,7 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
           subjectId: { state: "absent" },
           weekNumber: { state: "absent" },
           category: { state: "absent" },
+          homeworkId: { state: "absent" },
         },
       }],
     ]);
@@ -109,6 +110,7 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
           subjectId: { state: "absent" },
           weekNumber: { state: "absent" },
           category: { state: "absent" },
+          homeworkId: { state: "absent" },
         },
       },
       {
@@ -117,6 +119,7 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
           subjectId: { state: "null" },
           weekNumber: { state: "null" },
           category: { state: "null" },
+          homeworkId: { state: "absent" },
         },
       },
       {
@@ -125,6 +128,7 @@ describe("низкоуровневый Tauri IPC-клиент", () => {
           subjectId: { state: "value", value: "subject-1" },
           weekNumber: { state: "value", value: 7 },
           category: { state: "value", value: "lecture" },
+          homeworkId: { state: "absent" },
         },
       },
     ]);

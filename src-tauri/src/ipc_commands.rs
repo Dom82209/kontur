@@ -41,6 +41,7 @@ pub const COMMANDS: &[&str] = &[
     "set_subject_archived",
     "preview_subject_merge",
     "merge_subjects",
+    "create_homework",
     "open_obsidian_note",
     "pick_import_files",
     "import_inbox_files",

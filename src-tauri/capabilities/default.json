@@ -47,6 +47,7 @@
     "allow-set-subject-archived",
     "allow-preview-subject-merge",
     "allow-merge-subjects",
+    "allow-create-homework",
     "allow-open-obsidian-note",
     "allow-pick-import-files",
     "allow-import-inbox-files",

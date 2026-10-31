@@ -2129,3 +2129,30 @@
 .handoff__log li[data-level="warn"] { color: var(--warn); }
 .runmon__job { margin-top: 6px; font-size: 12px; }
 .runmon[data-status="running"] { border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* Этап 4: несколько ДЗ в неделе */
+.week__hwtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+.week__hwtab {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.week__hwtab[aria-selected="true"] {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.week__hwform {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 12px;
+}

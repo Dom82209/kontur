@@ -15,6 +15,7 @@ struct HomeworkRow {
     id: String,
     subject_id: String,
     week_number: i64,
+    ordinal: i64,
     title: String,
     deadline: Option<String>,
     stage: String,
@@ -93,6 +94,7 @@ pub(crate) fn load_homeworks(
             id: row.id,
             subject_id: row.subject_id,
             week_number: row.week_number,
+            ordinal: row.ordinal,
             title: row.title,
             deadline,
             stage,
@@ -114,12 +116,12 @@ fn homework_rows(
 ) -> Result<Vec<HomeworkRow>, BackendError> {
     let base = "SELECT h.id, w.subject_id, w.number, h.title, h.deadline, h.stage,
                        h.workflow_stage, h.final_version_id, h.final_file_name, h.submitted_at,
-                       h.folder_path, h.assignment_url, h.revision
+                       h.folder_path, h.assignment_url, h.revision, h.ordinal
                 FROM homeworks h JOIN weeks w ON w.id = h.week_id";
     let sql = if homework_id.is_some() {
         format!("{base} WHERE h.id = ?1")
     } else {
-        format!("{base} ORDER BY h.deadline IS NULL, h.deadline, h.id")
+        format!("{base} ORDER BY h.deadline IS NULL, h.deadline, w.number, h.ordinal, h.id")
     };
     let mut statement = connection.prepare(&sql)?;
     let mut rows = if let Some(id) = homework_id {
@@ -143,6 +145,7 @@ fn homework_rows(
             folder_path: row.get(10)?,
             assignment_url: row.get(11)?,
             revision: row.get(12)?,
+            ordinal: row.get(13)?,
         });
     }
     Ok(output)

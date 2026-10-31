@@ -108,6 +108,14 @@ export interface Subject {
   revision: number;
 }
 
+export interface NewHomeworkInput {
+  subjectId: string;
+  weekNumber: number;
+  title: string;
+  /** ISO 8601 с часовым поясом; null — срок неизвестен. */
+  deadline: string | null;
+}
+
 export interface SubjectInput {
   name: string;
   shortName: string;
@@ -154,7 +162,8 @@ export interface Week {
   lectures: FileRef[];
   seminars: FileRef[];
   materials: FileRef[];
-  homeworkId: string | null;
+  /** Этап 4: все ДЗ недели по порядку (0..N). */
+  homeworkIds: string[];
 }
 
 // ───────────────────────── Входящие ─────────────────────────
@@ -171,6 +180,8 @@ export interface Classification {
   reasons: string[];
   /** Источник правки: автоматическая классификация или ручная. */
   source: "auto" | "manual";
+  /** Этап 4: ДЗ недели для файла ДЗ (ручной выбор, если в неделе несколько ДЗ). */
+  homeworkId?: string | null;
 }
 
 export interface ClassificationPatch {
@@ -178,6 +189,8 @@ export interface ClassificationPatch {
   weekNumber?: number | null;
   /** null очищает категорию до unknown. */
   category?: MaterialCategory | null;
+  /** Этап 4: какое ДЗ недели; null сбрасывает выбор. */
+  homeworkId?: string | null;
 }
 
 export interface InboxFile {
@@ -217,6 +230,8 @@ export interface RouteDestination {
   subjectId: string;
   weekNumber: number;
   category: MaterialCategory;
+  /** Этап 4: обязателен для файла ДЗ, если в неделе несколько ДЗ. */
+  homeworkId?: string | null;
 }
 
 export interface RoutePreview {
@@ -871,6 +886,8 @@ export interface Homework {
   id: string;
   subjectId: string;
   weekNumber: number;
+  /** Порядковый номер ДЗ в неделе (1..N). */
+  ordinal: number;
   title: string;
   /** `null` — срок неизвестен; приложение его не выдумывает. */
   deadline: ISODate | null;
@@ -1109,6 +1126,8 @@ export interface DesktopBridge {
   previewSubjectMerge(sourceId: string, targetId: string): Promise<SubjectMergePreview>;
   /** Применяет слияние, только если состояние совпадает с предпросмотром (fingerprint). */
   mergeSubjects(sourceId: string, targetId: string, fingerprint: string): Promise<SubjectMergeResult>;
+  /** Этап 4: ещё одно ДЗ недели (только в базе, без записи в vault). */
+  createHomework(input: NewHomeworkInput): Promise<Homework>;
   getWeeks(subjectId: string): Promise<Week[]>;
   getWeek(subjectId: string, weekNumber: number): Promise<Week | null>;
   createWeek(subjectId: string, weekNumber: number): Promise<OperationResult<Week>>;

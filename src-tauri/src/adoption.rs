@@ -250,7 +250,6 @@ struct Existing {
     weeks_by_folder: HashMap<String, String>,
     weeks_by_subject_number: HashMap<(String, i64), String>,
     homeworks_by_folder: HashMap<String, String>,
-    homework_by_week: HashMap<String, String>,
     files_by_path: HashMap<String, Option<String>>,
 }
 
@@ -449,11 +448,10 @@ impl<'a> AdoptionService<'a> {
                     .weeks_by_subject_number
                     .insert((subject, number), id);
             }
-            for (id, week, folder) in
+            for (id, _week, folder) in
                 query3(connection, "SELECT id,week_id,folder_path FROM homeworks")?
             {
-                existing.homeworks_by_folder.insert(folder, id.clone());
-                existing.homework_by_week.insert(week, id);
+                existing.homeworks_by_folder.insert(folder, id);
             }
             let mut statement =
                 connection.prepare("SELECT relative_path,content_hash FROM files")?;
@@ -705,17 +703,23 @@ fn insert_plan(
             continue;
         }
         let taken: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM homeworks WHERE id=?1 OR folder_path=?2 OR week_id=?3)",
-            params![homework.id, homework.folder_path, homework.week_id],
+            "SELECT EXISTS(SELECT 1 FROM homeworks WHERE id=?1 OR folder_path=?2 OR import_key=?3)",
+            params![
+                homework.id,
+                homework.folder_path,
+                format!("vault:{}", homework.folder_path)
+            ],
             |row| row.get(0),
         )?;
         if taken {
             return Err(stale(&homework.folder_path));
         }
-        // Срок неизвестен: NULL, а не выдуманная дата.
+        // Срок неизвестен: NULL, а не выдуманная дата. Порядковый номер — следующий
+        // в неделе; import_key — папка vault (стабильная идентичность импорта).
         connection.execute(
-            "INSERT INTO homeworks(id,week_id,title,deadline,stage,workflow_stage,folder_path)
-             VALUES (?1,?2,?3,NULL,'task','materials',?4)",
+            "INSERT INTO homeworks(id,week_id,ordinal,title,deadline,stage,workflow_stage,folder_path,import_key)
+             VALUES (?1,?2,(SELECT coalesce(max(ordinal),0)+1 FROM homeworks WHERE week_id=?2),
+                     ?3,NULL,'task','materials',?4,'vault:' || ?4)",
             params![
                 homework.id,
                 homework.week_id,
@@ -1044,13 +1048,9 @@ impl PlanBuilder<'_> {
             )
         } else if let Some(id) = self.existing.homeworks_by_folder.get(&folder) {
             (id.clone(), AdoptionStatus::Existing, None)
-        } else if self.existing.homework_by_week.contains_key(&week_id) {
-            (
-                stable_id(self.workspace_id, "homework", &folder),
-                AdoptionStatus::Conflict,
-                Some("У недели уже есть ДЗ в другой папке".to_owned()),
-            )
         } else {
+            // Этап 4: у недели может быть несколько ДЗ — уже существующее ДЗ в другой
+            // папке не конфликт, это ДЗ получит следующий порядковый номер.
             (
                 stable_id(self.workspace_id, "homework", &folder),
                 AdoptionStatus::New,

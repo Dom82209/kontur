@@ -89,6 +89,7 @@ impl<'a> MutationService<'a> {
                 ));
             }
             let mut classification = stored.classification.unwrap_or(ClassificationDto {
+                homework_id: None,
                 subject_id: None,
                 week_number: None,
                 category: MaterialCategory::Unknown,
@@ -109,6 +110,8 @@ impl<'a> MutationService<'a> {
                 PatchField::Null => classification.category = MaterialCategory::Unknown,
                 PatchField::Value(category) => classification.category = category,
             }
+            let homework_explicit = matches!(patch.homework_id, PatchField::Value(_));
+            apply_optional_patch(&mut classification.homework_id, patch.homework_id);
 
             if let Some(subject_id) = classification.subject_id.as_deref() {
                 if !writes::subject_exists(transaction, subject_id)? {
@@ -125,6 +128,35 @@ impl<'a> MutationService<'a> {
                             "week does not belong to selected subject",
                         ));
                     }
+                }
+            }
+            // Этап 4: выбранное ДЗ должно принадлежать неделе и подходить к категории.
+            if let Some(homework_id) = classification.homework_id.clone() {
+                let fits = matches!(
+                    classification.category,
+                    MaterialCategory::HomeworkTask
+                        | MaterialCategory::HomeworkData
+                        | MaterialCategory::HomeworkDraft
+                ) && match (
+                    classification.subject_id.as_deref(),
+                    classification.week_number,
+                ) {
+                    (Some(subject_id), Some(week_number)) => writes::homework_in_week(
+                        transaction,
+                        &homework_id,
+                        subject_id,
+                        week_number,
+                    )?,
+                    _ => false,
+                };
+                if !fits {
+                    if homework_explicit {
+                        return Err(BackendError::conflict(
+                            "Выбранное ДЗ не относится к неделе или категории файла",
+                        ));
+                    }
+                    // Неделя или категория изменились: прежний выбор ДЗ больше не действует.
+                    classification.homework_id = None;
                 }
             }
 
@@ -274,6 +306,7 @@ mod tests {
             subject_id,
             week_number,
             category,
+            homework_id: PatchField::Absent,
         }
     }
 
@@ -661,6 +694,7 @@ mod tests {
         let payload = InboxClassificationUpdatedPayload {
             file_id: "inbox-1".to_owned(),
             classification: crate::dto::ClassificationDto {
+                homework_id: None,
                 subject_id: Some("subject-1".to_owned()),
                 week_number: Some(7),
                 category: MaterialCategory::Lecture,

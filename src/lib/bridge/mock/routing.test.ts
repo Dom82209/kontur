@@ -43,8 +43,8 @@ describe("раскладка файлов этапа 1", () => {
     expect(await bridge.getWeek("stress", 8)).toBeNull();
     await routeOne(bridge, { name: "Условие недели 8.pdf", sizeBytes: 700 }, { subjectId: "stress", weekNumber: 8, category: "homework_task" });
     const week = await bridge.getWeek("stress", 8);
-    const homework = week?.homeworkId ? await bridge.getHomework(week.homeworkId) : null;
-    expect(week?.homeworkId).toBe("hw-stress-8");
+    const homework = week?.homeworkIds[0] ? await bridge.getHomework(week.homeworkIds[0]) : null;
+    expect(week?.homeworkIds).toEqual(["hw-stress-8"]);
     expect(homework).toMatchObject({ subjectId: "stress", weekNumber: 8, folderPath: "Предметы/Стресс-менеджмент/Неделя 08/03 ДЗ" });
   });
 
