@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { ArrowLeft, ArrowRight, BrainCircuit, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, NotebookPen, Pin, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, BrainCircuit, ExternalLink, FilePlus, Flag, GitCompareArrows, Layers, Lock, NotebookPen, Pin, RefreshCw, TriangleAlert, ScanSearch, Send, ShieldCheck, Undo2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { weekPath } from "../app/nav";
@@ -314,6 +314,23 @@ export function HomeworkDetailPage() {
           <button className="btn btn--sm notice__action" onClick={() => void wf.reloadAll()}>
             <RefreshCw /> Перечитать
           </button>
+        </div>
+      )}
+
+      {wf.workflow.data?.readyStale && (
+        <div className="notice notice--warn" role="status" data-testid="ready-stale">
+          <TriangleAlert />
+          <div>
+            <strong>«Готово к сдаче» больше не действует.</strong> После отметки изменились официальные требования, материалы, условие, версия или профиль стиля. Проверьте версию заново — собрать комплект и подтвердить отправку до этого нельзя.
+          </div>
+        </div>
+      )}
+      {pendingPrompt?.stale && (
+        <div className="notice notice--warn" role="status" data-testid="prompt-stale">
+          <TriangleAlert />
+          <div>
+            <strong>Промт составлен по устаревшим данным.</strong> Отредактируйте черновик или создайте новый: передать устаревший промт автору нельзя.
+          </div>
         </div>
       )}
 

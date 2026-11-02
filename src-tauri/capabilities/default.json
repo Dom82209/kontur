@@ -99,6 +99,8 @@
     "allow-add-teacher-comments",
     "allow-add-teacher-requirement",
     "allow-resolve-teacher-requirement",
+    "allow-set-comment-authority",
+    "allow-withdraw-teacher-requirement",
     "allow-confirm-style-divergence",
     "allow-mark-ready-to-submit",
     "allow-transition-workflow",

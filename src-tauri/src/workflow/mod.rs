@@ -9,6 +9,7 @@
 
 pub mod bundle;
 pub mod dto;
+pub mod fingerprint;
 pub mod projections;
 pub mod repository;
 pub mod service;

@@ -233,12 +233,16 @@ fn check_ready(context: &TransitionContext<'_>) -> Result<(), AppError> {
         )));
     }
     if context.require_teacher_review
-        && context.snapshot.teacher_comments.is_empty()
+        && !context
+            .snapshot
+            .teacher_comments
+            .iter()
+            .any(|comment| comment.official)
         && !context.no_teacher_comments
     {
         return Err(BackendError::new(
             crate::error::ErrorCode::ConfirmationRequired,
-            "Комментариев преподавателя нет — подтвердите, что их и не было",
+            "Официальных ответов преподавателя нет — подтвердите, что их и не было",
         ));
     }
     Ok(())

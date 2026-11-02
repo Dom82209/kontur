@@ -162,6 +162,25 @@ db_enum!(TeacherCommentSource {
     Other => "other",
 });
 
+db_enum!(
+    /// Кто дал ответ (этап 7). Официальным может стать только ответ
+    /// преподавателя или ассистента — и только после подтверждения пользователем.
+    CommentAuthority {
+    TeacherOfficial => "teacher_official",
+    TeachingAssistant => "teaching_assistant",
+    Student => "student",
+    GroupChatUnverified => "group_chat_unverified",
+    UserNote => "user_note",
+    System => "system",
+    Unknown => "unknown",
+});
+
+impl CommentAuthority {
+    pub fn can_be_official(self) -> bool {
+        matches!(self, Self::TeacherOfficial | Self::TeachingAssistant)
+    }
+}
+
 db_enum!(BundleOrigin {
     Legacy => "legacy",
     CorpusSelection => "corpus_selection",
@@ -199,6 +218,7 @@ db_enum!(ReadinessCheckId {
     Style => "style",
     SourcesFresh => "sources_fresh",
     FinalVersion => "final_version",
+    InputsFresh => "inputs_fresh",
 });
 
 db_enum!(IterationStatus {
@@ -436,6 +456,10 @@ pub struct ReviewRunDto {
     /// Порог, применённый в момент запуска (не меняется вместе с настройкой).
     pub style_threshold: u8,
     pub assessment: Option<ReviewAssessmentDto>,
+    /// Отпечаток входных данных на момент запуска; `null` — запуск до этапа 7.
+    pub inputs_fingerprint: Option<String>,
+    /// Входные данные изменились после запуска: результат в истории, но не действует.
+    pub stale: bool,
 }
 
 // ───────────── Промты ─────────────
@@ -458,6 +482,9 @@ pub struct RevisionPromptDto {
     pub committed_at: Option<String>,
     pub provenance: Provenance,
     pub updated_at: String,
+    pub inputs_fingerprint: Option<String>,
+    /// Составлен по устаревшим входным данным — передать автору нельзя.
+    pub stale: bool,
 }
 
 // ───────────── Преподаватель ─────────────
@@ -473,6 +500,13 @@ pub struct TeacherCommentDto {
     pub answer: String,
     pub added_at: String,
     pub attachment: Option<FileRefDto>,
+    /// Этап 7: кто ответил, имя автора, ссылка или цитата-контекст.
+    pub authority: CommentAuthority,
+    pub author: String,
+    pub context: String,
+    /// Официальный = преподаватель/ассистент + явное подтверждение пользователя.
+    pub official: bool,
+    pub official_confirmed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,6 +520,9 @@ pub struct TeacherRequirementDto {
     pub status: crate::domain::RequirementStatus,
     pub note: String,
     pub checked_version_id: Option<String>,
+    /// Требование отозвано (ответ перестал быть официальным или удалено пользователем);
+    /// хранится для истории и не учитывается.
+    pub withdrawn_at: Option<String>,
 }
 
 // ───────────── Подтверждение стиля ─────────────
@@ -549,6 +586,9 @@ pub struct SubmissionPackageDto {
     pub checklist: Vec<PackageCheckDto>,
     pub upload_list: Vec<String>,
     pub built_at: String,
+    pub inputs_fingerprint: Option<String>,
+    /// Собран по устаревшим входным данным — подтвердить отправку нельзя.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -615,6 +655,8 @@ pub struct ReadinessDto {
     pub version_id: Option<String>,
     pub review_run_id: Option<String>,
     pub revision: i64,
+    /// Отпечаток входных данных, по которым посчитана готовность (этап 7).
+    pub inputs_fingerprint: String,
 }
 
 impl ReadinessDto {
@@ -843,6 +885,10 @@ pub struct HomeworkWorkflowDto {
     pub iterations: Vec<HomeworkIterationDto>,
     pub submission_package: Option<SubmissionPackageDto>,
     pub submission_receipt: Option<SubmissionReceiptDto>,
+    /// Этап 7: текущий отпечаток входных данных.
+    pub inputs: super::fingerprint::InputsFingerprintDto,
+    /// «Готово к сдаче» отмечено по другим входным данным — отметка не действует.
+    pub ready_stale: bool,
     /// Задания передачи провайдерам (этап 9) — без текстов промта и ответа.
     pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
     /// Этап 9: AI-шаги выполняются через задания передачи (официальный CLI

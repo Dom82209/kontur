@@ -18,9 +18,9 @@ use crate::{
             TeacherRequirementDto, VersionComparisonDto,
         },
         service::{
-            CommandMeta, ManualAnalysisInput, ManualReviewInput, RunMode, TeacherCommentInput,
-            TeacherRequirementInput, VersionInput, WorkflowEvent, WorkflowFailure, WorkflowResult,
-            WorkflowService,
+            CommandMeta, CommentAuthorityInput, ManualAnalysisInput, ManualReviewInput, RunMode,
+            TeacherCommentInput, TeacherRequirementInput, VersionInput, WorkflowEvent,
+            WorkflowFailure, WorkflowResult, WorkflowService,
         },
     },
 };
@@ -434,6 +434,43 @@ pub async fn add_teacher_requirement<R: Runtime>(
                 &homework_id,
                 &input,
             )
+        });
+        finish(&app, result)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_comment_authority<R: Runtime>(
+    app: AppHandle<R>,
+    operation_id: String,
+    comment_id: String,
+    input: CommentAuthorityInput,
+    expected_revision: Option<i64>,
+) -> Result<OperationResultDto<Vec<TeacherCommentDto>>, AppError> {
+    blocking(move || {
+        let result = with_service(&app, |service| {
+            service.set_comment_authority(
+                &meta(operation_id, expected_revision),
+                &comment_id,
+                &input,
+            )
+        });
+        finish(&app, result)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn withdraw_teacher_requirement<R: Runtime>(
+    app: AppHandle<R>,
+    operation_id: String,
+    requirement_id: String,
+    expected_revision: Option<i64>,
+) -> Result<OperationResultDto<TeacherRequirementDto>, AppError> {
+    blocking(move || {
+        let result = with_service(&app, |service| {
+            service.withdraw_requirement(&meta(operation_id, expected_revision), &requirement_id)
         });
         finish(&app, result)
     })

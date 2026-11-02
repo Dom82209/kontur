@@ -45,6 +45,8 @@ const run = (patch: Partial<ReviewRun>): ReviewRun => ({
   provenance: "manual",
   styleThreshold: 4,
   assessment: null,
+  inputsFingerprint: "fp",
+  stale: false,
   ...patch,
 });
 

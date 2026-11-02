@@ -1144,6 +1144,8 @@ export class MockDesktopBridge implements DesktopBridge {
   saveManualReviewResult: DesktopBridge["saveManualReviewResult"] = (...a) => this.workflow.saveManualReviewResult(...a);
   commitPrompt: DesktopBridge["commitPrompt"] = (...a) => this.workflow.commitPrompt(...a);
   addTeacherRequirement: DesktopBridge["addTeacherRequirement"] = (...a) => this.workflow.addTeacherRequirement(...a);
+  setCommentAuthority: DesktopBridge["setCommentAuthority"] = (...a) => this.workflow.setCommentAuthority(...a);
+  withdrawRequirement: DesktopBridge["withdrawRequirement"] = (...a) => this.workflow.withdrawRequirement(...a);
   confirmStyleDivergence: DesktopBridge["confirmStyleDivergence"] = (...a) => this.workflow.confirmStyleDivergence(...a);
   transitionWorkflow: DesktopBridge["transitionWorkflow"] = (...a) => this.workflow.transitionWorkflow(...a);
   getStyleProfile: DesktopBridge["getStyleProfile"] = (...a) => this.workflow.getStyleProfile(...a);

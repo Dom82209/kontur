@@ -165,6 +165,8 @@ pub fn run() {
             workflow_commands::add_teacher_comments,
             workflow_commands::add_teacher_requirement,
             workflow_commands::resolve_teacher_requirement,
+            workflow_commands::set_comment_authority,
+            workflow_commands::withdraw_teacher_requirement,
             workflow_commands::confirm_style_divergence,
             workflow_commands::mark_ready_to_submit,
             workflow_commands::transition_workflow,

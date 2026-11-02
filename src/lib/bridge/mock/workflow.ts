@@ -2,6 +2,8 @@ import type { TypedEmitter } from "../emitter";
 import { isAllowedTransition, transitionsFrom } from "../workflow-transitions";
 import {
   BridgeError,
+  OFFICIAL_AUTHORITIES,
+  type CommentAuthorityInput,
   type AutomationRules,
   type BridgeErrorPayload,
   type CriterionId,
@@ -198,6 +200,31 @@ function styleFor(n: number, threshold: number): StyleDivergence {
   return { score: 3, threshold, reasons: [{ kind: "template", text: "Одна устойчивая формула в выводе", example: "«в целом можно сказать»" }] };
 }
 
+/** Этап 7: полный комментарий из ввода — как backend (по умолчанию автор неизвестен, не официальный). */
+function toComment(input: TeacherCommentInput, rest: { id: string; homeworkId: string; addedAt: string; attachment: FileRef | null }): TeacherComment {
+  const authority = input.authority ?? "unknown";
+  const official = !!input.confirmedOfficial && OFFICIAL_AUTHORITIES.includes(authority);
+  return {
+    source: input.source,
+    date: input.date,
+    question: input.question,
+    answer: input.answer,
+    authority,
+    author: input.author?.trim() ?? "",
+    context: input.context?.trim() ?? "",
+    official,
+    officialConfirmedAt: official ? rest.addedAt : null,
+    ...rest,
+  };
+}
+
+/** Детерминированный короткий хэш для mock-отпечатка входных данных. */
+function mockHash(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i += 1) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+
 function firstSentence(t: string): string {
   const m = t.trim().match(/^(.+?[.!?])(\s|$)/);
   return (m?.[1] ?? t).trim();
@@ -227,6 +254,8 @@ export class MockWorkflow {
   private runs: ReviewRun[] = [];
   private prompts: RevisionPrompt[] = [];
   private comments: TeacherComment[] = [];
+  /** Этап 7: отпечаток входных данных, на котором отмечено «Готово к сдаче». */
+  private readyFingerprints = new Map<string, string>();
   private requirements: TeacherRequirement[] = [];
   private findings = new Map<string, ReviewFinding[]>();
   private packages = new Map<string, SubmissionPackage>();
@@ -501,14 +530,22 @@ export class MockWorkflow {
     const valid = inputs.filter((c) => c.question.trim() || c.answer.trim());
     if (valid.length === 0) throw new BridgeError("conflict", "Нет текста комментария");
     const now = new Date().toISOString();
-    const added: TeacherComment[] = valid.map((c) => ({ ...c, question: c.question.trim(), answer: c.answer.trim(), id: uid("tc"), homeworkId, addedAt: now, attachment: null }));
+    for (const c of valid) {
+      if (c.confirmedOfficial && !OFFICIAL_AUTHORITIES.includes(c.authority ?? "unknown")) {
+        throw new BridgeError("blocked", "Официальным может быть только ответ преподавателя или ассистента: мнение студента, сообщение из чата без проверки, заметка или системный текст не становятся требованием");
+      }
+    }
+    const added: TeacherComment[] = valid.map((c) => toComment({ ...c, question: c.question.trim(), answer: c.answer.trim() }, { id: uid("tc"), homeworkId, addedAt: now, attachment: null }));
     const op = await this.ctx.runOp(
       "save_teacher_comments",
       `Добавлено комментариев: ${added.length}`,
       subjectName(h.subjectId),
       [`${h.folderPath}/.kontur/teacher.md`],
       2,
-      () => this.comments.push(...added),
+      () => {
+        this.comments.push(...added);
+        this.reopenIfReadyStale(h, "Добавлен официальный ответ — готовность снята");
+      },
       () => {
         this.comments = this.comments.filter((c) => !added.some((a) => a.id === c.id));
       },
@@ -536,22 +573,18 @@ export class MockWorkflow {
     const pairs = parseTranscript(text);
     if (pairs.length === 0) throw new BridgeError("conflict", "Не удалось выделить вопросы и ответы");
     const now = new Date().toISOString();
-    const added: TeacherComment[] = pairs.map((pair) => ({
-      ...pair,
-      source: input.source,
-      date: input.date,
-      id: uid("tc"),
-      homeworkId,
-      addedAt: now,
-      attachment,
-    }));
+    // Импорт переписки: автор не установлен, ответы не официальные (этап 7).
+    const added: TeacherComment[] = pairs.map((pair) => toComment({ ...pair, source: input.source, date: input.date }, { id: uid("tc"), homeworkId, addedAt: now, attachment }));
     const op = await this.ctx.runOp(
       "save_teacher_comments",
       `Добавлено комментариев: ${added.length}`,
       subjectName(h.subjectId),
       [`${h.folderPath}/.kontur/teacher.md`, ...(attachment ? [attachment.relativePath] : [])],
       2,
-      () => this.comments.push(...added),
+      () => {
+        this.comments.push(...added);
+        this.reopenIfReadyStale(h, "Добавлен официальный ответ — готовность снята");
+      },
       () => {
         this.comments = this.comments.filter((comment) => !added.some((item) => item.id === comment.id));
       },
@@ -604,6 +637,69 @@ export class MockWorkflow {
     return clone(this.readiness(this.hw(homeworkId)));
   }
 
+  /**
+   * Этап 7: упрощённый отпечаток входных данных (официальные ответы, действующие
+   * требования, ссылка на задание). Смену версии mock не учитывает: здесь проверка
+   * всегда привязана к конкретной версии, а итоговая выбирается отдельно.
+   */
+  private fingerprint(homeworkId: string): string {
+    const h = this.ctx.homework().find((x) => x.id === homeworkId);
+    const official = this.comments.filter((c) => c.homeworkId === homeworkId && c.official).map((c) => `c|${c.id}|${c.authority}|${c.question}|${c.answer}`);
+    // В mock требования выводятся из официальных ответов (их состав задают ответы); учитываются отзывы.
+    const reqs = this.requirements.filter((r) => r.withdrawnAt && this.comments.some((c) => c.id === r.commentId && c.homeworkId === homeworkId)).map((r) => `w|${r.id}`);
+    return mockHash([...official.sort(), ...reqs.sort(), `u|${h?.assignmentUrl ?? ""}`].join("\n"));
+  }
+
+  private isStale(item: { inputsFingerprint: string | null; homeworkId: string }): boolean {
+    return item.inputsFingerprint !== this.fingerprint(item.homeworkId);
+  }
+
+  /** Готовность снимается, если отмечена по другим входным данным (как reopen_if_ready_stale). */
+  private reopenIfReadyStale(h: Homework, reason: string): void {
+    if (h.workflowStage === "ready_to_submit" && this.readyFingerprints.get(h.id) !== this.fingerprint(h.id)) this.setStage(h, "teacher_review", reason);
+  }
+
+  async setCommentAuthority(commentId: string, input: CommentAuthorityInput, options?: WorkflowCommandOptions): Promise<OperationResult<TeacherComment[]>> {
+    const c = this.comments.find((x) => x.id === commentId);
+    if (!c) throw new BridgeError("not_found", "Комментарий не найден");
+    const h = this.hw(c.homeworkId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (input.confirmedOfficial && !OFFICIAL_AUTHORITIES.includes(input.authority))
+      throw new BridgeError("blocked", "Официальным может быть только ответ преподавателя или ассистента: мнение студента, сообщение из чата без проверки, заметка или системный текст не становятся требованием");
+    const op = await this.ctx.runOp(
+      "save_teacher_comments",
+      input.confirmedOfficial ? "Ответ подтверждён как официальный" : "Ответ не считается официальным",
+      subjectName(h.subjectId),
+      [],
+      1,
+      () => {
+        const official = input.confirmedOfficial;
+        Object.assign(c, { authority: input.authority, author: input.author.trim(), context: input.context.trim(), official, officialConfirmedAt: official ? (c.officialConfirmedAt ?? new Date().toISOString()) : null });
+        if (!official) for (const r of this.requirements) if (r.commentId === c.id && !r.withdrawnAt) r.withdrawnAt = new Date().toISOString();
+        this.reopenIfReadyStale(h, "Изменилась официальность ответа — готовность снята");
+      },
+      null,
+      h.id,
+    );
+    return { operation: op, value: [clone(c)] };
+  }
+
+  async withdrawRequirement(requirementId: string, options?: WorkflowCommandOptions): Promise<TeacherRequirement> {
+    const r = this.requirements.find((x) => x.id === requirementId);
+    if (!r) throw new BridgeError("not_found", "Требование не найдено");
+    if (r.withdrawnAt) throw new BridgeError("blocked", "Требование уже отозвано");
+    const c = this.comments.find((x) => x.id === r.commentId);
+    const h = this.hw(c?.homeworkId ?? "");
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    await this.ctx.runOp("save_teacher_comments", "Требование отозвано", subjectName(h.subjectId), [], 1, () => {
+      r.withdrawnAt = new Date().toISOString();
+      this.reopenIfReadyStale(h, "Требование отозвано — готовность снята");
+    }, null, h.id);
+    return clone(r);
+  }
+
   async markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean } & WorkflowCommandOptions): Promise<OperationResult<Homework>> {
     const h = this.hw(homeworkId);
     this.assertMutable(h);
@@ -621,7 +717,10 @@ export class MockWorkflow {
       subjectName(h.subjectId),
       [],
       1,
-      () => this.setStage(h, "ready_to_submit", "Все обязательные проверки пройдены, подтверждено пользователем"),
+      () => {
+        this.setStage(h, "ready_to_submit", "Все обязательные проверки пройдены, подтверждено пользователем");
+        this.readyFingerprints.set(h.id, this.fingerprint(h.id));
+      },
       () => this.setStage(h, prev, "Отметка «Готово к сдаче» отменена"),
       h.id,
     );
@@ -665,6 +764,8 @@ export class MockWorkflow {
     const pkg: SubmissionPackage = {
       id: uid("pkg"),
       homeworkId: h.id,
+      inputsFingerprint: this.fingerprint(h.id),
+      stale: false,
       versionId: v.id,
       folderPath: `${h.folderPath}/03 На сдачу`,
       items,
@@ -1069,15 +1170,20 @@ export class MockWorkflow {
       stage: h.workflowStage,
       transitions: this.transitionOptions(h, readiness),
       bundles: [...this.bundles.values()].filter((b) => b.homeworkId === h.id),
-      runs: this.runs.filter((r) => r.homeworkId === h.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
-      prompts: this.prompts.filter((p) => p.homeworkId === h.id),
+      runs: this.runs
+        .filter((r) => r.homeworkId === h.id)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        .map((r) => ({ ...r, stale: this.isStale(r) })),
+      prompts: this.prompts.filter((p) => p.homeworkId === h.id).map((p) => ({ ...p, stale: this.isStale(p) })),
       teacherComments: this.comments.filter((c) => c.homeworkId === h.id),
       teacherRequirements: this.requirements.filter((r) => this.comments.some((c) => c.id === r.commentId && c.homeworkId === h.id)),
       styleConfirmations: this.confirmations.filter((c) => c.homeworkId === h.id),
       readiness,
       iterations,
-      submissionPackage: this.packages.get(h.id) ?? null,
+      submissionPackage: ((pkg) => (pkg ? { ...pkg, stale: this.isStale(pkg) } : null))(this.packages.get(h.id)),
       submissionReceipt: this.receipts.get(h.id) ?? null,
+      inputs: ((fp) => ({ materials: fp, task: fp, version: fp, style: fp, requirements: fp, combined: fp }))(this.fingerprint(h.id)),
+      readyStale: h.workflowStage === "ready_to_submit" && this.readyFingerprints.get(h.id) !== this.fingerprint(h.id),
       aiJobs: this.aiJobs.filter((j) => j.homeworkId === h.id).map(summaryOf),
       providerMode: "ai_jobs",
     });
@@ -1096,6 +1202,8 @@ export class MockWorkflow {
     const prompt: RevisionPrompt = {
       id: uid("prm"),
       homeworkId: h.id,
+      inputsFingerprint: this.fingerprint(h.id),
+      stale: false,
       kind: "initial",
       text: input.promptText.trim(),
       createdAt: now,
@@ -1244,7 +1352,9 @@ export class MockWorkflow {
     const versionId = h.finalVersionId ?? h.versions[h.versions.length - 1]?.id ?? null;
     if (!versionId) throw new BridgeError("blocked", "Сначала добавьте и выберите версию решения");
     if (!input.text.trim()) throw new BridgeError("blocked", "Поле «Требование» не заполнено");
-    const requirement: TeacherRequirement = { id: uid("req"), text: input.text.trim(), commentId: input.commentId, origin: input.origin.trim(), status: input.status, note: input.note?.trim() ?? "", checkedVersionId: versionId };
+    const comment = this.comments.find((c) => c.id === input.commentId);
+    if (!comment?.official) throw new BridgeError("blocked", "Требование выводится только из официального ответа преподавателя или ассистента — сначала подтвердите источник");
+    const requirement: TeacherRequirement = { id: uid("req"), text: input.text.trim(), commentId: input.commentId, origin: input.origin.trim(), status: input.status, note: input.note?.trim() ?? "", checkedVersionId: versionId, withdrawnAt: null };
     const op = await this.ctx.runOp(
       "save_teacher_comments",
       "Требование преподавателя добавлено вручную",
@@ -1301,6 +1411,7 @@ export class MockWorkflow {
   /** Как backend hand_off_prompt: автор не подключён — промт передаётся вручную, версия добавляется пользователем. */
   private async handOffManually(p: RevisionPrompt, h: Homework): Promise<OperationResult<RevisionPrompt>> {
     if (p.status !== "committed") throw new BridgeError("blocked", "Сначала зафиксируйте промт");
+    if (this.isStale(p)) throw new BridgeError("blocked", "Промт составлен по устаревшим входным данным (требования, материалы, условие, версия или профиль стиля изменились) — создайте новый");
     const allowed = p.kind === "initial" ? h.workflowStage === "prompt_ready" : ["needs_fixes", "prompt_ready", "teacher_review"].includes(h.workflowStage);
     if (!allowed) throw new BridgeError("blocked", `Передать промт на этапе «${WORKFLOW_STAGE_LABEL[h.workflowStage]}» нельзя`);
     const op = await this.ctx.runOp(
@@ -1338,6 +1449,8 @@ export class MockWorkflow {
     const prompt: RevisionPrompt = {
       id: uid("prm"),
       homeworkId: h.id,
+      inputsFingerprint: this.fingerprint(h.id),
+      stale: false,
       kind: run.kind === "review_teacher" ? "teacher" : "revision",
       text,
       createdAt: now,
@@ -1419,6 +1532,14 @@ export class MockWorkflow {
   // ───────────── Сид сценария ─────────────
 
   seed(): void {
+    this.seedData();
+    // Этап 7: демо-история согласована с текущими входными данными.
+    for (const x of [...this.runs, ...this.prompts]) x.inputsFingerprint = this.fingerprint(x.homeworkId);
+    for (const [id, pkg] of this.packages) pkg.inputsFingerprint = this.fingerprint(id);
+    for (const hw of this.ctx.homework()) if (hw.workflowStage === "ready_to_submit") this.readyFingerprints.set(hw.id, this.fingerprint(hw.id));
+  }
+
+  private seedData(): void {
     const hws = this.ctx.homework();
     // Нет условия — показывает блокировку из-за недостающих материалов.
     const matanAdv = hws.find((h) => h.id === "hw-matanadv-8");
@@ -1452,6 +1573,8 @@ export class MockWorkflow {
       this.packages.set(ready.id, {
         id: "pkg-stat-demo",
         homeworkId: ready.id,
+        inputsFingerprint: this.fingerprint(ready.id),
+        stale: false,
         versionId: v.id,
         folderPath: `${ready.folderPath}/03 На сдачу`,
         items: [
@@ -1533,7 +1656,7 @@ export class MockWorkflow {
       { source: "chat", date: commentDate, question: "Нужно ли округлять средний чек?", answer: "Округлите до рублей, формат — с разделителем разрядов." },
       { source: "chat", date: commentDate, question: "Динамику по месяцам показывать на том же листе?", answer: "Нет, вынесите срез по месяцам на отдельный лист и добавьте к нему вывод в 2–3 предложения." },
     ];
-    for (const c of seedComments) this.comments.push({ ...c, id: uid("tc"), homeworkId: h.id, addedAt: at(-1, 13, 30), attachment: null });
+    for (const c of seedComments) this.comments.push(toComment({ ...c, authority: "teacher_official", author: "Преподаватель", confirmedOfficial: true }, { id: uid("tc"), homeworkId: h.id, addedAt: at(-1, 13, 30), attachment: null }));
     const b4 = this.buildBundle(h, "review_teacher", v2.id);
     this.bundles.set(b4.id, b4);
     const r4 = this.completedRun(h, "review_teacher", b4, v2.id, at(-1, 14));
@@ -1683,6 +1806,8 @@ export class MockWorkflow {
     return {
       id: uid("run"),
       homeworkId: h.id,
+      inputsFingerprint: this.fingerprint(h.id),
+      stale: false,
       kind,
       role: ROLE_OF[kind],
       provider: this.ctx.rules().workflow.tasks[TASK_FOR_RUN[kind]],
@@ -1715,6 +1840,8 @@ export class MockWorkflow {
       const prompt: RevisionPrompt = {
         id: uid("prm"),
         homeworkId: h.id,
+        inputsFingerprint: this.fingerprint(h.id),
+        stale: false,
         kind: "initial",
         text: this.initialPromptText(h, included, sheet),
         createdAt: new Date().toISOString(),
@@ -1749,7 +1876,8 @@ export class MockWorkflow {
     const v = h.versions.find((x) => x.id === run.versionId)!;
 
     if (run.kind === "review_teacher") {
-      const comments = this.comments.filter((c) => c.homeworkId === h.id);
+      // Этап 7: требования — только из официальных ответов.
+      const comments = this.comments.filter((c) => c.homeworkId === h.id && c.official);
       const reqs: TeacherRequirement[] = comments.map((c, i) => {
         const isLast = i === comments.length - 1;
         const status: TeacherRequirement["status"] = c.source === "in_person" ? "manual" : /по желанию|необязательно/i.test(c.answer) ? "na" : v.number <= 2 && isLast ? "not_done" : "done";
@@ -1762,6 +1890,7 @@ export class MockWorkflow {
           status,
           note: status === "done" ? `Выполнено в ${v.label}` : status === "not_done" ? `В ${v.label} не найдено` : status === "manual" ? "Устный комментарий — проверьте сами" : "Не обязательно для сдачи",
           checkedVersionId: v.id,
+          withdrawnAt: null,
         };
       });
       this.requirements = [...this.requirements.filter((r) => r.checkedVersionId !== v.id), ...reqs];
@@ -1897,6 +2026,8 @@ export class MockWorkflow {
     return {
       id: uid("prm-draft"),
       homeworkId: h.id,
+      inputsFingerprint: this.fingerprint(h.id),
+      stale: false,
       kind: reqs.length ? "teacher" : "revision",
       text,
       createdAt: new Date().toISOString(),
@@ -1953,8 +2084,14 @@ export class MockWorkflow {
         detail: comments.length === 0 ? "Комментариев нет — потребуется подтверждение" : !teacherRun || teacherRun.startedAt < lastComment ? "Есть комментарии, не сверенные с этой версией" : pendingReqs.length ? `Требований не закрыто: ${pendingReqs.length}` : `Все ${reqs.length} требования выполнены`,
       },
       { id: "final_version", label: "Итоговой назначена проверенная версия", ok: !!target && h.finalVersionId === target.id, detail: !target ? "Версий нет" : h.finalVersionId === target.id ? `${target.label} — итоговая` : `Сделайте ${target.label} итоговой` },
+      {
+        id: "inputs_fresh",
+        label: "Проверка учитывает актуальные требования и материалы",
+        ok: !!saved && !this.isStale(saved),
+        detail: !saved ? "Нет проверки текущей версии" : this.isStale(saved) ? "После проверки изменились требования, материалы, условие, версия или профиль стиля — проверьте версию заново" : "Входные данные не менялись после проверки",
+      },
     ];
-    return { homeworkId: h.id, ready: checks.every((c) => c.ok), checks, versionId: target?.id ?? null, reviewRunId: saved?.id ?? null, revision: h.revision };
+    return { homeworkId: h.id, ready: checks.every((c) => c.ok), checks, versionId: target?.id ?? null, reviewRunId: saved?.id ?? null, revision: h.revision, inputsFingerprint: this.fingerprint(h.id) };
   }
 }
 

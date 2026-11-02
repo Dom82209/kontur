@@ -1,4 +1,5 @@
 import type {
+  CommentAuthority,
   CriterionStatus,
   FileKind,
   HomeworkStage,
@@ -174,6 +175,17 @@ export const STYLE_REASON_LABEL: Record<StyleReasonKind, string> = {
 };
 
 export const COMMENT_SOURCE_LABEL: Record<TeacherCommentSource, string> = { chat: "Чат", email: "Почта", lms: "Система вуза", in_person: "Устно", other: "Другое" };
+
+/** Этап 7: кто дал ответ. */
+export const COMMENT_AUTHORITY_LABEL: Record<CommentAuthority, string> = {
+  teacher_official: "Преподаватель",
+  teaching_assistant: "Ассистент",
+  student: "Студент",
+  group_chat_unverified: "Общий чат, не проверено",
+  user_note: "Моя заметка",
+  system: "Система",
+  unknown: "Автор неизвестен",
+};
 
 export const authorName = (a: VersionAuthor): string => (a === "user" ? "Вы" : providerName(a));
 

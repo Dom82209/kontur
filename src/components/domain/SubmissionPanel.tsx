@@ -159,6 +159,12 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
             <EmptyState icon={<Package />} title="Комплект ещё не собран" text="После всех проверок «Контур» соберёт итоговый файл, приложения и ссылки в «03 На сдачу» и составит список для загрузки." />
           ) : (
             <div className="pkg">
+              {pkg.stale && (
+                <div className="notice notice--warn" data-testid="package-stale">
+                  <TriangleAlert />
+                  <div>Комплект собран по устаревшим входным данным — он сохранён в истории, но подтвердить по нему отправку нельзя. Пересоберите комплект.</div>
+                </div>
+              )}
               {pkg.warnings.length > 0 && (
                 <div className="notice notice--warn">
                   <TriangleAlert />

@@ -294,6 +294,10 @@ fn full_hydration_of_existing_homework() {
                     date: "2026-10-21T12:00:00Z",
                     question: "Нужна ли BPMN-нотация?",
                     answer: "Да, обязательно",
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: "Преподаватель",
+                    context: "",
+                    official: true,
                 },
             )?;
             repository::insert_requirement(
@@ -1074,6 +1078,7 @@ fn dto_keys_are_exact_camel_case() {
             "finishedAt",
             "homeworkId",
             "id",
+            "inputsFingerprint",
             "kind",
             "progress",
             "provenance",
@@ -1083,6 +1088,7 @@ fn dto_keys_are_exact_camel_case() {
             "savedAsIteration",
             "sourceBundleId",
             "sourcesUsed",
+            "stale",
             "startedAt",
             "status",
             "step",
@@ -1418,6 +1424,10 @@ fn submitted_homework_rejects_all_new_workflow_rows() {
                     date: "2026-10-23",
                     question: "q",
                     answer: "a",
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: "",
+                    context: "",
+                    official: true,
                 },
             )
         }),

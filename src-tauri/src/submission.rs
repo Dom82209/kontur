@@ -111,7 +111,24 @@ impl<'a> SubmissionService<'a> {
             if submitted {
                 return Err(BackendError::immutable("Отправленная работа неизменяема"));
             }
+            // Этап 7: требования удалённого ответа отзываются и остаются в истории.
+            crate::workflow::repository::withdraw_comment_requirements(tx, id)?;
             tx.execute("DELETE FROM teacher_comments WHERE id=?1", [id])?;
+            let (stage, ready): (String, Option<String>) = tx.query_row(
+                "SELECT workflow_stage, ready_fingerprint FROM homeworks WHERE id=?1",
+                [&homework],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if stage == "ready_to_submit"
+                && !crate::workflow::fingerprint::current(tx, &homework)?
+                    .is_current(ready.as_deref())
+            {
+                crate::workflow::repository::set_workflow_stage(
+                    tx,
+                    &homework,
+                    crate::domain::HomeworkWorkflowStage::TeacherReview,
+                )?;
+            }
             tx.execute(
                 "UPDATE homeworks SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?1",
                 [homework],

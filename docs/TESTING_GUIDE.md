@@ -38,6 +38,11 @@
 - `cargo test package_file_name_follows_saved_pattern`, `cargo test classify::tests` — поведение: имя комплекта, порог, неделя по дате загрузки.
 - `src/lib/naming.test.ts`, `src/lib/bridge/mock/automation.test.ts` — те же правила во frontend и mock.
 
+## Авторитетность и устаревание (этап 7)
+
+- `cargo test only_confirmed_teacher_or_assistant`, `new_official_requirement_makes`, `revoking_or_withdrawing`, `materials_task_and_style_changes`, `stale_revision_prompt`, `not_done_requirement_reopens` — все источники ответа и переходы stale/current.
+- `src/lib/bridge/mock/authority.test.ts` — те же правила в mock.
+
 ## Полный набор
 
 ```bash

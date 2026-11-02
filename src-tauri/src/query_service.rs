@@ -452,7 +452,7 @@ mod tests {
             database
                 .with_connection(|connection| {
                     connection.execute(
-                        "INSERT INTO teacher_comments(id, homework_id, question, answer, source, date, added_at) VALUES ('comment-1', 'homework-7', 'Что исправить?', 'Добавить шлюз', 'chat', '2026-10-20', '2026-10-20')",
+                        "INSERT INTO teacher_comments(id, homework_id, question, answer, source, date, added_at, authority, official_confirmed_at) VALUES ('comment-1', 'homework-7', 'Что исправить?', 'Добавить шлюз', 'chat', '2026-10-20', '2026-10-20', 'teacher_official', '2026-10-20')",
                         [],
                     )?;
                     connection.execute(

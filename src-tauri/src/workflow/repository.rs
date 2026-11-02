@@ -17,13 +17,13 @@ use crate::{
 };
 
 use super::dto::{
-    BundleOrigin, BundleWarningDto, CriterionStatus, EvidenceReferenceDto, MissingSourceDto,
-    PackageCheckDto, PackageItemDto, PackageLinkDto, PromptKind, PromptStatus, Provenance,
-    ReviewAssessmentDto, ReviewMissingItemDto, ReviewResultDto, ReviewRunDto, ReviewRunStatus,
-    ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto, SourceItemDto, SourceKind,
-    StoredReviewResult, StyleConfirmationDto, SubmissionPackageDto, SubmissionReceiptDto,
-    TeacherCommentDto, TeacherCommentSource, TeacherRequirementDto, UnsupportedClaimDto,
-    WorkflowRole,
+    BundleOrigin, BundleWarningDto, CommentAuthority, CriterionStatus, EvidenceReferenceDto,
+    MissingSourceDto, PackageCheckDto, PackageItemDto, PackageLinkDto, PromptKind, PromptStatus,
+    Provenance, ReviewAssessmentDto, ReviewMissingItemDto, ReviewResultDto, ReviewRunDto,
+    ReviewRunStatus, ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto, SourceItemDto,
+    SourceKind, StoredReviewResult, StyleConfirmationDto, SubmissionPackageDto,
+    SubmissionReceiptDto, TeacherCommentDto, TeacherCommentSource, TeacherRequirementDto,
+    UnsupportedClaimDto, WorkflowRole,
 };
 
 // ───────────────────────── Общие помощники ─────────────────────────
@@ -742,14 +742,15 @@ pub struct NewRun<'a> {
 
 pub fn insert_run(connection: &Connection, run: &NewRun<'_>) -> Result<(), AppError> {
     let sources = json_text(&run.sources_used, "review_runs.sources_used_json")?;
+    let inputs = super::fingerprint::current(connection, run.homework_id)?;
     connection
         .execute(
             "INSERT INTO review_runs(
                 id, homework_id, kind, role, provider, version_id, source_bundle_id, sources_used_json,
                 status, progress, step, started_at, saved_as_iteration, provenance, style_threshold,
-                created_at
+                created_at, inputs_fingerprint
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                       0, 'manual', ?11, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                       0, 'manual', ?11, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?12)",
             params![
                 run.id,
                 run.homework_id,
@@ -762,6 +763,7 @@ pub fn insert_run(connection: &Connection, run: &NewRun<'_>) -> Result<(), AppEr
                 run.status.as_db_str(),
                 run.step,
                 i64::from(run.style_threshold),
+                inputs.combined,
             ],
         )
         .map_err(|error| map_write_error(error, "Запуск не сохранён"))?;
@@ -896,13 +898,15 @@ struct RunRow {
     error_message: Option<String>,
     style_score: Option<i64>,
     style_threshold: i64,
+    inputs_fingerprint: Option<String>,
 }
 
 const RUN_SELECT: &str =
     "SELECT id, homework_id, kind, role, provider, version_id, source_bundle_id,
         sources_used_json, status, progress, step, started_at, finished_at, saved_as_iteration,
         provenance, verdict, correctness, task_fit, course_grounding, teacher_status, critical_json,
-        unsupported_json, missing_json, result_json, error_message, style_score, style_threshold
+        unsupported_json, missing_json, result_json, error_message, style_score, style_threshold,
+        inputs_fingerprint
     FROM review_runs";
 
 fn run_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
@@ -934,6 +938,7 @@ fn run_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
         error_message: row.get(24)?,
         style_score: row.get(25)?,
         style_threshold: row.get(26)?,
+        inputs_fingerprint: row.get(27)?,
     })
 }
 
@@ -960,7 +965,10 @@ pub fn run(connection: &Connection, run_id: &str) -> Result<ReviewRunDto, AppErr
         .query_row(&format!("{RUN_SELECT} WHERE id = ?1"), [run_id], run_row)
         .map_err(|error| not_found_or(error, "Запуск не найден"))?;
     let prompts = prompts_for_run(connection, &row.id)?;
-    hydrate_run(row, &prompts)
+    let mut run = hydrate_run(row, &prompts)?;
+    run.stale = !super::fingerprint::current(connection, &run.homework_id)?
+        .is_current(run.inputs_fingerprint.as_deref());
+    Ok(run)
 }
 
 fn hydrate_run(row: RunRow, prompts: &[RevisionPromptDto]) -> Result<ReviewRunDto, AppError> {
@@ -1049,6 +1057,8 @@ fn hydrate_run(row: RunRow, prompts: &[RevisionPromptDto]) -> Result<ReviewRunDt
         finished_at: row.finished_at,
         saved_as_iteration: row.saved_as_iteration,
         error_message: row.error_message,
+        inputs_fingerprint: row.inputs_fingerprint,
+        stale: false,
     })
 }
 
@@ -1086,13 +1096,15 @@ pub fn insert_draft_prompt_with(
 ) -> Result<(), AppError> {
     let addresses = json_text(&prompt.addresses, "revision_prompts.addresses_json")?;
     let sources = json_text(&prompt.sources, "revision_prompts.sources_json")?;
+    let inputs = super::fingerprint::current(connection, prompt.homework_id)?;
     connection
         .execute(
             "INSERT INTO revision_prompts(
                 id, homework_id, kind, text, created_by, provenance, status, based_on_version_id,
-                review_run_id, addresses_json, sources_json, sent_at, committed_at, created_at, updated_at
+                review_run_id, addresses_json, sources_json, sent_at, committed_at, created_at, updated_at,
+                inputs_fingerprint
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?10, 'draft', ?6, ?7, ?8, ?9, NULL, NULL,
-                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?11)",
             params![
                 prompt.id,
                 prompt.homework_id,
@@ -1104,6 +1116,7 @@ pub fn insert_draft_prompt_with(
                 addresses,
                 sources,
                 provenance.as_db_str(),
+                inputs.combined,
             ],
         )
         .map_err(|error| {
@@ -1120,11 +1133,21 @@ pub fn update_draft_text(
     prompt_id: &str,
     text: &str,
 ) -> Result<(), AppError> {
+    // Правка черновика — решение пользователя по текущим входным данным.
+    let homework_id: String = connection
+        .query_row(
+            "SELECT homework_id FROM revision_prompts WHERE id = ?1",
+            [prompt_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| not_found_or(error, "Промт не найден"))?;
+    let inputs = super::fingerprint::current(connection, &homework_id)?;
     let changed = connection
         .execute(
-            "UPDATE revision_prompts SET text = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "UPDATE revision_prompts SET text = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    inputs_fingerprint = ?3
              WHERE id = ?1 AND status = 'draft'",
-            params![prompt_id, text],
+            params![prompt_id, text, inputs.combined],
         )
         .map_err(|error| map_write_error(error, "Зафиксированный промт неизменяем"))?;
     if changed != 1 {
@@ -1167,7 +1190,8 @@ pub fn mark_prompt_handed_off(connection: &Connection, prompt_id: &str) -> Resul
 }
 
 const PROMPT_SELECT: &str = "SELECT id, homework_id, kind, text, created_at, created_by, based_on_version_id,
-        review_run_id, addresses_json, sources_json, sent_at, status, committed_at, provenance, updated_at
+        review_run_id, addresses_json, sources_json, sent_at, status, committed_at, provenance, updated_at,
+        inputs_fingerprint
     FROM revision_prompts";
 
 fn prompt_row(row: &Row<'_>) -> Result<RevisionPromptDto, AppError> {
@@ -1205,6 +1229,8 @@ fn prompt_row(row: &Row<'_>) -> Result<RevisionPromptDto, AppError> {
             Provenance::try_from_db,
         )?,
         updated_at: row.get(14)?,
+        inputs_fingerprint: row.get(15)?,
+        stale: false,
     })
 }
 
@@ -1239,10 +1265,13 @@ fn prompts_for_run(
 }
 
 pub fn prompt(connection: &Connection, prompt_id: &str) -> Result<RevisionPromptDto, AppError> {
-    collect_prompts(connection, "id = ?1", prompt_id)?
+    let mut prompt = collect_prompts(connection, "id = ?1", prompt_id)?
         .into_iter()
         .next()
-        .ok_or_else(|| BackendError::not_found("Промт не найден"))
+        .ok_or_else(|| BackendError::not_found("Промт не найден"))?;
+    prompt.stale = !super::fingerprint::current(connection, &prompt.homework_id)?
+        .is_current(prompt.inputs_fingerprint.as_deref());
+    Ok(prompt)
 }
 
 // ───────────────────────── Преподаватель ─────────────────────────
@@ -1254,6 +1283,10 @@ pub struct NewTeacherComment<'a> {
     pub date: &'a str,
     pub question: &'a str,
     pub answer: &'a str,
+    pub authority: CommentAuthority,
+    pub author: &'a str,
+    pub context: &'a str,
+    pub official: bool,
 }
 
 pub fn insert_teacher_comment(
@@ -1263,9 +1296,11 @@ pub fn insert_teacher_comment(
     connection
         .execute(
             "INSERT INTO teacher_comments(
-                id, homework_id, question, answer, source, source_date, created_at, date, added_at
+                id, homework_id, question, answer, source, source_date, created_at, date, added_at,
+                authority, author, context, official_confirmed_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?6,
-                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?7, ?8, ?9,
+                       CASE WHEN ?10 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END)",
             params![
                 comment.id,
                 comment.homework_id,
@@ -1273,9 +1308,143 @@ pub fn insert_teacher_comment(
                 comment.answer,
                 comment.source.as_db_str(),
                 comment.date,
+                comment.authority.as_db_str(),
+                comment.author,
+                comment.context,
+                comment.official,
             ],
         )
         .map_err(|error| map_write_error(error, "Комментарий преподавателя не сохранён"))?;
+    insert_authority_event(
+        connection,
+        comment.id,
+        comment.homework_id,
+        comment.authority,
+        comment.author,
+        comment.official,
+    )
+}
+
+fn insert_authority_event(
+    connection: &Connection,
+    comment_id: &str,
+    homework_id: &str,
+    authority: CommentAuthority,
+    author: &str,
+    official: bool,
+) -> Result<(), AppError> {
+    connection.execute(
+        "INSERT INTO comment_authority_events(id, comment_id, homework_id, authority, author, official)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            comment_id,
+            homework_id,
+            authority.as_db_str(),
+            author,
+            official
+        ],
+    )?;
+    Ok(())
+}
+
+/// Новые автор, роль, контекст и официальность ответа. При отзыве
+/// официальности требования этого ответа отзываются (остаются в истории).
+pub fn set_comment_authority(
+    connection: &Connection,
+    comment_id: &str,
+    authority: CommentAuthority,
+    author: &str,
+    context: &str,
+    official: bool,
+) -> Result<(), AppError> {
+    let homework_id: String = connection
+        .query_row(
+            "SELECT homework_id FROM teacher_comments WHERE id = ?1",
+            [comment_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| not_found_or(error, "Комментарий не найден"))?;
+    connection
+        .execute(
+            "UPDATE teacher_comments SET authority = ?2, author = ?3, context = ?4,
+                    official_confirmed_at = CASE
+                        WHEN NOT ?5 THEN NULL
+                        ELSE coalesce(official_confirmed_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    END
+             WHERE id = ?1",
+            params![comment_id, authority.as_db_str(), author, context, official],
+        )
+        .map_err(|error| {
+            map_write_error(
+                error,
+                "Официальным может быть только ответ преподавателя или ассистента",
+            )
+        })?;
+    if !official {
+        withdraw_comment_requirements(connection, comment_id)?;
+    }
+    insert_authority_event(
+        connection,
+        comment_id,
+        &homework_id,
+        authority,
+        author,
+        official,
+    )
+}
+
+pub fn withdraw_comment_requirements(
+    connection: &Connection,
+    comment_id: &str,
+) -> Result<(), AppError> {
+    connection.execute(
+        "UPDATE teacher_requirements
+            SET withdrawn_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE comment_id = ?1 AND withdrawn_at IS NULL",
+        [comment_id],
+    )?;
+    Ok(())
+}
+
+/// Требование удалено пользователем: хранится для истории, но не действует.
+pub fn withdraw_requirement(connection: &Connection, requirement_id: &str) -> Result<(), AppError> {
+    let changed = connection.execute(
+        "UPDATE teacher_requirements
+            SET withdrawn_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE id = ?1 AND withdrawn_at IS NULL",
+        [requirement_id],
+    )?;
+    if changed != 1 {
+        return Err(BackendError::blocked("Требование уже отозвано"));
+    }
+    Ok(())
+}
+
+pub fn comment_homework(connection: &Connection, comment_id: &str) -> Result<String, AppError> {
+    connection
+        .query_row(
+            "SELECT homework_id FROM teacher_comments WHERE id = ?1",
+            [comment_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| not_found_or(error, "Комментарий не найден"))
+}
+
+/// Отпечаток входных данных, на котором отмечено «Готово к сдаче».
+pub fn set_ready_fingerprint(
+    connection: &Connection,
+    homework_id: &str,
+    fingerprint: Option<&str>,
+) -> Result<(), AppError> {
+    connection
+        .execute(
+            "UPDATE homeworks SET ready_fingerprint = ?2 WHERE id = ?1",
+            params![homework_id, fingerprint],
+        )
+        .map_err(|error| map_write_error(error, "Отправленная работа неизменяема"))?;
     Ok(())
 }
 
@@ -1287,7 +1456,7 @@ pub fn teacher_comments(
         "SELECT c.id, c.homework_id, c.source, coalesce(c.date, c.source_date, c.created_at), c.question,
                 c.answer, coalesce(c.added_at, c.created_at),
                 f.id, f.name, f.kind, f.size_bytes, coalesce(f.modified_at, f.updated_at, f.created_at),
-                f.relative_path
+                f.relative_path, c.authority, c.author, c.context, c.official_confirmed_at
          FROM teacher_comments c LEFT JOIN files f ON f.id = c.attachment_file_id
          WHERE c.homework_id = ?1
          ORDER BY coalesce(c.date, c.source_date, c.created_at), c.id",
@@ -1323,6 +1492,15 @@ pub fn teacher_comments(
             answer: row.get(5)?,
             added_at: row.get(6)?,
             attachment,
+            authority: db_enum(
+                &row.get::<_, String>(13)?,
+                "teacher_comments.authority",
+                CommentAuthority::try_from_db,
+            )?,
+            author: row.get(14)?,
+            context: row.get(15)?,
+            official: row.get::<_, Option<String>>(16)?.is_some(),
+            official_confirmed_at: row.get(16)?,
         });
     }
     Ok(output)
@@ -1343,15 +1521,26 @@ pub fn insert_requirement(
     connection: &Connection,
     requirement: &NewRequirement<'_>,
 ) -> Result<(), AppError> {
-    let comment_matches: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM teacher_comments WHERE id = ?1 AND homework_id = ?2)",
-        params![requirement.comment_id, requirement.homework_id],
-        |row| row.get(0),
-    )?;
-    if !comment_matches {
-        return Err(BackendError::not_found(
-            "Комментарий преподавателя не найден",
-        ));
+    let official: Option<bool> = connection
+        .query_row(
+            "SELECT official_confirmed_at IS NOT NULL FROM teacher_comments
+              WHERE id = ?1 AND homework_id = ?2",
+            params![requirement.comment_id, requirement.homework_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match official {
+        None => {
+            return Err(BackendError::not_found(
+                "Комментарий преподавателя не найден",
+            ))
+        }
+        Some(false) => {
+            return Err(BackendError::blocked(
+                "Требование выводится только из официального ответа преподавателя или ассистента — сначала подтвердите источник",
+            ))
+        }
+        Some(true) => {}
     }
     connection
         .execute(
@@ -1386,7 +1575,7 @@ pub fn resolve_requirement(
         .execute(
             "UPDATE teacher_requirements SET status = ?2, note = ?3, checked_version_id = ?4,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE id = ?1",
+             WHERE id = ?1 AND withdrawn_at IS NULL",
             params![requirement_id, status.as_str(), note, checked_version_id],
         )
         .map_err(|error| map_write_error(error, "Требование не обновлено"))?;
@@ -1414,7 +1603,7 @@ pub fn teacher_requirements(
     homework_id: &str,
 ) -> Result<Vec<TeacherRequirementDto>, AppError> {
     let mut statement = connection.prepare(
-        "SELECT id, text, comment_id, origin, status, note, checked_version_id
+        "SELECT id, text, comment_id, origin, status, note, checked_version_id, withdrawn_at
          FROM teacher_requirements WHERE homework_id = ?1 ORDER BY created_at, id",
     )?;
     let mut rows = statement.query([homework_id])?;
@@ -1432,6 +1621,7 @@ pub fn teacher_requirements(
             )?,
             note: row.get(5)?,
             checked_version_id: row.get(6)?,
+            withdrawn_at: row.get(7)?,
         });
     }
     Ok(output)
@@ -1511,6 +1701,7 @@ struct PackageRow {
     checklist_json: String,
     upload_list_json: String,
     built_at: String,
+    inputs_fingerprint: Option<String>,
 }
 
 pub fn submission_package(
@@ -1520,7 +1711,8 @@ pub fn submission_package(
     let row = connection
         .query_row(
             "SELECT id, homework_id, final_version_id, package_path, items_json, links_json,
-                    warnings_json, checklist_json, upload_list_json, coalesce(built_at, created_at)
+                    warnings_json, checklist_json, upload_list_json, coalesce(built_at, created_at),
+                    inputs_fingerprint
              FROM submission_packages WHERE homework_id = ?1",
             [homework_id],
             |row| {
@@ -1535,6 +1727,7 @@ pub fn submission_package(
                     checklist_json: row.get(7)?,
                     upload_list_json: row.get(8)?,
                     built_at: row.get(9)?,
+                    inputs_fingerprint: row.get(10)?,
                 })
             },
         )
@@ -1550,6 +1743,8 @@ pub fn submission_package(
             require_relative_path(&file.relative_path, "submission_packages.items_json")?;
         }
     }
+    let stale = !super::fingerprint::current(connection, &row.homework_id)?
+        .is_current(row.inputs_fingerprint.as_deref());
     Ok(Some(SubmissionPackageDto {
         items,
         links: parse_column::<Vec<PackageLinkDto>>(
@@ -1570,6 +1765,8 @@ pub fn submission_package(
         version_id: row.version_id,
         folder_path: row.folder_path,
         built_at: row.built_at,
+        stale,
+        inputs_fingerprint: row.inputs_fingerprint,
     }))
 }
 
@@ -1661,6 +1858,9 @@ pub struct WorkflowSnapshot {
     pub submission_receipt: Option<SubmissionReceiptDto>,
     /// Задания передачи провайдерам (этап 9), без текстов.
     pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
+    /// Этап 7: текущий отпечаток входных данных и отпечаток отметки «Готово к сдаче».
+    pub inputs: super::fingerprint::InputsFingerprintDto,
+    pub ready_fingerprint: Option<String>,
 }
 
 /// Фиксированная серия запросов (14), не зависящая от числа версий и запусков.
@@ -1670,9 +1870,23 @@ pub fn load_snapshot(
 ) -> Result<WorkflowSnapshot, AppError> {
     let homework = homework_dto(connection, homework_id)?;
     let (bundles, bundle_changes) = bundles(connection, homework_id)?.into_iter().unzip();
-    let prompts = prompts(connection, homework_id)?;
-    let runs = runs(connection, homework_id, &prompts)?;
+    let inputs = super::fingerprint::current(connection, homework_id)?;
+    let mut prompts = prompts(connection, homework_id)?;
+    for prompt in &mut prompts {
+        prompt.stale = !inputs.is_current(prompt.inputs_fingerprint.as_deref());
+    }
+    let mut runs = runs(connection, homework_id, &prompts)?;
+    for run in &mut runs {
+        run.stale = !inputs.is_current(run.inputs_fingerprint.as_deref());
+    }
+    let ready_fingerprint: Option<String> = connection.query_row(
+        "SELECT ready_fingerprint FROM homeworks WHERE id = ?1",
+        [homework_id],
+        |row| row.get(0),
+    )?;
     Ok(WorkflowSnapshot {
+        inputs,
+        ready_fingerprint,
         teacher_comments: teacher_comments(connection, homework_id)?,
         teacher_requirements: teacher_requirements(connection, homework_id)?,
         style_confirmations: style_confirmations(connection, homework_id)?,

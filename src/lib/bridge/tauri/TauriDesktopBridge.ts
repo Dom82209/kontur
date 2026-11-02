@@ -106,6 +106,8 @@ export interface TauriIpcClient {
   addTeacherComments: typeof ipc.addTeacherComments;
   addTeacherRequirement: typeof ipc.addTeacherRequirement;
   resolveTeacherRequirement: typeof ipc.resolveTeacherRequirement;
+  setCommentAuthority: typeof ipc.setCommentAuthority;
+  withdrawTeacherRequirement: typeof ipc.withdrawTeacherRequirement;
   confirmStyleDivergence: typeof ipc.confirmStyleDivergence;
   markReadyToSubmit: typeof ipc.markReadyToSubmit;
   transitionWorkflow: typeof ipc.transitionWorkflow;
@@ -362,6 +364,14 @@ export class TauriDesktopBridge implements DesktopBridge {
   resolveRequirement: DesktopBridge["resolveRequirement"] = async (requirementId, status, note, options) => {
     const { operationId, revision } = command(options);
     return (await this.ipcClient.resolveTeacherRequirement(operationId, requirementId, status, note, revision)).value;
+  };
+  setCommentAuthority: DesktopBridge["setCommentAuthority"] = (commentId, input, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.setCommentAuthority(operationId, commentId, input, revision);
+  };
+  withdrawRequirement: DesktopBridge["withdrawRequirement"] = async (requirementId, options) => {
+    const { operationId, revision } = command(options);
+    return (await this.ipcClient.withdrawTeacherRequirement(operationId, requirementId, revision)).value;
   };
   getReadiness: DesktopBridge["getReadiness"] = async (homeworkId) => (await this.workflowOf(homeworkId)).readiness;
   markReadyToSubmit: DesktopBridge["markReadyToSubmit"] = (homeworkId, options) => {

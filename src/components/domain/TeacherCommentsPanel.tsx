@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from "motion/react";
-import { FileUp, ListPlus, MessagesSquare, Paperclip, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { BadgeCheck, FileUp, ListPlus, MessagesSquare, Paperclip, Plus, ScanSearch, ShieldQuestion, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type RequirementStatus, type TeacherComment, type TeacherCommentInput, type TeacherCommentSource, type TeacherRequirement, type TeacherRequirementInput, type TeacherTranscriptInput, type WorkflowCommandOptions } from "../../lib/bridge";
-import { COMMENT_SOURCE_LABEL, formatDate, plural, REQUIREMENT_STATUS_LABEL } from "../../lib/format";
+import { bridge, OFFICIAL_AUTHORITIES, type CommentAuthority, type CommentAuthorityInput, type RequirementStatus, type TeacherComment, type TeacherCommentInput, type TeacherCommentSource, type TeacherRequirement, type TeacherRequirementInput, type TeacherTranscriptInput, type WorkflowCommandOptions } from "../../lib/bridge";
+import { COMMENT_AUTHORITY_LABEL, COMMENT_SOURCE_LABEL, formatDate, plural, REQUIREMENT_STATUS_LABEL } from "../../lib/format";
 import { Segmented } from "../ui/Segmented";
 import { EmptyState } from "../ui/States";
 import { Dialog } from "../ui/Dialog";
@@ -78,6 +78,104 @@ function RequirementForm({ commentId, origin, onAdd }: { commentId: string; orig
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * Этап 7: кто ответил и подтверждена ли официальность. Подтвердить можно только
+ * ответ преподавателя или ассистента; остальные источники не дают требований.
+ */
+export function AuthorityFields({ value, onChange }: { value: CommentAuthorityInput; onChange: (next: CommentAuthorityInput) => void }) {
+  const canBeOfficial = OFFICIAL_AUTHORITIES.includes(value.authority);
+  return (
+    <div className="teacher__authority" data-testid="authority-fields">
+      <label className="field">
+        <span className="field__label">Кто ответил</span>
+        <select
+          className="select"
+          value={value.authority}
+          onChange={(e) => {
+            const authority = e.target.value as CommentAuthority;
+            onChange({ ...value, authority, confirmedOfficial: OFFICIAL_AUTHORITIES.includes(authority) && value.confirmedOfficial });
+          }}
+        >
+          {(Object.keys(COMMENT_AUTHORITY_LABEL) as CommentAuthority[]).map((k) => (
+            <option key={k} value={k}>
+              {COMMENT_AUTHORITY_LABEL[k]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field__label">Имя автора</span>
+        <input className="input" value={value.author} onChange={(e) => onChange({ ...value, author: e.target.value })} />
+      </label>
+      <label className="field">
+        <span className="field__label">Ссылка или контекст</span>
+        <input className="input" placeholder="Ссылка на сообщение или цитата" value={value.context} onChange={(e) => onChange({ ...value, context: e.target.value })} />
+      </label>
+      <label className="check">
+        <input type="checkbox" disabled={!canBeOfficial} checked={value.confirmedOfficial} onChange={(e) => onChange({ ...value, confirmedOfficial: e.target.checked })} />
+        <span>{canBeOfficial ? "Подтверждаю: это официальный ответ" : "Этот источник не может быть официальным требованием"}</span>
+      </label>
+    </div>
+  );
+}
+
+const EMPTY_AUTHORITY: CommentAuthorityInput = { authority: "unknown", author: "", context: "", confirmedOfficial: false };
+
+function AuthorityBadge({ comment }: { comment: TeacherComment }) {
+  return comment.official ? (
+    <span className="badge badge--ok" title={comment.officialConfirmedAt ? `Подтверждено ${formatDate(comment.officialConfirmedAt)}` : undefined}>
+      <BadgeCheck size={11} /> Официально · {COMMENT_AUTHORITY_LABEL[comment.authority]}
+      {comment.author ? ` ${comment.author}` : ""}
+    </span>
+  ) : (
+    <span className="badge badge--warn">
+      <ShieldQuestion size={11} /> Не официально · {COMMENT_AUTHORITY_LABEL[comment.authority]}
+      {comment.author ? ` ${comment.author}` : ""}
+    </span>
+  );
+}
+
+function AuthorityEditor({ comment, commandOptions, onSaved }: { comment: TeacherComment; commandOptions?: () => WorkflowCommandOptions; onSaved: () => void }) {
+  const { reportError } = useOps();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState<CommentAuthorityInput>({ authority: comment.authority, author: comment.author, context: comment.context, confirmedOfficial: comment.official });
+  const [busy, setBusy] = useState(false);
+  if (!open)
+    return (
+      <button className="btn btn--sm btn--ghost" onClick={() => setOpen(true)}>
+        <ShieldQuestion /> Источник ответа
+      </button>
+    );
+  return (
+    <div className="req__add">
+      <AuthorityFields value={value} onChange={setValue} />
+      <button
+        className="btn btn--sm btn--primary"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void bridge.setCommentAuthority(comment.id, value, commandOptions?.()).then(
+            () => {
+              setBusy(false);
+              setOpen(false);
+              onSaved();
+            },
+            (e: unknown) => {
+              setBusy(false);
+              reportError(e, "Источник не сохранён");
+            },
+          );
+        }}
+      >
+        Сохранить
+      </button>
+      <button className="btn btn--sm btn--ghost" onClick={() => setOpen(false)}>
+        Отмена
+      </button>
+    </div>
+  );
+}
+
 export function TeacherCommentsPanel({ homeworkId, comments, requirements, locked, running, canReview, onReview, onChanged, manual = false, commandOptions, onAddRequirement, onResolve }: Props) {
   const toast = useToast();
   const { reportError } = useOps();
@@ -88,6 +186,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
   const [text, setText] = useState("");
   const [q, setQ] = useState("");
   const [a, setA] = useState("");
+  const [authority, setAuthority] = useState<CommentAuthorityInput>(EMPTY_AUTHORITY);
   const [busy, setBusy] = useState(false);
   const [transcriptPreview, setTranscriptPreview] = useState<{ input: TeacherTranscriptInput; pairs: TeacherCommentInput[] } | null>(null);
   const iso = new Date(`${date}T12:00:00`).toISOString();
@@ -102,6 +201,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
       setText("");
       setQ("");
       setA("");
+      setAuthority(EMPTY_AUTHORITY);
     } catch (e) {
       reportError(e, "Комментарии не сохранены");
     } finally {
@@ -165,7 +265,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                     <label className="field">
                       <span className="field__label">Текст переписки</span>
                       <textarea className="textarea teacher__textarea teacher__textarea--transcript" placeholder={"В: Можно ли…?\nО: Да, но…"} value={text} onChange={(e) => setText(e.target.value)} />
-                      <span className="field__hint">Строки «В:» / «О:» (или «Вопрос:» / «Ответ:») разбиваются на пары автоматически.</span>
+                      <span className="field__hint">Строки «В:» / «О:» (или «Вопрос:» / «Ответ:») разбиваются на пары автоматически. Импортированные ответы сохраняются как неофициальные — подтвердите источник у каждого.</span>
                     </label>
                     <button className="btn btn--primary" disabled={busy || !text.trim()} onClick={() => void previewTranscript({ text, source, date: iso })}>
                       <MessagesSquare /> Разобрать и проверить
@@ -190,10 +290,11 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                       <input className="input" value={q} onChange={(e) => setQ(e.target.value)} />
                     </label>
                     <label className="field">
-                      <span className="field__label">Ответ преподавателя</span>
+                      <span className="field__label">Ответ</span>
                       <textarea className="textarea teacher__textarea" value={a} onChange={(e) => setA(e.target.value)} />
                     </label>
-                    <button className="btn btn--primary" disabled={busy || !a.trim()} onClick={() => void submit(() => bridge.saveTeacherComments(homeworkId, [{ source, date: iso, question: q, answer: a }], commandOptions?.()))}>
+                    <AuthorityFields value={authority} onChange={setAuthority} />
+                    <button className="btn btn--primary" disabled={busy || !a.trim()} onClick={() => void submit(() => bridge.saveTeacherComments(homeworkId, [{ source, date: iso, question: q, answer: a, ...authority }], commandOptions?.()))}>
                       <Plus /> Добавить
                     </button>
                   </>
@@ -231,7 +332,12 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
                     </div>
                     {c.question && <div className="tcomment__q">{c.question}</div>}
                     <div className="tcomment__a">{c.answer}</div>
-                    {!locked && onAddRequirement && <RequirementForm commentId={c.id} origin={c.answer || c.question} onAdd={onAddRequirement} />}
+                    <div className="tcomment__authority">
+                      <AuthorityBadge comment={c} />
+                      {c.context && <span className="faint tcomment__context">{c.context}</span>}
+                    </div>
+                    {!locked && <AuthorityEditor comment={c} commandOptions={commandOptions} onSaved={onChanged} />}
+                    {!locked && onAddRequirement && (c.official ? <RequirementForm commentId={c.id} origin={c.answer || c.question} onAdd={onAddRequirement} /> : <span className="faint">Требование — только из подтверждённого ответа преподавателя или ассистента</span>)}
                     {!locked && !manual && (
                       <button className="btn btn--sm btn--ghost btn--icon tcomment__del" aria-label="Удалить комментарий" onClick={() => void bridge.removeTeacherComment(c.id).then(onChanged, (e: unknown) => reportError(e))}>
                         <Trash2 />
@@ -261,7 +367,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
           <div className="panel__head">
             <h2 className="panel__title">Требования преподавателя</h2>
             <span className="panel__meta num">
-              {requirements.filter((r) => r.status === "done" || r.status === "na").length}/{requirements.length}
+              {requirements.filter((r) => !r.withdrawnAt && (r.status === "done" || r.status === "na")).length}/{requirements.filter((r) => !r.withdrawnAt).length}
             </span>
           </div>
           <div className="panel__body">
@@ -269,6 +375,7 @@ export function TeacherCommentsPanel({ homeworkId, comments, requirements, locke
               requirements={requirements}
               comments={comments}
               locked={locked}
+              onWithdraw={(r) => void bridge.withdrawRequirement(r.id, commandOptions?.()).then(onChanged, (e: unknown) => reportError(e, "Требование не отозвано"))}
               onResolve={(r, status) =>
                 onResolve ? onResolve(r.id, status) : void bridge.resolveRequirement(r.id, status, "Проверено вручную").then(onChanged, (e: unknown) => reportError(e))
               }

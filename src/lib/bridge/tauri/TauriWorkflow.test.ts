@@ -139,6 +139,8 @@ const run: ReviewRun = {
   provenance: "manual",
   styleThreshold: 4,
   assessment: null,
+  inputsFingerprint: "fp",
+  stale: false,
 };
 
 function client(overrides: Partial<TauriIpcClient>): TauriIpcClient {

@@ -860,9 +860,11 @@ mod tests {
             .with_connection(|connection| {
                 connection.execute(
                     "INSERT INTO teacher_comments(
-                        id, homework_id, question, answer, source, date, added_at
+                        id, homework_id, question, answer, source, date, added_at,
+                        authority, official_confirmed_at
                      ) VALUES ('comment-1', 'homework-1', 'Вопрос', 'Ответ', 'chat',
-                               '2026-10-20T08:00:00Z', '2026-10-21T08:00:00Z')",
+                               '2026-10-20T08:00:00Z', '2026-10-21T08:00:00Z',
+                               'teacher_official', '2026-10-21T08:00:00Z')",
                     [],
                 )?;
                 for status in ["done", "not_done", "manual", "na"] {

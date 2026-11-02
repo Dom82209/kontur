@@ -158,9 +158,9 @@ describe("рабочий цикл ДЗ (mock)", () => {
 
     // 6. Комментарии преподавателя
     await b.saveTeacherComments(HW, [
-      { source: "chat", date: new Date().toISOString(), question: "Нужна проверка ответа?", answer: "Да, подстановкой." },
-      { source: "chat", date: new Date().toISOString(), question: "Оформлять в LaTeX?", answer: "Да, формулы в LaTeX." },
-      { source: "chat", date: new Date().toISOString(), question: "Нужен ли вывод?", answer: "Добавьте вывод в конце каждой задачи." },
+      { source: "chat", date: new Date().toISOString(), question: "Нужна проверка ответа?", answer: "Да, подстановкой.", authority: "teacher_official", author: "Преподаватель", confirmedOfficial: true },
+      { source: "chat", date: new Date().toISOString(), question: "Оформлять в LaTeX?", answer: "Да, формулы в LaTeX.", authority: "teacher_official", author: "Преподаватель", confirmedOfficial: true },
+      { source: "chat", date: new Date().toISOString(), question: "Нужен ли вывод?", answer: "Добавьте вывод в конце каждой задачи.", authority: "teacher_official", author: "Преподаватель", confirmedOfficial: true },
     ]);
     // Требования из ответов преподавателя пользователь фиксирует сам.
     const comments = await b.getTeacherComments(HW);
@@ -196,6 +196,7 @@ describe("рабочий цикл ДЗ (mock)", () => {
     expect((await b.getTeacherRequirements(HW)).every((r) => r.status === "done")).toBe(true);
     await b.markVersionFinal(v3.id);
     const ready = await b.getReadiness(HW);
+    expect(ready.checks.filter((c) => !c.ok)).toEqual([]);
     expect(ready.ready).toBe(true);
     await b.markReadyToSubmit(HW, { noTeacherComments: false });
     expect(await stage()).toBe("ready_to_submit");

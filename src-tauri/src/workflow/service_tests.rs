@@ -241,6 +241,10 @@ impl Flow {
                     date: "2026-10-21".into(),
                     question: "Нужна ли BPMN?".into(),
                     answer: "Да".into(),
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: String::new(),
+                    context: String::new(),
+                    confirmed_official: true,
                 }],
             )
             .unwrap()
@@ -258,6 +262,19 @@ impl Flow {
                 },
             )
             .unwrap();
+        // Этап 7: новое официальное требование делает прежнюю проверку
+        // устаревшей — версию проверяют заново по актуальным требованиям.
+        if self.stage() == Stage::TeacherReview {
+            self.rereview();
+        }
+    }
+
+    fn rereview(&mut self) {
+        self.service()
+            .transition(&op(), HW, Stage::CodexReview, None)
+            .unwrap();
+        self.review(&pass_review());
+        assert_eq!(self.stage(), Stage::TeacherReview);
     }
 
     fn advance_to_ready(&mut self) -> &mut Self {
@@ -324,8 +341,8 @@ fn full_manual_cycle_visits_every_reachable_stage_through_backend_only() {
         .all(|item| item.status == crate::domain::OperationStatus::Completed));
     assert_eq!(
         flow.revision(),
-        19,
-        "каждая из 19 команд — одна новая ревизия"
+        23,
+        "каждая из 23 команд (19 + повторная проверка после нового требования) — одна новая ревизия"
     );
     for stage in [
         Stage::CodexAnalysis,
@@ -622,10 +639,12 @@ fn aggregate_lists_transitions_computed_by_backend() {
             "aiJobs",
             "bundles",
             "homework",
+            "inputs",
             "iterations",
             "prompts",
             "providerMode",
             "readiness",
+            "readyStale",
             "revision",
             "runs",
             "stage",
@@ -682,6 +701,10 @@ fn replaying_the_same_operation_id_is_idempotent() {
                 date: "2026-10-21".into(),
                 question: "q".into(),
                 answer: "a".into(),
+                authority: super::dto::CommentAuthority::TeacherOfficial,
+                author: String::new(),
+                context: String::new(),
+                confirmed_official: true,
             }],
         )
         .unwrap_err();
@@ -739,6 +762,10 @@ fn stale_revision_is_a_conflict_and_changes_nothing() {
                 date: "2026-10-21".into(),
                 question: "Первый".into(),
                 answer: "".into(),
+                authority: super::dto::CommentAuthority::TeacherOfficial,
+                author: String::new(),
+                context: String::new(),
+                confirmed_official: true,
             }],
         )
         .unwrap();
@@ -752,6 +779,10 @@ fn stale_revision_is_a_conflict_and_changes_nothing() {
                 date: "2026-10-21".into(),
                 question: "Второй".into(),
                 answer: "".into(),
+                authority: super::dto::CommentAuthority::TeacherOfficial,
+                author: String::new(),
+                context: String::new(),
+                confirmed_official: true,
             }],
         )
         .unwrap_err();
@@ -779,12 +810,20 @@ fn failure_rolls_back_every_write_of_the_command() {
                     date: "2026-10-21".into(),
                     question: "Корректный".into(),
                     answer: "Ответ".into(),
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: String::new(),
+                    context: String::new(),
+                    confirmed_official: true,
                 },
                 TeacherCommentInput {
                     source: TeacherCommentSource::Chat,
                     date: "2026-10-21".into(),
                     question: "".into(),
                     answer: " ".into(),
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: String::new(),
+                    context: String::new(),
+                    confirmed_official: true,
                 },
             ],
         )
@@ -1207,6 +1246,12 @@ fn committed_prompts_are_immutable_and_new_prompts_are_new_rows() {
         .database
         .with_connection(|connection| repository::prompt(connection, &prompt))
         .unwrap();
+    // Запись не меняется; производный флаг `stale` отражает новые входные данные.
+    assert!(unchanged.stale, "промт по прежней версии устарел");
+    let unchanged = super::dto::RevisionPromptDto {
+        stale: stored.stale,
+        ..unchanged
+    };
     assert_eq!(
         unchanged, stored,
         "старый промт не меняется новой итерацией"
@@ -1462,6 +1507,10 @@ fn submitted_homework_rejects_every_command() {
                     date: "2026-10-23".into(),
                     question: "Поздно".into(),
                     answer: String::new(),
+                    authority: super::dto::CommentAuthority::TeacherOfficial,
+                    author: String::new(),
+                    context: String::new(),
+                    confirmed_official: true,
                 }],
             )
             .unwrap_err()
@@ -1498,6 +1547,10 @@ fn concurrent_commands_on_one_revision_produce_one_winner() {
                             date: "2026-10-21".into(),
                             question: format!("Вопрос {index}"),
                             answer: String::new(),
+                            authority: super::dto::CommentAuthority::Unknown,
+                            author: String::new(),
+                            context: String::new(),
+                            confirmed_official: false,
                         }],
                     )
                     .map(|_| ())
@@ -1515,4 +1568,324 @@ fn concurrent_commands_on_one_revision_produce_one_winner() {
         .filter_map(|result| result.err())
         .all(|code| code == ErrorCode::Conflict));
     assert_eq!(flow.snapshot().teacher_comments.len(), 1);
+}
+
+// ───────────────────────── Этап 7: авторитетность и устаревание ─────────────────────────
+
+fn comment(
+    authority: super::dto::CommentAuthority,
+    confirmed_official: bool,
+) -> TeacherCommentInput {
+    TeacherCommentInput {
+        source: TeacherCommentSource::Chat,
+        date: "2026-10-22".into(),
+        question: "Нужно ли приложить расчёт?".into(),
+        answer: "Да, отдельным листом".into(),
+        authority,
+        author: "Автор".into(),
+        context: "https://t.me/c/1/2".into(),
+        confirmed_official,
+    }
+}
+
+impl Flow {
+    fn add_comment(&self, input: TeacherCommentInput) -> super::dto::TeacherCommentDto {
+        self.service()
+            .add_teacher_comments(&op(), HW, &[input])
+            .unwrap()
+            .value
+            .remove(0)
+    }
+
+    fn requirement_from(
+        &self,
+        comment_id: &str,
+    ) -> Result<super::dto::TeacherRequirementDto, ErrorCode> {
+        self.service()
+            .add_teacher_requirement(
+                &op(),
+                HW,
+                &TeacherRequirementInput {
+                    comment_id: comment_id.to_owned(),
+                    text: "Приложить расчёт отдельным листом".into(),
+                    origin: "Да, отдельным листом".into(),
+                    status: RequirementStatus::Done,
+                    note: None,
+                },
+            )
+            .map(|success| success.value)
+            .map_err(|failure| failure.error.code)
+    }
+
+    fn review_is_stale(&self) -> bool {
+        let snapshot = self.snapshot();
+        let id = self.review_run.clone().unwrap();
+        snapshot.runs.iter().find(|run| run.id == id).unwrap().stale
+    }
+}
+
+#[test]
+fn only_confirmed_teacher_or_assistant_answers_become_requirements() {
+    use super::dto::CommentAuthority::*;
+    let mut flow = Flow::new();
+    flow.advance_to_teacher_review();
+    for authority in [Student, GroupChatUnverified, UserNote, System, Unknown] {
+        let error = flow
+            .service()
+            .add_teacher_comments(&op(), HW, &[comment(authority, true)])
+            .unwrap_err()
+            .error;
+        assert_eq!(
+            error.code,
+            ErrorCode::Blocked,
+            "{authority:?} не может быть официальным"
+        );
+        // Без подтверждения сохраняется, но требование из него создать нельзя.
+        let saved = flow.add_comment(comment(authority, false));
+        assert!(!saved.official);
+        assert_eq!(
+            flow.requirement_from(&saved.id).unwrap_err(),
+            ErrorCode::Blocked
+        );
+    }
+    // Ответ преподавателя без подтверждения пользователя — тоже не официальный.
+    let unconfirmed = flow.add_comment(comment(TeacherOfficial, false));
+    assert_eq!(
+        flow.requirement_from(&unconfirmed.id).unwrap_err(),
+        ErrorCode::Blocked
+    );
+    // Неофициальные ответы не меняют входные данные: проверка действует.
+    assert!(!flow.review_is_stale());
+
+    for authority in [TeacherOfficial, TeachingAssistant] {
+        let official = flow.add_comment(comment(authority, true));
+        assert!(official.official && official.official_confirmed_at.is_some());
+        assert_eq!(official.author, "Автор");
+        assert_eq!(official.context, "https://t.me/c/1/2");
+        assert!(flow.requirement_from(&official.id).is_ok());
+    }
+    // Даже триггер SQLite не даёт сделать студента официальным в обход сервиса.
+    assert!(flow
+        .database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE teacher_comments SET authority='student', official_confirmed_at='x'
+                  WHERE official_confirmed_at IS NULL",
+                [],
+            )?;
+            Ok(())
+        })
+        .is_err());
+}
+
+#[test]
+fn new_official_requirement_makes_review_readiness_and_ready_stale() {
+    use super::dto::CommentAuthority::*;
+    let mut flow = Flow::new();
+    flow.advance_to_ready();
+    assert!(!flow.service().aggregate(HW).unwrap().ready_stale);
+
+    // Мнение студента ничего не меняет.
+    flow.add_comment(comment(Student, false));
+    assert_eq!(flow.stage(), Stage::ReadyToSubmit);
+    assert!(!flow.review_is_stale());
+
+    // Официальный ответ преподавателя — новое входное данное: готовность снята.
+    let official = flow.add_comment(comment(TeacherOfficial, true));
+    assert_eq!(flow.stage(), Stage::TeacherReview);
+    assert!(flow.review_is_stale(), "прежняя проверка устарела");
+    assert_eq!(blockers(&flow), vec![ReadinessCheckId::InputsFresh]);
+    let error = flow
+        .service()
+        .mark_ready(&op(), HW, false)
+        .unwrap_err()
+        .error;
+    assert_eq!(error.code, ErrorCode::Blocked);
+
+    // Устаревшая проверка остаётся в истории.
+    let old_review = flow.review_run.clone().unwrap();
+    flow.requirement_from(&official.id).unwrap();
+    flow.rereview();
+    let snapshot = flow.snapshot();
+    assert!(snapshot
+        .runs
+        .iter()
+        .any(|run| run.id == old_review && run.stale));
+    assert!(blockers(&flow).is_empty());
+    flow.service().mark_ready(&op(), HW, false).unwrap();
+    assert_eq!(flow.stage(), Stage::ReadyToSubmit);
+}
+
+#[test]
+fn revoking_or_withdrawing_official_requirements_invalidates_and_keeps_history() {
+    use super::dto::CommentAuthority::*;
+    let mut flow = Flow::new();
+    flow.advance_to_ready();
+    let official = flow
+        .snapshot()
+        .teacher_comments
+        .into_iter()
+        .find(|comment| comment.official)
+        .unwrap();
+
+    // Отзыв официальности: требования отозваны, но видны в истории.
+    flow.service()
+        .set_comment_authority(
+            &op(),
+            &official.id,
+            &super::service::CommentAuthorityInput {
+                authority: GroupChatUnverified,
+                author: String::new(),
+                context: "переслано из общего чата".into(),
+                confirmed_official: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(flow.stage(), Stage::TeacherReview);
+    let snapshot = flow.snapshot();
+    assert!(snapshot
+        .teacher_requirements
+        .iter()
+        .all(|requirement| requirement.withdrawn_at.is_some()));
+    assert!(flow.review_is_stale());
+    // Нельзя вернуть официальность ответу из общего чата.
+    let error = flow
+        .service()
+        .set_comment_authority(
+            &op(),
+            &official.id,
+            &super::service::CommentAuthorityInput {
+                authority: GroupChatUnverified,
+                author: String::new(),
+                context: String::new(),
+                confirmed_official: true,
+            },
+        )
+        .unwrap_err()
+        .error;
+    assert_eq!(error.code, ErrorCode::Blocked);
+
+    // Ассистент подтверждён — новое требование и затем его удаление.
+    flow.service()
+        .set_comment_authority(
+            &op(),
+            &official.id,
+            &super::service::CommentAuthorityInput {
+                authority: TeachingAssistant,
+                author: "Ассистент".into(),
+                context: String::new(),
+                confirmed_official: true,
+            },
+        )
+        .unwrap();
+    let requirement = flow.requirement_from(&official.id).unwrap();
+    flow.rereview();
+    flow.service().mark_ready(&op(), HW, false).unwrap();
+    flow.service()
+        .withdraw_requirement(&op(), &requirement.id)
+        .unwrap();
+    assert_eq!(flow.stage(), Stage::TeacherReview);
+    assert!(flow.review_is_stale());
+    let withdrawn = flow
+        .snapshot()
+        .teacher_requirements
+        .into_iter()
+        .find(|item| item.id == requirement.id)
+        .unwrap();
+    assert!(
+        withdrawn.withdrawn_at.is_some(),
+        "отозванное требование хранится"
+    );
+    // Отозванное требование неизменяемо.
+    assert!(flow
+        .service()
+        .resolve_requirement(&op(), &requirement.id, RequirementStatus::NotDone, "")
+        .is_err());
+}
+
+#[test]
+fn materials_task_and_style_changes_invalidate_results() {
+    // Смена выбранной версии проверена в
+    // committed_prompts_are_immutable_and_new_prompts_are_new_rows (версии неизменяемы).
+    for change in [
+        "UPDATE files SET content_hash = 'changed' WHERE category IN ('lecture','seminar','material','homework_data')",
+        "UPDATE files SET content_hash = 'changed' WHERE category = 'homework_task'",
+        "UPDATE homeworks SET assignment_url = 'https://my.centraluniversity.ru/new' WHERE id = 'hw-1'",
+        "INSERT INTO style_profile_sources(id, relative_path, source_kind, traits_json, explicitly_selected)
+         VALUES ('style-new', 'ПРОФИЛЬ_СТИЛЯ_ДЗ.md', 'style_markdown', '[]', 1)",
+    ] {
+        let mut flow = Flow::new();
+        flow.advance_to_ready();
+        let before = flow.snapshot().inputs;
+        flow.database
+            .with_connection(|c| {
+                c.execute(change, [])?;
+                Ok(())
+            })
+            .unwrap();
+        let after = flow.snapshot().inputs;
+        assert_ne!(before.combined, after.combined, "{change}");
+        assert!(flow.review_is_stale(), "{change}");
+        let aggregate = flow.service().aggregate(HW).unwrap();
+        assert!(aggregate.ready_stale, "{change}: «Готово к сдаче» не действует");
+        assert!(!aggregate.readiness.ready);
+        assert!(aggregate
+            .readiness
+            .blockers()
+            .contains(&ReadinessCheckId::InputsFresh));
+    }
+}
+
+#[test]
+fn stale_revision_prompt_cannot_be_handed_off_until_edited() {
+    use super::dto::CommentAuthority::*;
+    let mut flow = Flow::new();
+    flow.advance_to_needs_fixes();
+    let run = flow.review_run.clone().unwrap();
+    let prompt = flow
+        .service()
+        .create_revision_prompt(&op(), &run, None)
+        .unwrap()
+        .value;
+    assert!(!prompt.stale);
+    let official = flow.add_comment(comment(TeacherOfficial, true));
+    flow.requirement_from(&official.id).unwrap();
+    // Правка черновика — решение пользователя по актуальным данным.
+    let edited = flow
+        .service()
+        .update_prompt_draft(&op(), &prompt.id, "Исправь формулу и приложи расчёт")
+        .unwrap()
+        .value;
+    assert!(!edited.stale);
+    flow.service().commit_prompt(&op(), &prompt.id).unwrap();
+    // Новое официальное требование после фиксации — промт устарел.
+    let another = flow.add_comment(comment(TeachingAssistant, true));
+    flow.requirement_from(&another.id).unwrap();
+    let error = flow
+        .service()
+        .hand_off_prompt(&op(), &prompt.id)
+        .unwrap_err()
+        .error;
+    assert_eq!(error.code, ErrorCode::Blocked);
+    assert!(flow
+        .snapshot()
+        .prompts
+        .iter()
+        .any(|item| item.id == prompt.id && item.stale));
+}
+
+#[test]
+fn not_done_requirement_reopens_ready_homework() {
+    let mut flow = Flow::new();
+    flow.advance_to_ready();
+    let requirement = flow.snapshot().teacher_requirements[0].id.clone();
+    flow.service()
+        .resolve_requirement(
+            &op(),
+            &requirement,
+            RequirementStatus::NotDone,
+            "не приложен",
+        )
+        .unwrap();
+    assert_eq!(flow.stage(), Stage::TeacherReview);
 }

@@ -246,6 +246,10 @@ export interface ReviewRun {
   /** Порог стиля, применённый в момент запуска; не меняется вместе с настройкой. */
   styleThreshold: number;
   assessment: ReviewAssessment | null;
+  /** Отпечаток входных данных на момент запуска; null — запуск до этапа 7. */
+  inputsFingerprint: string | null;
+  /** Входные данные изменились после запуска: в истории, но не действует. */
+  stale: boolean;
 }
 
 export type PromptKind = "initial" | "revision" | "teacher";
@@ -270,6 +274,9 @@ export interface RevisionPrompt {
   committedAt: ISODate | null;
   provenance: Provenance;
   updatedAt: ISODate;
+  inputsFingerprint: string | null;
+  /** Составлен по устаревшим входным данным — передать автору нельзя. */
+  stale: boolean;
 }
 
 export type PromptStatus = "draft" | "committed";
@@ -278,18 +285,44 @@ export type PromptStatus = "draft" | "committed";
 
 export type TeacherCommentSource = "chat" | "email" | "lms" | "in_person" | "other";
 
-export interface TeacherCommentInput {
+/**
+ * Этап 7: кто дал ответ. Официальным может стать только ответ преподавателя или
+ * ассистента — и только после явного подтверждения пользователем.
+ */
+export type CommentAuthority = "teacher_official" | "teaching_assistant" | "student" | "group_chat_unverified" | "user_note" | "system" | "unknown";
+
+export const OFFICIAL_AUTHORITIES: readonly CommentAuthority[] = ["teacher_official", "teaching_assistant"];
+
+export interface CommentAuthorityInput {
+  authority: CommentAuthority;
+  author: string;
+  /** Ссылка на сообщение или цитата с контекстом. */
+  context: string;
+  confirmedOfficial: boolean;
+}
+
+export interface TeacherCommentInput extends Partial<CommentAuthorityInput> {
   source: TeacherCommentSource;
   date: ISODate;
   question: string;
   answer: string;
 }
 
-export interface TeacherComment extends TeacherCommentInput {
+export interface TeacherComment {
   id: string;
   homeworkId: string;
+  source: TeacherCommentSource;
+  date: ISODate;
+  question: string;
+  answer: string;
   addedAt: ISODate;
   attachment: FileRef | null;
+  authority: CommentAuthority;
+  author: string;
+  context: string;
+  /** Преподаватель/ассистент + подтверждение пользователя. */
+  official: boolean;
+  officialConfirmedAt: ISODate | null;
 }
 
 export type RequirementStatus = "done" | "not_done" | "manual" | "na";
@@ -304,6 +337,8 @@ export interface TeacherRequirement {
   status: RequirementStatus;
   note: string;
   checkedVersionId: string | null;
+  /** Отозвано (ответ перестал быть официальным или удалено) — хранится для истории, не учитывается. */
+  withdrawnAt: ISODate | null;
 }
 
 export interface TeacherRequirementInput {
@@ -359,7 +394,8 @@ export type ReadinessCheckId =
   | "attachments"
   | "style"
   | "sources_fresh"
-  | "final_version";
+  | "final_version"
+  | "inputs_fresh";
 
 export interface ReadinessCheck {
   id: ReadinessCheckId;
@@ -378,6 +414,18 @@ export interface Readiness {
   reviewRunId: string | null;
   /** Ревизия ДЗ, на которой посчитан ответ. */
   revision: number;
+  /** Отпечаток входных данных, по которым посчитана готовность (этап 7). */
+  inputsFingerprint: string;
+}
+
+/** Этап 7: отпечатки входных данных ДЗ (SHA-256). */
+export interface InputsFingerprint {
+  materials: string;
+  task: string;
+  version: string;
+  style: string;
+  requirements: string;
+  combined: string;
 }
 
 /** Явное подтверждение пользователем расхождения со стилем выше порога. */
@@ -432,6 +480,9 @@ export interface SubmissionPackage {
   /** Что прикрепить в систему вуза — в порядке загрузки. */
   uploadList: string[];
   builtAt: ISODate;
+  inputsFingerprint: string | null;
+  /** Собран по устаревшим входным данным — подтвердить отправку нельзя. */
+  stale: boolean;
 }
 
 export interface SubmissionConfirmation {
@@ -535,6 +586,10 @@ export interface HomeworkWorkflow {
   iterations: HomeworkIteration[];
   submissionPackage: SubmissionPackage | null;
   submissionReceipt: SubmissionReceipt | null;
+  /** Этап 7: текущие отпечатки входных данных. */
+  inputs: InputsFingerprint;
+  /** «Готово к сдаче» отмечено по другим входным данным — отметка не действует. */
+  readyStale: boolean;
   /** Задания передачи провайдерам (этап 9) — без текстов промта и ответа. */
   aiJobs: import("./ai-types").AiJob[];
   /** ai_jobs — AI-шаги идут через задания передачи с подтверждением результата пользователем (этап 9). */

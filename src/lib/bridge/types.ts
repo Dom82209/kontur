@@ -26,6 +26,7 @@ import type {
   SubmissionConfirmation,
   SubmissionPackage,
   SubmissionReceipt,
+  CommentAuthorityInput,
   TeacherComment,
   TeacherCommentInput,
   TeacherRequirement,
@@ -1325,6 +1326,10 @@ export interface DesktopBridge {
   removeTeacherComment(commentId: string): Promise<void>;
   runTeacherReview(homeworkId: string, versionId: string, bundleId: string, options?: WorkflowCommandOptions & { mode?: RunMode }): Promise<ReviewRun>;
   getTeacherRequirements(homeworkId: string): Promise<TeacherRequirement[]>;
+  /** Этап 7: автор, роль и официальность ответа (официальным может быть только преподаватель или ассистент). */
+  setCommentAuthority(commentId: string, input: CommentAuthorityInput, options?: WorkflowCommandOptions): Promise<OperationResult<TeacherComment[]>>;
+  /** Этап 7: удалить требование (остаётся в истории как отозванное). */
+  withdrawRequirement(requirementId: string, options?: WorkflowCommandOptions): Promise<TeacherRequirement>;
   /** Пользователь вручную закрывает требование со статусом «требует ручной проверки». */
   resolveRequirement(requirementId: string, status: "done" | "not_done" | "na", note: string, options?: WorkflowCommandOptions): Promise<TeacherRequirement>;
 

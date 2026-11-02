@@ -94,6 +94,23 @@ pub fn readiness(snapshot: &WorkflowSnapshot) -> ReadinessDto {
         },
     ));
 
+    // Этап 7: проверка действует, только если входные данные не менялись после неё.
+    let review_fresh = review.is_some_and(|run| !run.stale);
+    checks.push(check(
+        ReadinessCheckId::InputsFresh,
+        "Проверка учитывает актуальные требования и материалы",
+        review_fresh,
+        match review {
+            Some(run) if !run.stale => "Входные данные не менялись после проверки".to_owned(),
+            Some(run) if run.inputs_fingerprint.is_none() => {
+                "Проверка выполнена до учёта официальных требований — проверьте версию заново"
+                    .to_owned()
+            }
+            Some(_) => "После проверки изменились требования, материалы, условие, версия или профиль стиля — проверьте версию заново".to_owned(),
+            None => "Нет проверки текущей версии".to_owned(),
+        },
+    ));
+
     let assessment = review.and_then(|run| run.assessment.as_ref());
     let verdict_ok = assessment.is_some_and(|value| {
         matches!(
@@ -141,8 +158,12 @@ pub fn readiness(snapshot: &WorkflowSnapshot) -> ReadinessDto {
         },
     ));
 
-    let open_requirements: Vec<_> = snapshot
+    let active_requirements: Vec<_> = snapshot
         .teacher_requirements
+        .iter()
+        .filter(|item| item.withdrawn_at.is_none())
+        .collect();
+    let open_requirements: Vec<_> = active_requirements
         .iter()
         .filter(|item| {
             matches!(
@@ -160,14 +181,11 @@ pub fn readiness(snapshot: &WorkflowSnapshot) -> ReadinessDto {
         "Требования преподавателя выполнены",
         open_requirements.is_empty(),
         if open_requirements.is_empty() {
-            if snapshot.teacher_comments.is_empty() {
-                "Комментариев преподавателя нет — при отметке готовности это нужно подтвердить"
+            if !snapshot.teacher_comments.iter().any(|comment| comment.official) {
+                "Официальных ответов преподавателя нет — при отметке готовности это нужно подтвердить"
                     .to_owned()
             } else {
-                format!(
-                    "Выполнено требований: {}",
-                    snapshot.teacher_requirements.len()
-                )
+                format!("Выполнено требований: {}", active_requirements.len())
             }
         } else {
             format!(
@@ -258,6 +276,7 @@ pub fn readiness(snapshot: &WorkflowSnapshot) -> ReadinessDto {
         version_id: current.map(|version| version.id.clone()),
         review_run_id: review.map(|run| run.id.clone()),
         revision: homework.revision,
+        inputs_fingerprint: snapshot.inputs.combined.clone(),
     }
 }
 

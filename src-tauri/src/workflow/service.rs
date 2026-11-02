@@ -44,9 +44,9 @@ use crate::{
 use super::{
     bundle::{prepare_snapshot, write_snapshot, ContentVerifier},
     dto::{
-        CriterionId, CriterionStatus, DashboardDto, EvidenceReferenceDto, FindingSeverity,
-        HomeworkIterationDto, HomeworkWorkflowDto, PromptKind, PromptStatus, Provenance,
-        ProviderModeDto, ReadinessCheckId, ReadinessDto, RecommendedActionDto,
+        CommentAuthority, CriterionId, CriterionStatus, DashboardDto, EvidenceReferenceDto,
+        FindingSeverity, HomeworkIterationDto, HomeworkWorkflowDto, PromptKind, PromptStatus,
+        Provenance, ProviderModeDto, ReadinessCheckId, ReadinessDto, RecommendedActionDto,
         RecommendedActionKind, ReviewCriterionDto, ReviewFindingDto, ReviewMissingItemDto,
         ReviewRunDto, ReviewRunStatus, ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto,
         StoredReviewResult, StyleConfirmationDto, StyleDivergenceDto, StyleReasonDto,
@@ -135,6 +135,68 @@ pub struct TeacherCommentInput {
     pub date: String,
     pub question: String,
     pub answer: String,
+    /// Этап 7: кто ответил. По умолчанию — неизвестно (не официально).
+    #[serde(default = "unknown_authority")]
+    pub authority: CommentAuthority,
+    #[serde(default)]
+    pub author: String,
+    /// Ссылка на сообщение или цитата с контекстом.
+    #[serde(default)]
+    pub context: String,
+    /// Пользователь явно подтвердил, что это официальный ответ.
+    #[serde(default)]
+    pub confirmed_official: bool,
+}
+
+impl TeacherCommentInput {
+    /// Импорт переписки: автор не установлен, ответ не официальный (этап 7).
+    pub fn unverified(
+        source: TeacherCommentSource,
+        date: String,
+        question: String,
+        answer: String,
+    ) -> Self {
+        Self {
+            source,
+            date,
+            question,
+            answer,
+            authority: CommentAuthority::Unknown,
+            author: String::new(),
+            context: String::new(),
+            confirmed_official: false,
+        }
+    }
+}
+
+fn unknown_authority() -> CommentAuthority {
+    CommentAuthority::Unknown
+}
+
+/// Этап 7: изменение автора и официальности уже сохранённого ответа.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommentAuthorityInput {
+    pub authority: CommentAuthority,
+    pub author: String,
+    pub context: String,
+    pub confirmed_official: bool,
+}
+
+fn validate_authority(
+    authority: CommentAuthority,
+    author: &str,
+    context: &str,
+    confirmed_official: bool,
+) -> Result<(), AppError> {
+    text_field(author, "Автор", 200, false)?;
+    text_field(context, "Ссылка или контекст", 4_000, false)?;
+    if confirmed_official && !authority.can_be_official() {
+        return Err(BackendError::blocked(
+            "Официальным может быть только ответ преподавателя или ассистента: мнение студента, сообщение из чата без проверки, заметка или системный текст не становятся требованием",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +285,7 @@ enum Target<'a> {
     Version(&'a str),
     Requirement(&'a str),
     AiJob(&'a str),
+    Comment(&'a str),
 }
 
 struct Spec {
@@ -253,6 +316,21 @@ impl TxContext<'_> {
 
     fn stage(&self) -> Result<Stage, AppError> {
         Ok(repository::homework_core(self.connection, &self.homework_id)?.workflow_stage)
+    }
+
+    /// Этап 7: если «Готово к сдаче» отмечено по другим входным данным
+    /// (изменились официальные требования, материалы, условие, версия или
+    /// профиль стиля), отметка снимается в той же транзакции.
+    fn reopen_if_ready_stale(&mut self, reason: &str) -> Result<(), AppError> {
+        let snapshot = self.snapshot()?;
+        if snapshot.homework.workflow_stage == Stage::ReadyToSubmit
+            && !snapshot
+                .inputs
+                .is_current(snapshot.ready_fingerprint.as_deref())
+        {
+            self.transition(Stage::TeacherReview, reason, false)?;
+        }
+        Ok(())
     }
 
     /// Переход только через state machine, по состоянию с учётом уже сделанных записей.
@@ -460,6 +538,11 @@ fn resolve_homework(connection: &Connection, target: &Target<'_>) -> Result<Stri
             "SELECT homework_id FROM teacher_requirements WHERE id = ?1",
             *id,
             "Требование не найдено",
+        ),
+        Target::Comment(id) => (
+            "SELECT homework_id FROM teacher_comments WHERE id = ?1",
+            *id,
+            "Комментарий не найден",
         ),
         Target::AiJob(id) => (
             "SELECT homework_id FROM ai_jobs WHERE id = ?1",
@@ -1357,6 +1440,11 @@ impl<'a> WorkflowService<'a> {
                 if prompt.status != PromptStatus::Committed {
                     return Err(BackendError::blocked("Сначала зафиксируйте промт"));
                 }
+                if prompt.stale {
+                    return Err(BackendError::blocked(
+                        "Промт составлен по устаревшим входным данным (требования, материалы, условие, версия или профиль стиля изменились) — создайте новый",
+                    ));
+                }
                 let snapshot = context.snapshot()?;
                 let stage = snapshot.homework.workflow_stage;
                 let allowed = match prompt.kind {
@@ -1546,6 +1634,12 @@ impl<'a> WorkflowService<'a> {
                             "Комментарий пуст: заполните вопрос или ответ",
                         ));
                     }
+                    validate_authority(
+                        comment.authority,
+                        &comment.author,
+                        &comment.context,
+                        comment.confirmed_official,
+                    )?;
                     let id = Uuid::new_v4().to_string();
                     repository::insert_teacher_comment(
                         context.connection,
@@ -1556,10 +1650,15 @@ impl<'a> WorkflowService<'a> {
                             date: comment.date.trim(),
                             question: comment.question.trim(),
                             answer: comment.answer.trim(),
+                            authority: comment.authority,
+                            author: comment.author.trim(),
+                            context: comment.context.trim(),
+                            official: comment.confirmed_official,
                         },
                     )?;
                     ids.push(id);
                 }
+                context.reopen_if_ready_stale("Добавлен официальный ответ — готовность снята")?;
                 Ok(EntityRef::Comments { ids })
             },
             read_comments,
@@ -1605,6 +1704,8 @@ impl<'a> WorkflowService<'a> {
                         checked_version_id: &version,
                     },
                 )?;
+                context
+                    .reopen_if_ready_stale("Добавлено официальное требование — готовность снята")?;
                 Ok(EntityRef::Requirement { id })
             },
             read_requirement,
@@ -1644,6 +1745,87 @@ impl<'a> WorkflowService<'a> {
                     note.trim(),
                     &version,
                 )?;
+                if status == RequirementStatus::NotDone && context.stage()? == Stage::ReadyToSubmit
+                {
+                    context.transition(
+                        Stage::TeacherReview,
+                        "Требование отмечено невыполненным — готовность снята",
+                        false,
+                    )?;
+                }
+                Ok(EntityRef::Requirement {
+                    id: requirement_id.to_owned(),
+                })
+            },
+            read_requirement,
+        )
+    }
+
+    /// Этап 7: автор, роль и официальность ответа. Изменение официальности
+    /// меняет отпечаток входных данных — проверки, промты, готовность и
+    /// комплекты, созданные раньше, устаревают.
+    pub fn set_comment_authority(
+        &self,
+        meta: &CommandMeta,
+        comment_id: &str,
+        input: &CommentAuthorityInput,
+    ) -> WorkflowResult<Vec<TeacherCommentDto>> {
+        self.execute(
+            meta,
+            Spec {
+                command: "set_comment_authority",
+                kind: OperationKind::SaveTeacherComments,
+                title: if input.confirmed_official {
+                    "Ответ подтверждён как официальный".to_owned()
+                } else {
+                    "Ответ не считается официальным".to_owned()
+                },
+            },
+            &(comment_id, input),
+            Target::Comment(comment_id),
+            |context| {
+                validate_authority(
+                    input.authority,
+                    &input.author,
+                    &input.context,
+                    input.confirmed_official,
+                )?;
+                repository::set_comment_authority(
+                    context.connection,
+                    comment_id,
+                    input.authority,
+                    input.author.trim(),
+                    input.context.trim(),
+                    input.confirmed_official,
+                )?;
+                context
+                    .reopen_if_ready_stale("Изменилась официальность ответа — готовность снята")?;
+                Ok(EntityRef::Comments {
+                    ids: vec![comment_id.to_owned()],
+                })
+            },
+            read_comments,
+        )
+    }
+
+    /// Этап 7: требование удалено пользователем (остаётся в истории как отозванное).
+    pub fn withdraw_requirement(
+        &self,
+        meta: &CommandMeta,
+        requirement_id: &str,
+    ) -> WorkflowResult<TeacherRequirementDto> {
+        self.execute(
+            meta,
+            Spec {
+                command: "withdraw_teacher_requirement",
+                kind: OperationKind::SaveTeacherComments,
+                title: "Требование отозвано".to_owned(),
+            },
+            &requirement_id,
+            Target::Requirement(requirement_id),
+            |context| {
+                repository::withdraw_requirement(context.connection, requirement_id)?;
+                context.reopen_if_ready_stale("Требование отозвано — готовность снята")?;
                 Ok(EntityRef::Requirement {
                     id: requirement_id.to_owned(),
                 })
@@ -1724,6 +1906,12 @@ impl<'a> WorkflowService<'a> {
                     Stage::ReadyToSubmit,
                     "Все обязательные проверки пройдены, подтверждено пользователем",
                     no_teacher_comments,
+                )?;
+                let inputs = super::fingerprint::current(context.connection, &context.homework_id)?;
+                repository::set_ready_fingerprint(
+                    context.connection,
+                    &context.homework_id,
+                    Some(&inputs.combined),
                 )?;
                 Ok(EntityRef::Homework {
                     id: context.homework_id.clone(),
@@ -2262,6 +2450,10 @@ fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> Home
     let readiness = projections::readiness(&snapshot);
     let iterations = projections::iterations(&snapshot);
     let stage = snapshot.homework.workflow_stage;
+    let ready_stale = stage == Stage::ReadyToSubmit
+        && !snapshot
+            .inputs
+            .is_current(snapshot.ready_fingerprint.as_deref());
     let transitions = state_machine::transition_options(
         stage,
         &TransitionContext {
@@ -2288,6 +2480,8 @@ fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> Home
         submission_receipt: snapshot.submission_receipt,
         ai_jobs: snapshot.ai_jobs,
         provider_mode: ProviderModeDto::AiJobs,
+        ready_stale,
+        inputs: snapshot.inputs,
     }
 }
 

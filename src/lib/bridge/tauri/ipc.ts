@@ -22,6 +22,7 @@ import type {
   RunMode,
   SourceBundle,
   StyleConfirmation,
+  CommentAuthorityInput,
   TeacherComment,
   TeacherCommentInput,
   TeacherRequirement,
@@ -602,7 +603,16 @@ export function addTeacherComments(
   return call("add_teacher_comments", {
     operationId,
     homeworkId,
-    comments: comments.map((comment) => ({ source: comment.source, date: comment.date, question: comment.question, answer: comment.answer })),
+    comments: comments.map((comment) => ({
+      source: comment.source,
+      date: comment.date,
+      question: comment.question,
+      answer: comment.answer,
+      authority: comment.authority ?? "unknown",
+      author: comment.author ?? "",
+      context: comment.context ?? "",
+      confirmedOfficial: comment.confirmedOfficial ?? false,
+    })),
     expectedRevision,
   });
 }
@@ -619,6 +629,24 @@ export function addTeacherRequirement(
     input: { commentId: input.commentId, text: input.text, origin: input.origin, status: input.status, note: input.note ?? null },
     expectedRevision,
   });
+}
+
+export function setCommentAuthority(
+  operationId: string,
+  commentId: string,
+  input: CommentAuthorityInput,
+  expectedRevision: Revision,
+): Promise<OperationResult<TeacherComment[]>> {
+  return call("set_comment_authority", {
+    operationId,
+    commentId,
+    input: { authority: input.authority, author: input.author, context: input.context, confirmedOfficial: input.confirmedOfficial },
+    expectedRevision,
+  });
+}
+
+export function withdrawTeacherRequirement(operationId: string, requirementId: string, expectedRevision: Revision): Promise<OperationResult<TeacherRequirement>> {
+  return call("withdraw_teacher_requirement", { operationId, requirementId, expectedRevision });
 }
 
 export function resolveTeacherRequirement(

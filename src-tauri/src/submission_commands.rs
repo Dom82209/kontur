@@ -175,12 +175,12 @@ fn parse_transcript(
             || lower.starts_with("преподаватель:");
         if is_question {
             if !question.is_empty() || !answer.is_empty() {
-                result.push(TeacherCommentInput {
+                result.push(TeacherCommentInput::unverified(
                     source,
-                    date: date.clone(),
-                    question: question.trim().to_owned(),
-                    answer: answer.trim().to_owned(),
-                });
+                    date.clone(),
+                    question.trim().to_owned(),
+                    answer.trim().to_owned(),
+                ));
                 question.clear();
                 answer.clear();
             }
@@ -207,12 +207,12 @@ fn parse_transcript(
         }
     }
     if !question.is_empty() || !answer.is_empty() {
-        result.push(TeacherCommentInput {
+        result.push(TeacherCommentInput::unverified(
             source,
             date,
-            question: question.trim().to_owned(),
-            answer: answer.trim().to_owned(),
-        });
+            question.trim().to_owned(),
+            answer.trim().to_owned(),
+        ));
     }
     if result.is_empty() {
         return Err(BackendError::blocked(

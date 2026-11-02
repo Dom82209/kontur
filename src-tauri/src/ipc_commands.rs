@@ -93,6 +93,8 @@ pub const COMMANDS: &[&str] = &[
     "add_teacher_comments",
     "add_teacher_requirement",
     "resolve_teacher_requirement",
+    "set_comment_authority",
+    "withdraw_teacher_requirement",
     "confirm_style_divergence",
     "mark_ready_to_submit",
     "transition_workflow",
