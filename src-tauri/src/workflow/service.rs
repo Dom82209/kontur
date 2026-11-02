@@ -2482,6 +2482,7 @@ fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> Home
         provider_mode: ProviderModeDto::AiJobs,
         ready_stale,
         inputs: snapshot.inputs,
+        package_history: snapshot.package_history,
     }
 }
 

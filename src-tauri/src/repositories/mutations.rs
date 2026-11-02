@@ -1141,8 +1141,8 @@ mod tests {
             .with_connection(|connection| {
                 connection.execute(
                     "INSERT INTO submission_packages(
-                        id, homework_id, final_version_id, status, package_path, built_at
-                     ) VALUES ('package-1', 'homework-1', 'version-1', 'ready',
+                        id, homework_id, revision, final_version_id, status, package_path, built_at
+                     ) VALUES ('package-1', 'homework-1', 1, 'version-1', 'ready',
                                'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу', '2026-10-21T07:58:00Z')",
                     [],
                 )?;

@@ -1174,6 +1174,7 @@ export class MockDesktopBridge implements DesktopBridge {
   getReadiness: DesktopBridge["getReadiness"] = (...a) => this.workflow.getReadiness(...a);
   markReadyToSubmit: DesktopBridge["markReadyToSubmit"] = (...a) => this.workflow.markReadyToSubmit(...a);
   buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = (...a) => this.workflow.buildSubmissionPackage(...a);
+  verifySubmissionPackage: DesktopBridge["verifySubmissionPackage"] = (...a) => this.workflow.verifySubmissionPackage(...a);
   getSubmissionPackage: DesktopBridge["getSubmissionPackage"] = (...a) => this.workflow.getSubmissionPackage(...a);
   setPackageCheck: DesktopBridge["setPackageCheck"] = (...a) => this.workflow.setPackageCheck(...a);
   confirmSubmission: DesktopBridge["confirmSubmission"] = (...a) => this.workflow.confirmSubmission(...a);

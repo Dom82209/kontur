@@ -18,12 +18,13 @@ use crate::{
 
 use super::dto::{
     BundleOrigin, BundleWarningDto, CommentAuthority, CriterionStatus, EvidenceReferenceDto,
-    MissingSourceDto, PackageCheckDto, PackageItemDto, PackageLinkDto, PromptKind, PromptStatus,
-    Provenance, ReviewAssessmentDto, ReviewMissingItemDto, ReviewResultDto, ReviewRunDto,
-    ReviewRunStatus, ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto, SourceItemDto,
-    SourceKind, StoredReviewResult, StyleConfirmationDto, SubmissionPackageDto,
-    SubmissionReceiptDto, TeacherCommentDto, TeacherCommentSource, TeacherRequirementDto,
-    UnsupportedClaimDto, WorkflowRole,
+    MissingSourceDto, PackageCheckDto, PackageCheckId, PackageItemDto, PackageLinkDto,
+    PackageRevisionSummaryDto, PackageStatus, PromptKind, PromptStatus, Provenance,
+    ReviewAssessmentDto, ReviewMissingItemDto, ReviewResultDto, ReviewRunDto, ReviewRunStatus,
+    ReviewVerdict, RevisionPromptDto, RunKind, SourceBundleDto, SourceItemDto, SourceKind,
+    StoredReviewResult, StyleConfirmationDto, SubmissionPackageDto, SubmissionReceiptDto,
+    TeacherCommentDto, TeacherCommentSource, TeacherRequirementDto, UnsupportedClaimDto,
+    WorkflowRole,
 };
 
 // ───────────────────────── Общие помощники ─────────────────────────
@@ -1702,39 +1703,135 @@ struct PackageRow {
     upload_list_json: String,
     built_at: String,
     inputs_fingerprint: Option<String>,
+    revision: i64,
+    requirements_json: String,
+    inputs_json: Option<String>,
+    status: String,
 }
 
+const PACKAGE_SELECT: &str =
+    "SELECT id, homework_id, final_version_id, package_path, items_json, links_json,
+        warnings_json, checklist_json, upload_list_json, coalesce(built_at, created_at),
+        inputs_fingerprint, revision, requirements_json, inputs_json, status
+     FROM submission_packages";
+
+fn package_row(row: &Row<'_>) -> rusqlite::Result<PackageRow> {
+    Ok(PackageRow {
+        id: row.get(0)?,
+        homework_id: row.get(1)?,
+        version_id: row.get(2)?,
+        folder_path: row.get(3)?,
+        items_json: row.get(4)?,
+        links_json: row.get(5)?,
+        warnings_json: row.get(6)?,
+        checklist_json: row.get(7)?,
+        upload_list_json: row.get(8)?,
+        built_at: row.get(9)?,
+        inputs_fingerprint: row.get(10)?,
+        revision: row.get(11)?,
+        requirements_json: row.get(12)?,
+        inputs_json: row.get(13)?,
+        status: row.get(14)?,
+    })
+}
+
+/// Последняя (действующая) ревизия комплекта ДЗ.
 pub fn submission_package(
     connection: &Connection,
     homework_id: &str,
 ) -> Result<Option<SubmissionPackageDto>, AppError> {
     let row = connection
         .query_row(
-            "SELECT id, homework_id, final_version_id, package_path, items_json, links_json,
-                    warnings_json, checklist_json, upload_list_json, coalesce(built_at, created_at),
-                    inputs_fingerprint
-             FROM submission_packages WHERE homework_id = ?1",
+            &format!("{PACKAGE_SELECT} WHERE homework_id = ?1 ORDER BY revision DESC LIMIT 1"),
             [homework_id],
-            |row| {
-                Ok(PackageRow {
-                    id: row.get(0)?,
-                    homework_id: row.get(1)?,
-                    version_id: row.get(2)?,
-                    folder_path: row.get(3)?,
-                    items_json: row.get(4)?,
-                    links_json: row.get(5)?,
-                    warnings_json: row.get(6)?,
-                    checklist_json: row.get(7)?,
-                    upload_list_json: row.get(8)?,
-                    built_at: row.get(9)?,
-                    inputs_fingerprint: row.get(10)?,
-                })
-            },
+            package_row,
         )
         .optional()?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
+    row.map(|row| hydrate_package(connection, row)).transpose()
+}
+
+/// Ревизия комплекта по id (любая, в том числе устаревшая).
+pub fn submission_package_by_id(
+    connection: &Connection,
+    package_id: &str,
+) -> Result<SubmissionPackageDto, AppError> {
+    let row = connection
+        .query_row(
+            &format!("{PACKAGE_SELECT} WHERE id = ?1"),
+            [package_id],
+            package_row,
+        )
+        .map_err(|error| not_found_or(error, "Комплект не найден"))?;
+    hydrate_package(connection, row)
+}
+
+/// Все ревизии комплекта, новые сверху.
+pub fn package_history(
+    connection: &Connection,
+    homework_id: &str,
+) -> Result<Vec<PackageRevisionSummaryDto>, AppError> {
+    let current = super::fingerprint::current(connection, homework_id)?;
+    let mut statement = connection.prepare(
+        "SELECT id, revision, final_version_id, coalesce(built_at, created_at), inputs_fingerprint,
+                status, revision = (SELECT max(revision) FROM submission_packages p
+                                     WHERE p.homework_id = submission_packages.homework_id)
+           FROM submission_packages WHERE homework_id = ?1 ORDER BY revision DESC",
+    )?;
+    let rows = statement
+        .query_map([homework_id], |row| {
+            let fingerprint: Option<String> = row.get(4)?;
+            let status: String = row.get(5)?;
+            let latest: bool = row.get(6)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                fingerprint,
+                status,
+                latest,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, revision, version_id, built_at, fingerprint, status, latest)| {
+                let submitted = status == "submitted";
+                PackageRevisionSummaryDto {
+                    stale: !submitted && (!latest || !current.is_current(fingerprint.as_deref())),
+                    submitted,
+                    id,
+                    revision,
+                    version_id,
+                    built_at,
+                }
+            },
+        )
+        .collect())
+}
+
+/// Последние ручные подтверждения пунктов ревизии.
+fn manual_confirmations(
+    connection: &Connection,
+    package_id: &str,
+) -> Result<HashMap<String, bool>, AppError> {
+    let mut statement = connection.prepare(
+        "SELECT check_id, confirmed FROM package_manual_checks
+          WHERE package_id = ?1 ORDER BY created_at, rowid",
+    )?;
+    let rows = statement
+        .query_map([package_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows.into_iter().collect())
+}
+
+fn hydrate_package(
+    connection: &Connection,
+    row: PackageRow,
+) -> Result<SubmissionPackageDto, AppError> {
     require_relative_path(&row.folder_path, "submission_packages.package_path")?;
     let items: Vec<PackageItemDto> =
         parse_column(&row.items_json, "submission_packages.items_json")?;
@@ -1743,23 +1840,77 @@ pub fn submission_package(
             require_relative_path(&file.relative_path, "submission_packages.items_json")?;
         }
     }
-    let stale = !super::fingerprint::current(connection, &row.homework_id)?
+    let submitted = row.status == "submitted";
+    let latest: i64 = connection.query_row(
+        "SELECT max(revision) FROM submission_packages WHERE homework_id = ?1",
+        [&row.homework_id],
+        |r| r.get(0),
+    )?;
+    let fresh_inputs = super::fingerprint::current(connection, &row.homework_id)?
         .is_current(row.inputs_fingerprint.as_deref());
-    Ok(Some(SubmissionPackageDto {
+    let stale = !submitted && (row.revision != latest || !fresh_inputs);
+    let confirmations = manual_confirmations(connection, &row.id)?;
+    let mut checklist = parse_column::<Vec<PackageCheckDto>>(
+        &row.checklist_json,
+        "submission_packages.checklist_json",
+    )?;
+    for check in &mut checklist {
+        check.manual_confirmed = !check.auto
+            && confirmations
+                .get(check.id.as_db_str())
+                .copied()
+                .unwrap_or(false);
+        check.done = matches!(
+            check.status,
+            PackageStatus::Verified | PackageStatus::NotApplicable
+        ) || (check.status == PackageStatus::ManualRequired && check.manual_confirmed);
+    }
+    // Актуальность входных данных — всегда по текущему состоянию, а не по снимку.
+    checklist.retain(|check| check.id != PackageCheckId::InputsFresh);
+    checklist.push(PackageCheckDto {
+        id: PackageCheckId::InputsFresh,
+        label: "Комплект собран по актуальным входным данным".to_owned(),
+        done: !stale,
+        auto: true,
+        status: if stale {
+            PackageStatus::Stale
+        } else {
+            PackageStatus::Verified
+        },
+        detail: if row.revision != latest {
+            format!("Есть более новая ревизия {latest}")
+        } else if !fresh_inputs {
+            "После сборки изменились требования, материалы, условие, версия или профиль стиля"
+                .to_owned()
+        } else {
+            "Входные данные не менялись после сборки".to_owned()
+        },
+        manual_confirmed: false,
+    });
+    let inputs = row
+        .inputs_json
+        .as_deref()
+        .map(|raw| parse_column(raw, "submission_packages.inputs_json"))
+        .transpose()?;
+    Ok(SubmissionPackageDto {
         items,
         links: parse_column::<Vec<PackageLinkDto>>(
             &row.links_json,
             "submission_packages.links_json",
         )?,
         warnings: parse_column(&row.warnings_json, "submission_packages.warnings_json")?,
-        checklist: parse_column::<Vec<PackageCheckDto>>(
-            &row.checklist_json,
-            "submission_packages.checklist_json",
-        )?,
+        checklist,
         upload_list: parse_column(
             &row.upload_list_json,
             "submission_packages.upload_list_json",
         )?,
+        requirements: parse_column(
+            &row.requirements_json,
+            "submission_packages.requirements_json",
+        )?,
+        inputs,
+        revision: row.revision,
+        submitted,
         id: row.id,
         homework_id: row.homework_id,
         version_id: row.version_id,
@@ -1767,7 +1918,7 @@ pub fn submission_package(
         built_at: row.built_at,
         stale,
         inputs_fingerprint: row.inputs_fingerprint,
-    }))
+    })
 }
 
 struct ReceiptRow {
@@ -1858,6 +2009,8 @@ pub struct WorkflowSnapshot {
     pub submission_receipt: Option<SubmissionReceiptDto>,
     /// Задания передачи провайдерам (этап 9), без текстов.
     pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
+    /// Этап 8: ревизии комплекта, новые сверху.
+    pub package_history: Vec<PackageRevisionSummaryDto>,
     /// Этап 7: текущий отпечаток входных данных и отпечаток отметки «Готово к сдаче».
     pub inputs: super::fingerprint::InputsFingerprintDto,
     pub ready_fingerprint: Option<String>,
@@ -1891,6 +2044,7 @@ pub fn load_snapshot(
         teacher_requirements: teacher_requirements(connection, homework_id)?,
         style_confirmations: style_confirmations(connection, homework_id)?,
         submission_package: submission_package(connection, homework_id)?,
+        package_history: package_history(connection, homework_id)?,
         submission_receipt: submission_receipt(connection, homework_id)?,
         ai_jobs: crate::ai::store::jobs_for_homework(connection, homework_id)?,
         homework,

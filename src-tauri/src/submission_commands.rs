@@ -56,6 +56,15 @@ pub fn build_submission_package(
     SubmissionService::new(state.database(), state.home_dir()).build(&homework_id)
 }
 
+/// Этап 8: проверка файлов действующей ревизии на диске (только чтение).
+#[tauri::command]
+pub fn verify_submission_package(
+    state: State<'_, AppState>,
+    homework_id: String,
+) -> Result<Option<SubmissionPackageDto>, AppError> {
+    SubmissionService::new(state.database(), state.home_dir()).verify(&homework_id)
+}
+
 #[tauri::command]
 pub fn set_package_check(
     state: State<'_, AppState>,

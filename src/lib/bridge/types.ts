@@ -1336,7 +1336,10 @@ export interface DesktopBridge {
   getReadiness(homeworkId: string): Promise<Readiness>;
   /** Только по действию пользователя и только если все проверки readiness пройдены. */
   markReadyToSubmit(homeworkId: string, options: { noTeacherComments: boolean } & WorkflowCommandOptions): Promise<OperationResult<Homework>>;
+  /** Этап 8: каждая сборка — новая неизменяемая ревизия; прежние остаются в истории. */
   buildSubmissionPackage(homeworkId: string): Promise<OperationResult<SubmissionPackage>>;
+  /** Этап 8: проверка файлов действующей ревизии на диске (существование, размер, SHA-256). */
+  verifySubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null>;
   getSubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null>;
   setPackageCheck(packageId: string, checkId: PackageCheckId, done: boolean): Promise<SubmissionPackage>;
   /** Ручное подтверждение отправки. Ничего не загружает в систему вуза. Снимок становится неизменяемым. */

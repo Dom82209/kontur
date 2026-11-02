@@ -45,6 +45,7 @@ export interface TauriIpcClient {
   previewTeacherTranscript: typeof ipc.previewTeacherTranscript;
   removeTeacherComment: typeof ipc.removeTeacherComment;
   buildSubmissionPackage: typeof ipc.buildSubmissionPackage;
+  verifySubmissionPackage: typeof ipc.verifySubmissionPackage;
   setPackageCheck: typeof ipc.setPackageCheck;
   confirmSubmission: typeof ipc.confirmSubmission;
   checkManagedRoots: typeof ipc.checkManagedRoots;
@@ -379,6 +380,7 @@ export class TauriDesktopBridge implements DesktopBridge {
     return this.ipcClient.markReadyToSubmit(operationId, homeworkId, options.noTeacherComments, revision);
   };
   buildSubmissionPackage: DesktopBridge["buildSubmissionPackage"] = (homeworkId) => this.ipcClient.buildSubmissionPackage(homeworkId);
+  verifySubmissionPackage: DesktopBridge["verifySubmissionPackage"] = (homeworkId) => this.ipcClient.verifySubmissionPackage(homeworkId);
   getSubmissionPackage: DesktopBridge["getSubmissionPackage"] = async (homeworkId) => (await this.workflowOf(homeworkId)).submissionPackage;
   setPackageCheck: DesktopBridge["setPackageCheck"] = (packageId, checkId, done) => this.ipcClient.setPackageCheck(packageId, checkId, done);
   confirmSubmission: DesktopBridge["confirmSubmission"] = (homeworkId, confirmation) => this.ipcClient.confirmSubmission(homeworkId, confirmation);

@@ -43,6 +43,11 @@
 - `cargo test only_confirmed_teacher_or_assistant`, `new_official_requirement_makes`, `revoking_or_withdrawing`, `materials_task_and_style_changes`, `stale_revision_prompt`, `not_done_requirement_reopens` — все источники ответа и переходы stale/current.
 - `src/lib/bridge/mock/authority.test.ts` — те же правила в mock.
 
+## Комплект V2 (этап 8)
+
+- `cargo test package_build_is_blocked_until_current_ready`, `every_rebuild_is_a_new_immutable_revision`, `confirm_is_blocked_by_manual_missing_mismatch_and_stale`, `snapshot_is_created_only_from_current_verified_package`, `schema_v16_upgrade_keeps_legacy_package` — ревизии, статусы, негативные сценарии подтверждения, обновление схемы.
+- `src/lib/bridge/mock/package.test.ts` — те же правила в mock.
+
 ## Полный набор
 
 ```bash

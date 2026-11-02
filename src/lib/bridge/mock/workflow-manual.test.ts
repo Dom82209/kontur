@@ -49,6 +49,7 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
         "homework",
         "inputs",
         "iterations",
+        "packageHistory",
         "prompts",
         "providerMode",
         "readiness",

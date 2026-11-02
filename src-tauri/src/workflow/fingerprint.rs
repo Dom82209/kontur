@@ -10,13 +10,13 @@
 //! «забыть» обновить в каком-то пути изменения данных.
 
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
 /// Отпечатки частей входных данных и общий отпечаток (SHA-256, hex).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputsFingerprintDto {
     pub materials: String,

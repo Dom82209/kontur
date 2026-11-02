@@ -259,3 +259,76 @@ fn schema_v13_upgrade_keeps_every_homework_and_dependent_row() {
         )?))
         .is_err());
 }
+
+/// Этап 8: обновление до v16 сохраняет прежний комплект как ревизию 1 и квитанцию.
+#[test]
+fn schema_v16_upgrade_keeps_legacy_package_as_revision_one() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v12-package.sqlite3");
+    {
+        let mut connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        let migrations = [
+            include_str!("db/migrations/v1.sql"),
+            include_str!("db/migrations/v2.sql"),
+            include_str!("db/migrations/v3.sql"),
+            include_str!("db/migrations/v4.sql"),
+            include_str!("db/migrations/v5.sql"),
+            include_str!("db/migrations/v6.sql"),
+            include_str!("db/migrations/v7.sql"),
+            include_str!("db/migrations/v8.sql"),
+            include_str!("db/migrations/v9.sql"),
+            include_str!("db/migrations/v10.sql"),
+            include_str!("db/migrations/v11.sql"),
+            include_str!("db/migrations/v12.sql"),
+        ];
+        for (index, sql) in migrations.iter().enumerate() {
+            let transaction = connection.transaction().unwrap();
+            transaction.execute_batch(sql).unwrap();
+            transaction
+                .pragma_update(None, "user_version", index as i64 + 1)
+                .unwrap();
+            transaction.commit().unwrap();
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO subjects(id,name,short_name,folder_path) VALUES ('s','Стат','С','Предметы/Стат');
+                 INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES ('w1','s',1,'','','Предметы/Стат/Неделя 01');
+                 INSERT INTO homeworks(id,week_id,title,deadline,stage,workflow_stage,folder_path) VALUES
+                   ('h1','w1','ДЗ 1',NULL,'ready_to_submit','ready_to_submit','Предметы/Стат/Неделя 01/03 ДЗ');
+                 INSERT INTO files(id,week_id,homework_id,category,name,kind,size_bytes,relative_path) VALUES
+                   ('f1','w1','h1','homework_draft','a.md','text',1,'Предметы/Стат/Неделя 01/03 ДЗ/02 Работа/a.md');
+                 INSERT INTO homework_versions(id,homework_id,number,label,file_path,size_bytes,author,file_name,source_file_id,sections_json,files_json)
+                   VALUES ('v1','h1',1,'v01','Предметы/Стат/Неделя 01/03 ДЗ/02 Работа/a.md',1,'user','a.md','f1','[]','[]');
+                 UPDATE homeworks SET final_version_id='v1' WHERE id='h1';
+                 INSERT INTO submission_packages(id,homework_id,final_version_id,status,package_path,built_at)
+                   VALUES ('pkg','h1','v1','ready','Предметы/Стат/Неделя 01/03 ДЗ/03 На сдачу','2026-10-01T10:00:00Z');
+                 INSERT INTO submission_receipts(id,package_id,homework_id,submitted_version_id,snapshot_path,snapshot_hash,confirmed_at,submitted_at,assignment_url)
+                   VALUES ('r','pkg','h1','v1','Предметы/Стат/Неделя 01/03 ДЗ/04 Отправлено/x','hash','2026-10-01T11:00:00Z','2026-10-01T11:00:00Z','https://my.centraluniversity.ru/t');",
+            )
+            .unwrap();
+    }
+    let database = Database::open_file(&path).unwrap();
+    database.migrate().unwrap();
+    let package = database
+        .with_connection(|c| crate::workflow::repository::submission_package(c, "h1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(package.revision, 1);
+    assert!(
+        package.stale,
+        "комплект до этапа 7 не сопоставлен с входными данными"
+    );
+    let receipt: String = database
+        .with_connection(|c| {
+            Ok(
+                c.query_row("SELECT package_id FROM submission_receipts", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    assert_eq!(receipt, "pkg");
+}

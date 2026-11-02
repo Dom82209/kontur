@@ -24,6 +24,7 @@ pub const COMMANDS: &[&str] = &[
     "preview_teacher_transcript",
     "remove_teacher_comment",
     "build_submission_package",
+    "verify_submission_package",
     "set_package_check",
     "confirm_submission",
     "check_managed_roots",

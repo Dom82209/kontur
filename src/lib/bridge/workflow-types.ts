@@ -440,14 +440,21 @@ export interface StyleConfirmation {
   confirmedAt: ISODate;
 }
 
-export type PackageCheckId = "final_selected" | "name_checked" | "attachments" | "links" | "teacher" | "manual_review";
+export type PackageCheckId = "final_selected" | "name_checked" | "attachments" | "links" | "teacher" | "manual_review" | "inputs_fresh";
+
+/** Этап 8: состояние файла, ссылки или пункта комплекта. */
+export type PackageStatus = "verified" | "missing" | "stale" | "manual_required" | "inaccessible" | "mismatch" | "not_applicable";
 
 export interface PackageCheck {
   id: PackageCheckId;
   label: string;
+  /** Выполнен: проверен, неприменим или подтверждён вручную. */
   done: boolean;
   /** true — проверяется приложением; false — отмечает пользователь. */
   auto: boolean;
+  status: PackageStatus;
+  detail: string;
+  manualConfirmed: boolean;
 }
 
 export interface PackageItem {
@@ -458,6 +465,9 @@ export interface PackageItem {
   finalName: string;
   required: boolean;
   present: boolean;
+  status: PackageStatus;
+  sha256: string | null;
+  detail: string;
 }
 
 export interface PackageLink {
@@ -465,7 +475,24 @@ export interface PackageLink {
   label: string;
   url: string;
   required: boolean;
+  /** Сетевой проверки нет: всегда false, доступность подтверждает пользователь. */
   verified: boolean;
+  status: PackageStatus;
+}
+
+export interface PackageRequirement {
+  id: string;
+  text: string;
+  status: RequirementStatus;
+}
+
+export interface PackageRevisionSummary {
+  id: string;
+  revision: number;
+  versionId: string;
+  builtAt: ISODate;
+  stale: boolean;
+  submitted: boolean;
 }
 
 export interface SubmissionPackage {
@@ -481,8 +508,13 @@ export interface SubmissionPackage {
   uploadList: string[];
   builtAt: ISODate;
   inputsFingerprint: string | null;
-  /** Собран по устаревшим входным данным — подтвердить отправку нельзя. */
+  /** Собран по устаревшим входным данным или есть более новая ревизия — подтвердить отправку нельзя. */
   stale: boolean;
+  /** Этап 8: номер неизменяемой ревизии, требования и отпечатки входных данных на момент сборки. */
+  revision: number;
+  requirements: PackageRequirement[];
+  inputs: InputsFingerprint | null;
+  submitted: boolean;
 }
 
 export interface SubmissionConfirmation {
@@ -588,6 +620,8 @@ export interface HomeworkWorkflow {
   submissionReceipt: SubmissionReceipt | null;
   /** Этап 7: текущие отпечатки входных данных. */
   inputs: InputsFingerprint;
+  /** Этап 8: все ревизии комплекта, новые сверху. */
+  packageHistory: PackageRevisionSummary[];
   /** «Готово к сдаче» отмечено по другим входным данным — отметка не действует. */
   readyStale: boolean;
   /** Задания передачи провайдерам (этап 9) — без текстов промта и ответа. */

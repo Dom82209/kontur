@@ -96,6 +96,7 @@ pub fn run() {
             submission_commands::preview_teacher_transcript,
             submission_commands::remove_teacher_comment,
             submission_commands::build_submission_package,
+            submission_commands::verify_submission_package,
             submission_commands::set_package_check,
             submission_commands::confirm_submission,
             intake_commands::check_managed_roots,

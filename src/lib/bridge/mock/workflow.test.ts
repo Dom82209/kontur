@@ -209,7 +209,7 @@ describe("рабочий цикл ДЗ (mock)", () => {
     // 10. Ручное подтверждение отправки
     const confirmation = { submittedAt: new Date().toISOString(), assignmentUrl: "https://lms.example.ru/a/8", proof: { name: "screen.png", sizeBytes: 1000 }, userConfirmed: true as const };
     await expect(b.confirmSubmission(HW, confirmation)).rejects.toMatchObject({ code: "blocked" });
-    for (const c of pkg.checklist.filter((x) => !x.auto)) await b.setPackageCheck(pkg.id, c.id, true);
+    for (const c of pkg.checklist.filter((x) => !x.auto && x.status === "manual_required")) await b.setPackageCheck(pkg.id, c.id, true);
     const receipt = (await b.confirmSubmission(HW, confirmation)).value;
     expect(receipt.versionId).toBe(v3.id);
     expect(receipt.proof?.name).toBe("screen.png");

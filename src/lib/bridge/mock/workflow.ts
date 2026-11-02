@@ -254,6 +254,9 @@ export class MockWorkflow {
   private runs: ReviewRun[] = [];
   private prompts: RevisionPrompt[] = [];
   private comments: TeacherComment[] = [];
+  /** Этап 8: все ревизии комплекта по ДЗ и ручные подтверждения пунктов. */
+  private packageHistory = new Map<string, SubmissionPackage[]>();
+  private manualChecks = new Map<string, Set<PackageCheckId>>();
   /** Этап 7: отпечаток входных данных, на котором отмечено «Готово к сдаче». */
   private readyFingerprints = new Map<string, string>();
   private requirements: TeacherRequirement[] = [];
@@ -442,7 +445,7 @@ export class MockWorkflow {
     }
     if (h.workflowStage === "codex_review") this.touch(h, "create_homework_version");
     else this.setStage(h, "codex_review", `${v.label} создана — ожидает проверки`);
-    this.packages.delete(h.id);
+    // Этап 8: прежние ревизии комплекта остаются в истории (теперь они устарели).
   }
 
   // ───────────── Итерации и сравнение ─────────────
@@ -727,9 +730,42 @@ export class MockWorkflow {
     return { operation: op, value: clone(h) };
   }
 
+  /** Этап 8: ревизия устарела — входные данные или версия изменились, либо есть более новая. */
+  private packageStale(pkg: SubmissionPackage): boolean {
+    if (pkg.submitted) return false;
+    const h = this.ctx.homework().find((x) => x.id === pkg.homeworkId);
+    const latest = this.packages.get(pkg.homeworkId);
+    return this.isStale(pkg) || latest?.id !== pkg.id || h?.finalVersionId !== pkg.versionId;
+  }
+
+  /** Как backend hydrate_package: ручные подтверждения и актуальность — на момент чтения. */
+  private decorate(pkg: SubmissionPackage): SubmissionPackage {
+    const out = clone(pkg);
+    const confirmed = this.manualChecks.get(pkg.id) ?? new Set<PackageCheckId>();
+    out.stale = this.packageStale(pkg);
+    out.checklist = out.checklist
+      .filter((c) => c.id !== "inputs_fresh")
+      .map((c) => {
+        const manualConfirmed = !c.auto && confirmed.has(c.id);
+        return { ...c, manualConfirmed, done: c.status === "verified" || c.status === "not_applicable" || (c.status === "manual_required" && manualConfirmed) };
+      });
+    out.checklist.push({
+      id: "inputs_fresh",
+      label: "Комплект собран по актуальным входным данным",
+      done: !out.stale,
+      auto: true,
+      status: out.stale ? "stale" : "verified",
+      detail: out.stale ? "После сборки изменились входные данные или есть более новая ревизия" : "Входные данные не менялись после сборки",
+      manualConfirmed: false,
+    });
+    return out;
+  }
+
   async buildSubmissionPackage(homeworkId: string): Promise<OperationResult<SubmissionPackage>> {
     const h = this.hw(homeworkId);
     this.assertMutable(h);
+    if (h.workflowStage !== "ready_to_submit") throw new BridgeError("blocked", "Сначала отметьте работу «Готово к сдаче» после всех проверок");
+    if (this.readyFingerprints.get(h.id) !== this.fingerprint(h.id)) throw new BridgeError("blocked", "«Готово к сдаче» отмечено по устаревшим входным данным — проверьте версию заново");
     const r = this.readiness(h);
     if (!r.ready) throw new BridgeError("blocked", `Комплект собирается после проверок. Не выполнено: ${r.checks.filter((c) => !c.ok).map((c) => c.label.toLowerCase()).join("; ")}`);
     const v = h.versions.find((x) => x.id === h.finalVersionId)!;
@@ -738,78 +774,98 @@ export class MockWorkflow {
     const base = applyNamePattern(rules.finalNamePattern, { ...rules.studentName, week: h.weekNumber, subject: subjectName(h.subjectId), version: v.label });
     const main = v.files[0] ?? null;
     const notes = v.files.find((f) => f.name.startsWith("Пояснения")) ?? null;
-    const sheet = ext === "xlsx" || ext === "ipynb";
-    const prev = this.packages.get(h.id);
+    const history = this.packageHistory.get(h.id) ?? [];
+    const revision = history.length + 1;
+    const folderPath = `${h.folderPath}/03 На сдачу/Ревизия ${pad2(revision)}`;
+    const item = (id: string, role: SubmissionPackage["items"][number]["role"], file: FileRef | null, finalName: string, required: boolean): SubmissionPackage["items"][number] => ({
+      id,
+      role,
+      file: file ? { ...file, name: finalName, relativePath: `${folderPath}/${finalName}` } : null,
+      finalName,
+      required,
+      present: !!file,
+      status: file ? "verified" : required ? "missing" : "not_applicable",
+      sha256: file ? mockHash(`${file.relativePath}|${file.sizeBytes}`).padEnd(64, "0") : null,
+      detail: file ? "Скопирован, размер и SHA-256 совпадают" : "Файла нет в версии",
+    });
     const items: SubmissionPackage["items"] = [
-      { id: "main", role: "main", file: main, finalName: `${base}.${ext}`, required: true, present: !!main },
-      { id: "notes", role: "attachment", file: notes, finalName: `${base} Пояснения.pdf`, required: true, present: !!notes },
-      ...h.taskFiles.filter((f) => f.kind === "sheet").map((f, i) => ({ id: `extra-${i}`, role: "extra" as const, file: f, finalName: f.name, required: false, present: true })),
-      ...(sheet ? [{ id: "cloud", role: "cloud" as const, file: main, finalName: `${base}.${ext}`, required: true, present: !!main }] : []),
+      item("main", "main", main, `${base}.${ext}`, true),
+      ...(notes ? [item("notes", "attachment", notes, `${base} Пояснения.pdf`, true)] : []),
     ];
-    const links: SubmissionPackage["links"] = sheet ? [{ id: "cloud-link", label: "Папка курса на облачном диске", url: `https://disk.example.ru/kontur/${h.subjectId}-w${h.weekNumber}`, required: true, verified: prev?.links[0]?.verified ?? false }] : [];
-    const keep = (id: PackageCheckId) => (prev && prev.versionId === v.id ? (prev.checklist.find((c) => c.id === id)?.done ?? false) : false);
+    const links: SubmissionPackage["links"] = h.assignmentUrl ? [{ id: "task-link", label: "Задание в системе вуза", url: h.assignmentUrl, required: true, verified: false, status: "manual_required" }] : [];
+    const reqs = this.requirements.filter((x) => !x.withdrawnAt && this.comments.some((c) => c.id === x.commentId && c.homeworkId === h.id && c.official));
+    const notDone = reqs.filter((x) => x.status === "not_done").length;
+    const manual = reqs.filter((x) => x.status === "manual").length;
+    const check = (id: PackageCheckId, label: string, status: PackageCheck["status"], auto: boolean, detail: string): PackageCheck => ({ id, label, status, auto, detail, done: status === "verified" || status === "not_applicable", manualConfirmed: false });
     const checklist: PackageCheck[] = [
-      { id: "final_selected", label: "Итоговая версия выбрана", done: true, auto: true },
-      { id: "name_checked", label: "Название файла проверено", done: keep("name_checked"), auto: false },
-      { id: "attachments", label: "Приложения приложены", done: items.filter((i) => i.required).every((i) => i.present), auto: true },
-      { id: "links", label: "Ссылки доступны", done: links.length === 0 ? true : keep("links"), auto: links.length === 0 },
-      { id: "teacher", label: "Комментарии преподавателя учтены", done: r.checks.find((c) => c.id === "teacher")?.ok ?? false, auto: true },
-      { id: "manual_review", label: "Ручная проверка выполнена", done: keep("manual_review"), auto: false },
+      check("final_selected", "Итоговая версия выбрана", "verified", true, "Выбранная версия совпадает с проверенной"),
+      check("name_checked", "Имя файла по шаблону", "verified", true, `${base}.${ext}`),
+      check("attachments", "Приложения версии на месте", items.length > 1 ? (items.some((i) => i.status === "missing") ? "missing" : "verified") : "not_applicable", true, `Приложений: ${items.length - 1}`),
+      check("links", "Внешние ссылки открыты и проверены вручную", links.length ? "manual_required" : "not_applicable", false, "«Контур» не проверяет доступность ссылок по сети"),
+      check("teacher", "Требования преподавателя выполнены", notDone ? "missing" : manual ? "manual_required" : "verified", true, `Действующих требований: ${reqs.length}`),
+      check("manual_review", "Я вручную проверил комплект", "manual_required", false, "Откройте файлы ревизии и сверьте с заданием"),
     ];
-    const warnings = [
-      ...items.filter((i) => i.required && !i.present).map((i) => `Нет обязательного файла: ${i.finalName}`),
-      ...links.filter((l) => l.required && !l.verified).map((l) => `Проверьте доступ по ссылке «${l.label}»`),
-      ...(sheet ? ["Файл больше лимита вложения — загрузите копию на облачный диск и приложите ссылку"] : []),
-    ];
+    const warnings = links.length ? ["Ссылку на задание откройте сами: доступность ссылок не проверяется автоматически"] : [];
+    const fp = this.fingerprint(h.id);
     const pkg: SubmissionPackage = {
       id: uid("pkg"),
       homeworkId: h.id,
-      inputsFingerprint: this.fingerprint(h.id),
+      inputsFingerprint: fp,
       stale: false,
       versionId: v.id,
-      folderPath: `${h.folderPath}/03 На сдачу`,
+      folderPath,
       items,
       links,
       warnings,
       checklist,
-      uploadList: [...items.filter((i) => i.role === "main" || i.role === "attachment").map((i) => i.finalName), ...links.map((l) => `Ссылка: ${l.url}`)],
+      uploadList: [...items.filter((i) => i.present).map((i) => i.finalName), ...links.map((l) => `Ссылка: ${l.url}`)],
       builtAt: new Date().toISOString(),
+      revision,
+      requirements: reqs.map((x) => ({ id: x.id, text: x.text, status: x.status })),
+      inputs: { materials: fp, task: fp, version: fp, style: fp, requirements: fp, combined: fp },
+      submitted: false,
     };
     const op = await this.ctx.runOp(
       "build_package",
-      "Комплект на сдачу собран",
+      `Собрана ревизия комплекта ${revision}`,
       `${items.length} файлов · ${subjectName(h.subjectId)}`,
       items.map((i) => `${pkg.folderPath}/${i.finalName}`),
       3,
-      () => this.packages.set(h.id, pkg),
       () => {
-        if (prev) this.packages.set(h.id, prev);
-        else this.packages.delete(h.id);
+        this.packageHistory.set(h.id, [...history, pkg]);
+        this.packages.set(h.id, pkg);
       },
+      null,
       h.id,
     );
-    return { operation: op, value: clone(pkg) };
+    return { operation: op, value: this.decorate(pkg) };
   }
 
   async getSubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null> {
     await this.ctx.wait(100);
-    return clone(this.packages.get(homeworkId) ?? null);
+    const pkg = this.packages.get(homeworkId);
+    return pkg ? this.decorate(pkg) : null;
+  }
+
+  async verifySubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null> {
+    return this.getSubmissionPackage(homeworkId);
   }
 
   async setPackageCheck(packageId: string, checkId: PackageCheckId, done: boolean): Promise<SubmissionPackage> {
     await this.ctx.wait(60);
-    const pkg = [...this.packages.values()].find((p) => p.id === packageId);
+    const pkg = [...this.packageHistory.values()].flat().find((p) => p.id === packageId);
     if (!pkg) throw new BridgeError("not_found", "Комплект не найден");
+    if (pkg.submitted) throw new BridgeError("immutable", "Комплект отправленной работы неизменяем");
     this.assertMutable(this.hw(pkg.homeworkId));
+    if (this.packageStale(pkg)) throw new BridgeError("blocked", "Ревизия устарела — пересоберите комплект");
     const c = pkg.checklist.find((x) => x.id === checkId);
     if (!c) throw new BridgeError("not_found", "Пункт не найден");
-    if (c.auto) throw new BridgeError("conflict", "Этот пункт проверяется автоматически");
-    c.done = done;
-    if (checkId === "links") {
-      pkg.links.forEach((l) => (l.verified = done));
-      pkg.warnings = pkg.warnings.filter((w) => !w.startsWith("Проверьте доступ") || !done);
-    }
-    return clone(pkg);
+    if (c.auto || c.status !== "manual_required") throw new BridgeError("blocked", "Этот пункт проверяет «Контур» — вручную его не отметить");
+    const set = this.manualChecks.get(pkg.id) ?? new Set<PackageCheckId>();
+    if (done) set.add(checkId);
+    else set.delete(checkId);
+    this.manualChecks.set(pkg.id, set);
+    return this.decorate(pkg);
   }
 
   async confirmSubmission(homeworkId: string, c: SubmissionConfirmation): Promise<OperationResult<SubmissionReceipt>> {
@@ -817,10 +873,14 @@ export class MockWorkflow {
     this.assertMutable(h);
     if (c.userConfirmed !== true) throw new BridgeError("confirmation_required", "Нужно подтвердить, что работа отправлена вручную");
     if (h.workflowStage !== "ready_to_submit") throw new BridgeError("blocked", "Сначала отметьте работу «Готово к сдаче»");
-    const pkg = this.packages.get(h.id);
-    if (!pkg) throw new BridgeError("blocked", "Сначала соберите комплект на сдачу");
+    const raw = this.packages.get(h.id);
+    if (!raw) throw new BridgeError("blocked", "Сначала соберите комплект на сдачу");
+    const pkg = this.decorate(raw);
+    if (pkg.stale) throw new BridgeError("blocked", "Комплект устарел — пересоберите его по актуальным данным");
+    const broken = pkg.items.filter((i) => ["missing", "stale", "mismatch", "inaccessible"].includes(i.status));
+    if (broken.length) throw new BridgeError("blocked", `Файлы комплекта не прошли проверку: ${broken.map((i) => i.finalName).join("; ")}`);
     const open = pkg.checklist.filter((x) => !x.done);
-    if (open.length) throw new BridgeError("blocked", `Не отмечено в чек-листе: ${open.map((x) => x.label.toLowerCase()).join("; ")}`);
+    if (open.length) throw new BridgeError("blocked", `Не выполнены пункты комплекта: ${open.map((x) => x.label.toLowerCase()).join("; ")}`);
     const sentDir = `${h.folderPath}/04 Отправлено`;
     const now = new Date().toISOString();
     const files = pkg.items.filter((i) => i.role === "main" || i.role === "attachment").map((i) => makeFile(i.finalName, sentDir, now, i.file?.sizeBytes ?? 0));
@@ -847,6 +907,7 @@ export class MockWorkflow {
       3,
       () => {
         this.receipts.set(h.id, receipt);
+        raw.submitted = true;
         h.stage = "submitted";
         h.submittedAt = c.submittedAt;
         h.assignmentUrl = receipt.assignmentUrl || null;
@@ -1180,7 +1241,8 @@ export class MockWorkflow {
       styleConfirmations: this.confirmations.filter((c) => c.homeworkId === h.id),
       readiness,
       iterations,
-      submissionPackage: ((pkg) => (pkg ? { ...pkg, stale: this.isStale(pkg) } : null))(this.packages.get(h.id)),
+      submissionPackage: ((pkg) => (pkg ? this.decorate(pkg) : null))(this.packages.get(h.id)),
+      packageHistory: [...(this.packageHistory.get(h.id) ?? [])].reverse().map((p) => ({ id: p.id, revision: p.revision, versionId: p.versionId, builtAt: p.builtAt, stale: this.packageStale(p), submitted: p.submitted })),
       submissionReceipt: this.receipts.get(h.id) ?? null,
       inputs: ((fp) => ({ materials: fp, task: fp, version: fp, style: fp, requirements: fp, combined: fp }))(this.fingerprint(h.id)),
       readyStale: h.workflowStage === "ready_to_submit" && this.readyFingerprints.get(h.id) !== this.fingerprint(h.id),
@@ -1570,31 +1632,37 @@ export class MockWorkflow {
       const v = ready.versions.find((x) => x.id === ready.finalVersionId)!;
       const main = v.files[0] ?? null;
       const final = ready.finalFileName ?? v.fileName;
-      this.packages.set(ready.id, {
+      const folderPath = `${ready.folderPath}/03 На сдачу/Ревизия 01`;
+      const demo: SubmissionPackage = {
         id: "pkg-stat-demo",
         homeworkId: ready.id,
         inputsFingerprint: this.fingerprint(ready.id),
         stale: false,
         versionId: v.id,
-        folderPath: `${ready.folderPath}/03 На сдачу`,
+        folderPath,
         items: [
-          { id: "main", role: "main", file: main, finalName: final, required: true, present: !!main },
-          { id: "notes", role: "attachment", file: null, finalName: "Пояснения к расчётам.pdf", required: true, present: false },
-          { id: "extra", role: "extra", file: ready.taskFiles[0] ?? null, finalName: ready.taskFiles[0]?.name ?? "Условие.pdf", required: false, present: !!ready.taskFiles[0] },
+          { id: "main", role: "main", file: main ? { ...main, name: final, relativePath: `${folderPath}/${final}` } : null, finalName: final, required: true, present: !!main, status: main ? "verified" : "missing", sha256: main ? "9f2c71ab".padEnd(64, "0") : null, detail: main ? "Скопирован, размер и SHA-256 совпадают" : "Файла нет в версии" },
+          { id: "notes", role: "attachment", file: null, finalName: "Пояснения к расчётам.pdf", required: true, present: false, status: "missing", sha256: null, detail: "Файла нет в версии" },
         ],
-        links: [{ id: "course-link", label: "Таблица с расчётами", url: "https://disk.example.ru/kontur/stat-w7", required: false, verified: true }],
-        warnings: ["Не приложены пояснения к расчётам"],
+        links: [{ id: "course-link", label: "Таблица с расчётами", url: "https://disk.example.ru/kontur/stat-w7", required: true, verified: false, status: "manual_required" }],
+        warnings: ["Не приложены пояснения к расчётам", "Ссылку откройте сами: доступность ссылок не проверяется автоматически"],
         checklist: [
-          { id: "final_selected", label: "Итоговая версия выбрана", done: true, auto: true },
-          { id: "name_checked", label: "Название файла проверено", done: true, auto: false },
-          { id: "attachments", label: "Приложения приложены", done: false, auto: true },
-          { id: "links", label: "Ссылки доступны", done: true, auto: true },
-          { id: "teacher", label: "Комментарии преподавателя учтены", done: true, auto: true },
-          { id: "manual_review", label: "Ручная проверка выполнена", done: false, auto: false },
+          { id: "final_selected", label: "Итоговая версия выбрана", done: true, auto: true, status: "verified", detail: "Выбранная версия совпадает с проверенной", manualConfirmed: false },
+          { id: "name_checked", label: "Имя файла по шаблону", done: true, auto: true, status: "verified", detail: final, manualConfirmed: false },
+          { id: "attachments", label: "Приложения версии на месте", done: false, auto: true, status: "missing", detail: "Нет: Пояснения к расчётам.pdf", manualConfirmed: false },
+          { id: "links", label: "Внешние ссылки открыты и проверены вручную", done: false, auto: false, status: "manual_required", detail: "«Контур» не проверяет доступность ссылок по сети", manualConfirmed: false },
+          { id: "teacher", label: "Требования преподавателя выполнены", done: true, auto: true, status: "verified", detail: "Действующих требований: 0", manualConfirmed: false },
+          { id: "manual_review", label: "Я вручную проверил комплект", done: false, auto: false, status: "manual_required", detail: "Откройте файлы ревизии и сверьте с заданием", manualConfirmed: false },
         ],
-        uploadList: [final, "Пояснения к расчётам.pdf", "Ссылка: https://disk.example.ru/kontur/stat-w7"],
+        uploadList: [final, "Ссылка: https://disk.example.ru/kontur/stat-w7"],
         builtAt: at(-1, 19, 20),
-      });
+        revision: 1,
+        requirements: [],
+        inputs: null,
+        submitted: false,
+      };
+      this.packages.set(ready.id, demo);
+      this.packageHistory.set(ready.id, [demo]);
     }
 
     const h = hws.find((x) => x.id === "hw-oba-7");
@@ -1656,7 +1724,7 @@ export class MockWorkflow {
       { source: "chat", date: commentDate, question: "Нужно ли округлять средний чек?", answer: "Округлите до рублей, формат — с разделителем разрядов." },
       { source: "chat", date: commentDate, question: "Динамику по месяцам показывать на том же листе?", answer: "Нет, вынесите срез по месяцам на отдельный лист и добавьте к нему вывод в 2–3 предложения." },
     ];
-    for (const c of seedComments) this.comments.push(toComment({ ...c, authority: "teacher_official", author: "Преподаватель", confirmedOfficial: true }, { id: uid("tc"), homeworkId: h.id, addedAt: at(-1, 13, 30), attachment: null }));
+    for (const c of seedComments) this.comments.push(toComment({ ...c, authority: "teacher_official", author: "", context: "Чат курса", confirmedOfficial: true }, { id: uid("tc"), homeworkId: h.id, addedAt: at(-1, 13, 30), attachment: null }));
     const b4 = this.buildBundle(h, "review_teacher", v2.id);
     this.bundles.set(b4.id, b4);
     const r4 = this.completedRun(h, "review_teacher", b4, v2.id, at(-1, 14));

@@ -35,9 +35,11 @@ export function RequirementList({ requirements, comments, onResolve, locked, res
             </div>
             <span className={`badge ${r.withdrawnAt ? "" : TONE[r.status] ? `badge--${TONE[r.status]}` : ""}`}>{r.withdrawnAt ? "Отозвано" : REQUIREMENT_STATUS_LABEL[r.status]}</span>
             {onWithdraw && !r.withdrawnAt && !locked && (
-              <button className="btn btn--sm btn--ghost" onClick={() => onWithdraw(r)}>
-                Удалить
-              </button>
+              <div className="req__resolve">
+                <button className="btn btn--sm btn--ghost" aria-label={`Удалить требование «${r.text}»`} onClick={() => onWithdraw(r)}>
+                  Удалить
+                </button>
+              </div>
             )}
             {onResolve && !r.withdrawnAt && resolvable.includes(r.status) && !locked && (
               <div className="req__resolve">

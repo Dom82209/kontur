@@ -205,7 +205,34 @@ db_enum!(PackageCheckId {
     Links => "links",
     Teacher => "teacher",
     ManualReview => "manual_review",
+    InputsFresh => "inputs_fresh",
 });
+
+db_enum!(
+    /// Этап 8: состояние файла, ссылки или пункта комплекта.
+    PackageStatus {
+    Verified => "verified",
+    Missing => "missing",
+    Stale => "stale",
+    ManualRequired => "manual_required",
+    Inaccessible => "inaccessible",
+    Mismatch => "mismatch",
+    NotApplicable => "not_applicable",
+});
+
+impl PackageStatus {
+    /// Блокирует подтверждение отправки независимо от ручных отметок.
+    pub fn blocks(self) -> bool {
+        matches!(
+            self,
+            Self::Missing | Self::Stale | Self::Inaccessible | Self::Mismatch
+        )
+    }
+}
+
+fn manual_required() -> PackageStatus {
+    PackageStatus::ManualRequired
+}
 
 db_enum!(ReadinessCheckId {
     Materials => "materials",
@@ -552,6 +579,13 @@ pub struct PackageItemDto {
     pub final_name: String,
     pub required: bool,
     pub present: bool,
+    /// Этап 8: SHA-256 и размер скопированного файла; статус по проверке диска.
+    #[serde(default = "manual_required")]
+    pub status: PackageStatus,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -561,7 +595,10 @@ pub struct PackageLinkDto {
     pub label: String,
     pub url: String,
     pub required: bool,
+    /// Сетевой проверки нет: ссылка не считается доступной автоматически.
     pub verified: bool,
+    #[serde(default = "manual_required")]
+    pub status: PackageStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,8 +606,37 @@ pub struct PackageLinkDto {
 pub struct PackageCheckDto {
     pub id: PackageCheckId,
     pub label: String,
+    /// Пункт выполнен: проверен, неприменим или подтверждён вручную.
     pub done: bool,
     pub auto: bool,
+    #[serde(default = "manual_required")]
+    pub status: PackageStatus,
+    #[serde(default)]
+    pub detail: String,
+    /// Ручной пункт подтверждён пользователем (журнал `package_manual_checks`).
+    #[serde(default)]
+    pub manual_confirmed: bool,
+}
+
+/// Требование, действовавшее при сборке ревизии.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageRequirementDto {
+    pub id: String,
+    pub text: String,
+    pub status: crate::domain::RequirementStatus,
+}
+
+/// Краткая запись ревизии комплекта для истории.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRevisionSummaryDto {
+    pub id: String,
+    pub revision: i64,
+    pub version_id: String,
+    pub built_at: String,
+    pub stale: bool,
+    pub submitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -587,8 +653,14 @@ pub struct SubmissionPackageDto {
     pub upload_list: Vec<String>,
     pub built_at: String,
     pub inputs_fingerprint: Option<String>,
-    /// Собран по устаревшим входным данным — подтвердить отправку нельзя.
+    /// Собран по устаревшим входным данным или есть более новая ревизия —
+    /// подтвердить отправку по нему нельзя.
     pub stale: bool,
+    /// Этап 8: номер неизменяемой ревизии, требования и отпечатки входных данных на момент сборки.
+    pub revision: i64,
+    pub requirements: Vec<PackageRequirementDto>,
+    pub inputs: Option<super::fingerprint::InputsFingerprintDto>,
+    pub submitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -887,6 +959,8 @@ pub struct HomeworkWorkflowDto {
     pub submission_receipt: Option<SubmissionReceiptDto>,
     /// Этап 7: текущий отпечаток входных данных.
     pub inputs: super::fingerprint::InputsFingerprintDto,
+    /// Этап 8: все ревизии комплекта (новые сверху).
+    pub package_history: Vec<PackageRevisionSummaryDto>,
     /// «Готово к сдаче» отмечено по другим входным данным — отметка не действует.
     pub ready_stale: bool,
     /// Задания передачи провайдерам (этап 9) — без текстов промта и ответа.

@@ -253,6 +253,7 @@ export function importTeacherTranscript(homeworkId: string, input: TeacherTransc
 }
 export function removeTeacherComment(commentId: string): Promise<void> { return call("remove_teacher_comment", { commentId }); }
 export function buildSubmissionPackage(homeworkId: string): Promise<OperationResult<SubmissionPackage>> { return call("build_submission_package", { homeworkId }); }
+export function verifySubmissionPackage(homeworkId: string): Promise<SubmissionPackage | null> { return call("verify_submission_package", { homeworkId }); }
 export function setPackageCheck(packageId: string, checkId: PackageCheckId, done: boolean): Promise<SubmissionPackage> { return call("set_package_check", { packageId, checkId, done }); }
 export function confirmSubmission(homeworkId: string, confirmation: SubmissionConfirmation): Promise<OperationResult<SubmissionReceipt>> { return call("confirm_submission", { homeworkId, confirmation }); }
 

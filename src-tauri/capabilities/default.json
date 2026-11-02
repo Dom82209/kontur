@@ -30,6 +30,7 @@
     "allow-preview-teacher-transcript",
     "allow-remove-teacher-comment",
     "allow-build-submission-package",
+    "allow-verify-submission-package",
     "allow-set-package-check",
     "allow-confirm-submission",
     "allow-check-managed-roots",

@@ -460,7 +460,7 @@ mod tests {
                         [],
                     )?;
                     connection.execute(
-                        "INSERT INTO submission_packages(id, homework_id, final_version_id, status, package_path, checklist_json, items_json, links_json, warnings_json, upload_list_json, manifest_json, built_at) VALUES ('package-1', 'homework-7', 'version-1', 'draft', 'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу', '[]', '[]', '[]', '[]', '[]', '[]', '2026-10-20T12:00:00Z')",
+                        "INSERT INTO submission_packages(id, homework_id, revision, final_version_id, status, package_path, checklist_json, items_json, links_json, warnings_json, upload_list_json, manifest_json, built_at) VALUES ('package-1', 'homework-7', 1, 'version-1', 'draft', 'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу', '[]', '[]', '[]', '[]', '[]', '[]', '2026-10-20T12:00:00Z')",
                         [],
                     )?;
                     Ok(())

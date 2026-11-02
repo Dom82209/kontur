@@ -372,9 +372,9 @@ fn package_and_receipt_are_hydrated_with_typed_json() {
     database
         .with_connection(|connection| {
             connection.execute(
-                r#"INSERT INTO submission_packages(id, homework_id, final_version_id, status, package_path,
+                r#"INSERT INTO submission_packages(id, homework_id, revision, final_version_id, status, package_path,
                        checklist_json, items_json, links_json, warnings_json, upload_list_json, built_at)
-                   VALUES ('package-1', 'hw-1', 'version-1', 'ready', 'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу',
+                   VALUES ('package-1', 'hw-1', 1, 'version-1', 'ready', 'Предметы/ОБА/Неделя 07/03 ДЗ/03 На сдачу',
                        '[{"id":"final_selected","label":"Итоговая версия","done":true,"auto":true}]',
                        '[{"id":"item-1","role":"main","file":null,"finalName":"Гончарова_Доминика_Неделя7 ДЗ.docx","required":true,"present":false}]',
                        '[]', '["Нет ссылки на задание"]', '["Гончарова_Доминика_Неделя7 ДЗ.docx"]', '2026-10-22T10:00:00Z')"#,

@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     db::Database,
+    domain::{HomeworkWorkflowStage, RequirementStatus},
     dto::{FileKind, FileRefDto, OperationKind, OperationResultDto},
     error::{AppError, BackendError, ErrorCode},
     file_service::{
@@ -17,10 +18,10 @@ use crate::{
     workflow::{
         dto::{
             PackageCheckDto, PackageCheckId, PackageItemDto, PackageItemRole, PackageLinkDto,
-            StyleProfileDto, SubmissionConfirmationInput, SubmissionPackageDto,
-            SubmissionReceiptDto,
+            PackageRequirementDto, PackageStatus, StyleProfileDto, SubmissionConfirmationInput,
+            SubmissionPackageDto, SubmissionReceiptDto,
         },
-        repository,
+        fingerprint, repository,
     },
 };
 
@@ -137,6 +138,43 @@ impl<'a> SubmissionService<'a> {
         })
     }
 
+    /// Этап 8: проверяет, что работа действительно готова по актуальным входным
+    /// данным: этап «Готово к сдаче», пройденная готовность и действующая отметка.
+    fn require_current_ready(&self, homework_id: &str) -> Result<(), AppError> {
+        self.database.with_connection(|c| {
+            let snapshot = repository::load_snapshot(c, homework_id)?;
+            if snapshot.homework.workflow_stage != HomeworkWorkflowStage::ReadyToSubmit {
+                return Err(BackendError::blocked(
+                    "Сначала отметьте работу «Готово к сдаче» после всех проверок",
+                ));
+            }
+            if !snapshot
+                .inputs
+                .is_current(snapshot.ready_fingerprint.as_deref())
+            {
+                return Err(BackendError::blocked(
+                    "«Готово к сдаче» отмечено по устаревшим входным данным — проверьте версию заново",
+                ));
+            }
+            let readiness = crate::workflow::projections::readiness(&snapshot);
+            if !readiness.ready {
+                let blockers: Vec<_> = readiness
+                    .checks
+                    .iter()
+                    .filter(|check| !check.ok)
+                    .map(|check| check.label.as_str())
+                    .collect();
+                return Err(BackendError::blocked(format!(
+                    "Не пройдены проверки готовности: {}",
+                    blockers.join("; ")
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    /// Этап 8: каждая сборка — новая неизменяемая ревизия в своей папке
+    /// «03 На сдачу/Ревизия NN». Прежние ревизии остаются в истории.
     pub fn build(
         &self,
         homework_id: &str,
@@ -157,187 +195,222 @@ impl<'a> SubmissionService<'a> {
                 "Отправленная работа и её снимок неизменяемы",
             ));
         }
-        if let Some(existing) = self
+        self.require_current_ready(homework_id)?;
+        let inputs = self
             .database
-            .with_connection(|c| repository::submission_package(c, homework_id))?
-        {
-            let op_id = Uuid::new_v4().to_string();
-            self.database.with_transaction(|tx| {
-                writes::insert_running_operation(
-                    tx,
-                    &op_id,
-                    OperationKind::BuildPackage,
-                    "Комплект уже собран",
-                )?;
-                writes::complete_operation(tx, &op_id)?;
-                Ok(())
-            })?;
-            return Ok(OperationResultDto {
-                operation: ReadRepository::new(self.database).operation(&op_id)?,
-                value: existing,
-            });
-        }
-        let (version_id,source_path,source_name,kind,size,folder,assignment_url,final_file_name,files_json)=self.database.with_connection(|c|c.query_row("SELECT v.id,v.file_path,v.file_name,coalesce(f.kind,'other'),v.size_bytes,h.folder_path,h.assignment_url,h.final_file_name,v.files_json FROM homeworks h JOIN homework_versions v ON v.id=h.final_version_id LEFT JOIN files f ON f.id=v.source_file_id WHERE h.id=?1 AND h.stage='ready_to_submit'",[homework_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,String>(8)?))).map_err(|e|match e{rusqlite::Error::QueryReturnedNoRows=>BackendError::blocked("Сначала выберите итоговую версию и пройдите проверку готовности"),o=>o.into()}))?;
+            .with_connection(|c| fingerprint::current(c, homework_id))?;
+        let (version_id,source_path,source_name,kind,folder,assignment_url,final_file_name,files_json)=self.database.with_connection(|c|c.query_row("SELECT v.id,v.file_path,v.file_name,coalesce(f.kind,'other'),h.folder_path,h.assignment_url,h.final_file_name,v.files_json FROM homeworks h JOIN homework_versions v ON v.id=h.final_version_id LEFT JOIN files f ON f.id=v.source_file_id WHERE h.id=?1",[homework_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?))).map_err(|e|match e{rusqlite::Error::QueryReturnedNoRows=>BackendError::blocked("Сначала выберите итоговую версию"),o=>o.into()}))?;
         let version_files: Vec<FileRefDto> = serde_json::from_str(&files_json)
             .map_err(|error| BackendError::database(format!("Повреждён состав версии: {error}")))?;
-        let teacher_requirements_done: bool = self.database.with_connection(|connection| {
-            connection
-                .query_row(
-                    "SELECT NOT EXISTS(SELECT 1 FROM teacher_requirements WHERE homework_id=?1 AND status='not_done')",
-                    [homework_id],
-                    |row| row.get(0),
-                )
-                .map_err(Into::into)
+        let requirements: Vec<PackageRequirementDto> = self.database.with_connection(|c| {
+            Ok(repository::teacher_requirements(c, homework_id)?
+                .into_iter()
+                .filter(|item| item.withdrawn_at.is_none())
+                .map(|item| PackageRequirementDto {
+                    id: item.id,
+                    text: item.text,
+                    status: item.status,
+                })
+                .collect())
         })?;
-        let package_folder = format!("{folder}/03 На сдачу");
+        let revision: i64 = self.database.with_connection(|c| {
+            c.query_row(
+                "SELECT coalesce(max(revision), 0) + 1 FROM submission_packages WHERE homework_id=?1",
+                [homework_id],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })?;
+        let package_folder = format!("{folder}/03 На сдачу/Ревизия {revision:02}");
         let vault = self.roots.open_vault()?;
-        let src = SourceFile::open_in(&VerifiedDestination::in_vault(
-            &vault,
-            PersistentPath::new(&source_path)?,
-        )?)?;
-        let expected = hash_source(&src)?;
         let safe_name = match final_file_name {
             Some(name) if safe_package_name(&name) => name,
             Some(_) => return Err(BackendError::blocked("Итоговое имя файла небезопасно")),
             None => self.final_name(homework_id, &version_id, &source_name)?,
         };
-        let target = PersistentPath::new(format!("{package_folder}/{safe_name}"))?;
-        let copy = atomic_copy_committed(
-            &src,
-            &VerifiedDestination::in_vault(&vault, target.clone())?,
-            Some(&expected),
-        )?;
-        let file = FileRefDto {
-            id: Uuid::new_v4().to_string(),
-            name: safe_name.clone(),
-            kind: FileKind::try_from_db(&kind).unwrap_or(FileKind::Other),
-            size_bytes: size,
-            modified_at: now(),
-            relative_path: target.as_str().to_owned(),
-        };
-        let mut items = vec![PackageItemDto {
-            id: Uuid::new_v4().to_string(),
-            role: PackageItemRole::Main,
-            file: Some(file.clone()),
-            final_name: safe_name.clone(),
-            required: true,
-            present: true,
-        }];
-        let links = assignment_url
-            .filter(|u| !u.trim().is_empty())
-            .map(|url| {
-                vec![PackageLinkDto {
-                    id: Uuid::new_v4().to_string(),
-                    label: "Задание в системе вуза".into(),
-                    url,
-                    required: false,
-                    verified: true,
-                }]
-            })
-            .unwrap_or_default();
-        let checklist = vec![
-            check(
-                PackageCheckId::FinalSelected,
-                "Итоговая версия выбрана",
-                true,
-                true,
-            ),
-            check(
-                PackageCheckId::NameChecked,
-                "Имя файла проверено",
-                true,
-                true,
-            ),
-            check(
-                PackageCheckId::Attachments,
-                "Обязательные приложения на месте",
-                true,
-                true,
-            ),
-            check(
-                PackageCheckId::Links,
-                "Внешние ссылки проверены",
-                links.iter().all(|x| !x.required || x.verified),
-                true,
-            ),
-            check(
-                PackageCheckId::Teacher,
-                "Требования преподавателя учтены",
-                teacher_requirements_done,
-                true,
-            ),
-            check(
-                PackageCheckId::ManualReview,
-                "Я вручную проверил комплект",
-                false,
-                false,
-            ),
-        ];
-        let mut manifest = vec![ManifestEntry {
-            path: target.as_str().to_owned(),
-            sha256: copy.receipt.sha256.as_str().to_owned(),
-            size_bytes: copy.receipt.size_bytes,
-        }];
-        let mut committed = vec![copy];
-        let mut upload_list = vec![safe_name.clone()];
+
+        // Файлы: основной и приложения версии. Каждый копируется с проверкой SHA-256.
+        let mut sources = vec![(
+            PackageItemRole::Main,
+            source_path.clone(),
+            safe_name.clone(),
+            FileKind::try_from_db(&kind).unwrap_or(FileKind::Other),
+        )];
         let mut names = HashSet::from([safe_name.clone()]);
         for attachment in version_files
             .into_iter()
             .filter(|file| file.relative_path != source_path)
         {
             if !safe_package_name(&attachment.name) {
-                compensate_all(committed);
                 return Err(BackendError::blocked(
                     "Имя приложения небезопасно для комплекта",
                 ));
             }
             if !names.insert(attachment.name.clone()) {
-                compensate_all(committed);
                 return Err(BackendError::conflict(
                     "В версии есть несколько файлов с одинаковым итоговым именем",
                 ));
             }
+            sources.push((
+                PackageItemRole::Attachment,
+                attachment.relative_path,
+                attachment.name,
+                attachment.kind,
+            ));
+        }
+        let mut committed = Vec::new();
+        let mut items = Vec::new();
+        let mut manifest = Vec::new();
+        let mut upload_list = Vec::new();
+        for (role, source, name, kind) in sources {
             let copied = (|| {
-                let source = SourceFile::open_in(&VerifiedDestination::in_vault(
+                let src = SourceFile::open_in(&VerifiedDestination::in_vault(
                     &vault,
-                    PersistentPath::new(&attachment.relative_path)?,
+                    PersistentPath::new(&source)?,
                 )?)?;
-                let expected = hash_source(&source)?;
-                let target = PersistentPath::new(format!("{package_folder}/{}", attachment.name))?;
+                let expected = hash_source(&src)?;
+                let target = PersistentPath::new(format!("{package_folder}/{name}"))?;
                 let copy = atomic_copy_committed(
-                    &source,
+                    &src,
                     &VerifiedDestination::in_vault(&vault, target.clone())?,
                     Some(&expected),
                 )?;
                 Ok::<_, AppError>((target, copy))
             })();
-            let (attachment_target, attachment_copy) = match copied {
+            let (target, copy) = match copied {
                 Ok(value) => value,
                 Err(error) => {
                     compensate_all(committed);
-                    return Err(error);
+                    return Err(BackendError::blocked(format!(
+                        "Файл «{name}» недоступен для комплекта: {}",
+                        error.message
+                    )));
                 }
             };
-            let packaged = FileRefDto {
-                relative_path: attachment_target.as_str().to_owned(),
-                modified_at: now(),
-                ..attachment
-            };
+            let size = i64::try_from(copy.receipt.size_bytes).unwrap_or(i64::MAX);
+            let sha256 = copy.receipt.sha256.as_str().to_owned();
             manifest.push(ManifestEntry {
-                path: attachment_target.as_str().to_owned(),
-                sha256: attachment_copy.receipt.sha256.as_str().to_owned(),
-                size_bytes: attachment_copy.receipt.size_bytes,
+                path: target.as_str().to_owned(),
+                sha256: sha256.clone(),
+                size_bytes: copy.receipt.size_bytes,
             });
-            upload_list.push(packaged.name.clone());
+            upload_list.push(name.clone());
             items.push(PackageItemDto {
                 id: Uuid::new_v4().to_string(),
-                role: PackageItemRole::Attachment,
-                final_name: packaged.name.clone(),
-                file: Some(packaged),
+                role,
+                file: Some(FileRefDto {
+                    id: Uuid::new_v4().to_string(),
+                    name: name.clone(),
+                    kind,
+                    size_bytes: size,
+                    modified_at: now(),
+                    relative_path: target.as_str().to_owned(),
+                }),
+                final_name: name,
                 required: true,
                 present: true,
+                status: PackageStatus::Verified,
+                sha256: Some(sha256),
+                detail: "Скопирован, размер и SHA-256 совпадают".to_owned(),
             });
-            committed.push(attachment_copy);
+            committed.push(copy);
+        }
+
+        // Ссылки: сетевой проверки нет — только ручное подтверждение.
+        let links: Vec<PackageLinkDto> = assignment_url
+            .filter(|u| !u.trim().is_empty())
+            .map(|url| {
+                vec![PackageLinkDto {
+                    id: Uuid::new_v4().to_string(),
+                    label: "Задание в системе вуза".into(),
+                    url,
+                    required: true,
+                    verified: false,
+                    status: PackageStatus::ManualRequired,
+                }]
+            })
+            .unwrap_or_default();
+        let not_done = requirements
+            .iter()
+            .filter(|item| item.status == RequirementStatus::NotDone)
+            .count();
+        let manual = requirements
+            .iter()
+            .filter(|item| item.status == RequirementStatus::Manual)
+            .count();
+        let attachments = items.len() - 1;
+        let checklist = vec![
+            check(
+                PackageCheckId::FinalSelected,
+                "Итоговая версия выбрана",
+                PackageStatus::Verified,
+                true,
+                "Выбранная версия совпадает с проверенной",
+            ),
+            check(
+                PackageCheckId::NameChecked,
+                "Имя файла по шаблону",
+                PackageStatus::Verified,
+                true,
+                &safe_name,
+            ),
+            check(
+                PackageCheckId::Attachments,
+                "Приложения версии на месте",
+                if attachments == 0 {
+                    PackageStatus::NotApplicable
+                } else {
+                    PackageStatus::Verified
+                },
+                true,
+                &format!("Скопировано приложений: {attachments}, размер и SHA-256 совпадают"),
+            ),
+            check(
+                PackageCheckId::Links,
+                "Внешние ссылки открыты и проверены вручную",
+                if links.is_empty() {
+                    PackageStatus::NotApplicable
+                } else {
+                    PackageStatus::ManualRequired
+                },
+                false,
+                "«Контур» не проверяет доступность ссылок по сети",
+            ),
+            check(
+                PackageCheckId::Teacher,
+                "Требования преподавателя выполнены",
+                if not_done > 0 {
+                    PackageStatus::Missing
+                } else if manual > 0 {
+                    PackageStatus::ManualRequired
+                } else {
+                    PackageStatus::Verified
+                },
+                true,
+                &format!(
+                    "Действующих требований: {}, не выполнено: {not_done}, требует ручной проверки: {manual}",
+                    requirements.len()
+                ),
+            ),
+            check(
+                PackageCheckId::ManualReview,
+                "Я вручную проверил комплект",
+                PackageStatus::ManualRequired,
+                false,
+                "Откройте файлы ревизии и сверьте с заданием",
+            ),
+        ];
+        let mut warnings = Vec::new();
+        if !links.is_empty() {
+            warnings.push(
+                "Ссылку на задание откройте сами: доступность ссылок не проверяется автоматически"
+                    .to_owned(),
+            );
+        }
+        if manual > 0 {
+            warnings.push(format!(
+                "Требований с ручной проверкой: {manual} — закройте их на вкладке преподавателя"
+            ));
         }
         let id = Uuid::new_v4().to_string();
         let op_id = Uuid::new_v4().to_string();
@@ -354,7 +427,47 @@ impl<'a> SubmissionService<'a> {
             .iter()
             .map(|item| item.path.clone())
             .collect::<Vec<_>>();
-        let db=self.database.with_transaction(|tx|{writes::insert_running_operation(tx,&op_id,OperationKind::BuildPackage,"Комплект на сдачу собран")?;tx.execute("INSERT INTO submission_packages(id,homework_id,final_version_id,status,package_path,checklist_json,items_json,links_json,warnings_json,upload_list_json,built_at,manifest_json) VALUES(?1,?2,?3,'draft',?4,?5,?6,?7,'[]',?8,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?9)",params![id,homework_id,version_id,package_folder,json(&checklist)?,json(&items)?,json(&links)?,json(&upload_list)?,json(&manifest)?])?;tx.execute("UPDATE operations SET paths_json=?2,undoable=0,homework_id=?3 WHERE id=?1",params![op_id,json(&package_paths)?,homework_id])?;writes::complete_operation(tx,&op_id)?;Ok(())});
+        let inputs_json = json(&inputs)?;
+        let db = self.database.with_transaction(|tx| {
+            // Входные данные не должны измениться за время сборки.
+            if fingerprint::current(tx, homework_id)?.combined != inputs.combined {
+                return Err(BackendError::conflict(
+                    "Входные данные изменились во время сборки — соберите комплект заново",
+                ));
+            }
+            writes::insert_running_operation(
+                tx,
+                &op_id,
+                OperationKind::BuildPackage,
+                &format!("Собрана ревизия комплекта {revision}"),
+            )?;
+            tx.execute(
+                "INSERT INTO submission_packages(id,homework_id,revision,final_version_id,status,package_path,checklist_json,items_json,links_json,warnings_json,upload_list_json,manifest_json,requirements_json,inputs_json,inputs_fingerprint,built_at)
+                 VALUES(?1,?2,?3,?4,'draft',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                params![
+                    id,
+                    homework_id,
+                    revision,
+                    version_id,
+                    package_folder,
+                    json(&checklist)?,
+                    json(&items)?,
+                    json(&links)?,
+                    json(&warnings)?,
+                    json(&upload_list)?,
+                    json(&manifest)?,
+                    json(&requirements)?,
+                    inputs_json,
+                    inputs.combined,
+                ],
+            )?;
+            tx.execute(
+                "UPDATE operations SET paths_json=?2,undoable=0,homework_id=?3 WHERE id=?1",
+                params![op_id, json(&package_paths)?, homework_id],
+            )?;
+            writes::complete_operation(tx, &op_id)?;
+            Ok(())
+        });
         if let Err(e) = db {
             let _ = note.compensate();
             compensate_all(committed);
@@ -362,21 +475,64 @@ impl<'a> SubmissionService<'a> {
         }
         let value = self
             .database
-            .with_connection(|c| repository::submission_package(c, homework_id))?
-            .ok_or_else(|| BackendError::database("Комплект не найден после сборки"))?;
+            .with_connection(|c| repository::submission_package_by_id(c, &id))?;
         Ok(OperationResultDto {
             operation: ReadRepository::new(self.database).operation(&op_id)?,
             value,
         })
     }
 
+    /// Этап 8: ручное подтверждение пункта действующей ревизии (журнал, без правки ревизии).
     pub fn set_check(
         &self,
         package_id: &str,
         check_id: PackageCheckId,
         done: bool,
     ) -> Result<SubmissionPackageDto, AppError> {
-        self.database.with_transaction(|tx|{let (homework,raw):(String,String)=tx.query_row("SELECT homework_id,checklist_json FROM submission_packages WHERE id=?1 AND status<>'submitted'",[package_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|match e{rusqlite::Error::QueryReturnedNoRows=>BackendError::immutable("Комплект отправленной работы неизменяем"),o=>o.into()})?;let mut checks:Vec<PackageCheckDto>=serde_json::from_str(&raw).map_err(|e|BackendError::database(e.to_string()))?;let item=checks.iter_mut().find(|x|x.id==check_id).ok_or_else(||BackendError::not_found("Пункт checklist не найден"))?;if item.auto{return Err(BackendError::blocked("Автоматический пункт нельзя изменить вручную"));}item.done=done;let ready=checks.iter().all(|x|x.done);tx.execute("UPDATE submission_packages SET checklist_json=?2,status=?3,updated_at=CURRENT_TIMESTAMP WHERE id=?1",params![package_id,json(&checks)?,if ready{"ready"}else{"draft"}])?;repository::submission_package(tx,&homework)?.ok_or_else(||BackendError::database("Комплект исчез"))})
+        self.database.with_transaction(|tx| {
+            let package = repository::submission_package_by_id(tx, package_id)?;
+            if package.submitted {
+                return Err(BackendError::immutable(
+                    "Комплект отправленной работы неизменяем",
+                ));
+            }
+            if package.stale {
+                return Err(BackendError::blocked(
+                    "Ревизия устарела — пересоберите комплект",
+                ));
+            }
+            let item = package
+                .checklist
+                .iter()
+                .find(|x| x.id == check_id)
+                .ok_or_else(|| BackendError::not_found("Пункт checklist не найден"))?;
+            if item.auto || item.status != PackageStatus::ManualRequired {
+                return Err(BackendError::blocked(
+                    "Этот пункт проверяет «Контур» — вручную его не отметить",
+                ));
+            }
+            tx.execute(
+                "INSERT INTO package_manual_checks(id, package_id, check_id, confirmed) VALUES (?1, ?2, ?3, ?4)",
+                params![Uuid::new_v4().to_string(), package_id, check_id.as_db_str(), done],
+            )?;
+            repository::submission_package_by_id(tx, package_id)
+        })
+    }
+
+    /// Этап 8: проверка файлов ревизии на диске — существование, размер и SHA-256.
+    /// Запись в JSON сама по себе не доказывает наличие файла.
+    pub fn verify(&self, homework_id: &str) -> Result<Option<SubmissionPackageDto>, AppError> {
+        let Some(mut package) = self
+            .database
+            .with_connection(|c| repository::submission_package(c, homework_id))?
+        else {
+            return Ok(None);
+        };
+        let vault = self.roots.open_vault()?;
+        for item in &mut package.items {
+            verify_item(&vault, item);
+        }
+        Ok(Some(package))
     }
 
     pub fn confirm(
@@ -401,13 +557,44 @@ impl<'a> SubmissionService<'a> {
                 "Файл подтверждения должен быть выбран системным диалогом",
             ));
         }
+        // Этап 8: только текущая ревизия по актуальным данным, с проверкой файлов на диске.
+        self.require_current_ready(homework_id)?;
         let package = self
-            .database
-            .with_connection(|c| repository::submission_package(c, homework_id))?
+            .verify(homework_id)?
             .ok_or_else(|| BackendError::blocked("Сначала соберите комплект"))?;
-        if package.checklist.iter().any(|x| !x.done) {
-            return Err(BackendError::blocked("Не все пункты checklist выполнены"));
+        if package.submitted {
+            return Err(BackendError::immutable("Комплект уже отправлен"));
         }
+        if package.stale {
+            return Err(BackendError::blocked(
+                "Комплект устарел — пересоберите его по актуальным данным",
+            ));
+        }
+        let broken: Vec<String> = package
+            .items
+            .iter()
+            .filter(|item| item.status.blocks())
+            .map(|item| format!("{} — {}", item.final_name, item.detail))
+            .collect();
+        if !broken.is_empty() {
+            return Err(BackendError::blocked(format!(
+                "Файлы комплекта не прошли проверку: {}",
+                broken.join("; ")
+            )));
+        }
+        let open: Vec<&str> = package
+            .checklist
+            .iter()
+            .filter(|check| !check.done)
+            .map(|check| check.label.as_str())
+            .collect();
+        if !open.is_empty() {
+            return Err(BackendError::blocked(format!(
+                "Не выполнены пункты комплекта: {}",
+                open.join("; ")
+            )));
+        }
+        let package_fingerprint = package.inputs_fingerprint.clone().unwrap_or_default();
         let vault = self.roots.open_vault()?;
         let snapshot_folder = format!(
             "{}/04 Отправлено/{}",
@@ -524,7 +711,17 @@ impl<'a> SubmissionService<'a> {
                 return Err(e);
             }
         };
-        let db=self.database.with_transaction(|tx|{writes::insert_running_operation(tx,&op_id,OperationKind::ConfirmSubmission,"Ручная отправка подтверждена")?;tx.execute("INSERT INTO submission_receipts(id,package_id,homework_id,submitted_version_id,snapshot_path,snapshot_hash,confirmed_at,submitted_at,assignment_url,proof_json,files_json,manifest_json) VALUES(?1,?2,?3,?4,?5,?6,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?7,?8,?9,?10,?11)",params![receipt_id,package.id,homework_id,package.version_id,snapshot_folder,snapshot_hash,input.submitted_at,input.assignment_url,proof_json,json(&files)?,json(&manifest)?])?;tx.execute("UPDATE submission_packages SET status='submitted',updated_at=CURRENT_TIMESTAMP WHERE id=?1",[&package.id])?;tx.execute("UPDATE homeworks SET stage='submitted',workflow_stage='submitted',submitted_at=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?1",params![homework_id,input.submitted_at])?;tx.execute("UPDATE operations SET homework_id=?2,paths_json=?3 WHERE id=?1",params![op_id,homework_id,json(&vec![snapshot_folder.clone()])?])?;writes::complete_operation(tx,&op_id)?;Ok(())});
+        let db=self.database.with_transaction(|tx|{
+            // Повторная проверка в той же транзакции, что и квитанция.
+            let (stage, latest): (String, String) = tx.query_row(
+                "SELECT workflow_stage, (SELECT id FROM submission_packages WHERE homework_id = ?1 ORDER BY revision DESC LIMIT 1) FROM homeworks WHERE id = ?1",
+                [homework_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if stage != "ready_to_submit" || latest != package.id || fingerprint::current(tx, homework_id)?.combined != package_fingerprint {
+                return Err(BackendError::conflict("Данные ДЗ изменились во время подтверждения — проверьте комплект заново"));
+            }
+            writes::insert_running_operation(tx,&op_id,OperationKind::ConfirmSubmission,"Ручная отправка подтверждена")?;tx.execute("INSERT INTO submission_receipts(id,package_id,homework_id,submitted_version_id,snapshot_path,snapshot_hash,confirmed_at,submitted_at,assignment_url,proof_json,files_json,manifest_json) VALUES(?1,?2,?3,?4,?5,?6,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?7,?8,?9,?10,?11)",params![receipt_id,package.id,homework_id,package.version_id,snapshot_folder,snapshot_hash,input.submitted_at,input.assignment_url,proof_json,json(&files)?,json(&manifest)?])?;tx.execute("UPDATE submission_packages SET status='submitted',updated_at=CURRENT_TIMESTAMP WHERE id=?1",[&package.id])?;tx.execute("UPDATE homeworks SET stage='submitted',workflow_stage='submitted',submitted_at=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?1",params![homework_id,input.submitted_at])?;tx.execute("UPDATE operations SET homework_id=?2,paths_json=?3 WHERE id=?1",params![op_id,homework_id,json(&vec![snapshot_folder.clone()])?])?;writes::complete_operation(tx,&op_id)?;Ok(())});
         if let Err(e) = db {
             let _ = note.compensate();
             for c in committed {
@@ -550,12 +747,73 @@ impl<'a> SubmissionService<'a> {
         self.database.with_connection(|c|{let (title,week,stage):(String,i64,String)=c.query_row("SELECT h.title,w.number,h.stage FROM homeworks h JOIN weeks w ON w.id=h.week_id WHERE h.id=?1",[homework_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;let mut versions=Vec::new();{let mut q=c.prepare("SELECT label,file_path FROM homework_versions WHERE homework_id=?1 ORDER BY number")?;for row in q.query_map([homework_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?{versions.push(row?);}}let mut comments=Vec::new();{let mut q=c.prepare("SELECT answer FROM teacher_comments WHERE homework_id=?1 ORDER BY created_at")?;for row in q.query_map([homework_id],|r|r.get::<_,String>(0))?{comments.push(row?);}}let version_lines=versions.into_iter().map(|(label,path)|format!("- [[{path}|{label}]]")).collect::<Vec<_>>().join("\n");let comment_lines=comments.into_iter().map(|text|format!("- {}",text.replace('\n'," "))).collect::<Vec<_>>().join("\n");Ok(format!("# {title}\n\nНеделя: {week:02}\n\n## Версии\n{version_lines}\n\n## Проверка\nСтатус: {stage}\n\n## Комментарии преподавателя\n{comment_lines}\n\n## Итоговый комплект\n{}\n\n## Отправленный снимок\n{}",package.map(|p|format!("[[{p}|Открыть комплект]]")).unwrap_or_default(),snapshot.map(|p|format!("[[{p}|Открыть неизменяемый снимок]]")).unwrap_or_default()))})
     }
 }
-fn check(id: PackageCheckId, label: &str, done: bool, auto: bool) -> PackageCheckDto {
+fn check(
+    id: PackageCheckId,
+    label: &str,
+    status: PackageStatus,
+    auto: bool,
+    detail: &str,
+) -> PackageCheckDto {
     PackageCheckDto {
         id,
         label: label.into(),
-        done,
+        done: matches!(
+            status,
+            PackageStatus::Verified | PackageStatus::NotApplicable
+        ),
         auto,
+        status,
+        detail: detail.into(),
+        manual_confirmed: false,
+    }
+}
+
+/// Существование, размер и SHA-256 файла ревизии в vault.
+fn verify_item(vault: &crate::file_service::VaultRoot, item: &mut PackageItemDto) {
+    let Some(file) = item.file.as_ref() else {
+        item.status = PackageStatus::Missing;
+        item.present = false;
+        item.detail = "У файла нет пути в комплекте".to_owned();
+        return;
+    };
+    let opened = PersistentPath::new(&file.relative_path)
+        .and_then(|path| VerifiedDestination::in_vault(vault, path))
+        .and_then(|destination| SourceFile::open_in(&destination));
+    let source = match opened {
+        Ok(source) => source,
+        Err(error) => {
+            item.present = false;
+            if error.code == ErrorCode::NotFound {
+                item.status = PackageStatus::Missing;
+                item.detail = "Файла нет в папке ревизии".to_owned();
+            } else {
+                item.status = PackageStatus::Inaccessible;
+                item.detail = format!("Файл недоступен: {}", error.message);
+            }
+            return;
+        }
+    };
+    let size = source.revalidate().ok();
+    let hash = hash_source(&source).ok();
+    match (size, hash) {
+        (Some(size), Some(hash))
+            if i64::try_from(size).ok() == Some(file.size_bytes)
+                && item.sha256.as_deref() == Some(hash.as_str()) =>
+        {
+            item.present = true;
+            item.status = PackageStatus::Verified;
+            item.detail = "Файл на месте, размер и SHA-256 совпадают".to_owned();
+        }
+        (Some(_), Some(_)) => {
+            item.present = true;
+            item.status = PackageStatus::Mismatch;
+            item.detail = "Файл изменён после сборки: размер или SHA-256 не совпадают".to_owned();
+        }
+        _ => {
+            item.present = false;
+            item.status = PackageStatus::Inaccessible;
+            item.detail = "Файл не удалось прочитать".to_owned();
+        }
     }
 }
 fn json<T: Serialize>(v: &T) -> Result<String, AppError> {
@@ -613,145 +871,5 @@ fn proof_kind(name: &str) -> FileKind {
         "pdf" => FileKind::Pdf,
         "png" | "jpg" | "jpeg" | "heic" | "webp" => FileKind::Image,
         _ => FileKind::Other,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::SubmissionService;
-    use crate::{
-        db::Database,
-        intake::{RootKind, RootsService},
-        workflow::dto::{PackageCheckId, SubmissionConfirmationInput},
-    };
-    use std::fs;
-    use tempfile::TempDir;
-    struct Fixture {
-        _temp: TempDir,
-        vault: std::path::PathBuf,
-        database: Database,
-    }
-    impl Fixture {
-        fn new() -> Self {
-            let temp = TempDir::new().unwrap();
-            let vault = temp.path().join("vault");
-            let backup = temp.path().join("backup");
-            fs::create_dir_all(&vault).unwrap();
-            fs::create_dir_all(&backup).unwrap();
-            let database = Database::open_in_memory().unwrap();
-            database.migrate().unwrap();
-            let roots = RootsService::new(&database, None);
-            roots.set_root(RootKind::Vault, &vault).unwrap();
-            roots.set_root(RootKind::Backup, &backup).unwrap();
-            let path = "Предметы/Математика/Неделя 07/03 ДЗ/02 Работа/v01.md";
-            let attachment_path = "Предметы/Математика/Неделя 07/03 ДЗ/02 Работа/приложение.csv";
-            fs::create_dir_all(vault.join("Предметы/Математика/Неделя 07/03 ДЗ/02 Работа"))
-                .unwrap();
-            fs::write(vault.join(path), b"final answer").unwrap();
-            fs::write(vault.join(attachment_path), b"a,b\n1,2\n").unwrap();
-            database.with_connection(|c|{c.execute_batch(&format!(r#"
-INSERT INTO subjects(id,name,short_name,folder_path) VALUES('s','Математика','мат','Предметы/Математика');
-INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES('w','s',7,'2026-10-20','2026-10-26','Предметы/Математика/Неделя 07');
-INSERT INTO homeworks(id,week_id,title,deadline,stage,workflow_stage,folder_path,assignment_url) VALUES('h','w','ДЗ','2026-10-27','ready_to_submit','ready_to_submit','Предметы/Математика/Неделя 07/03 ДЗ','https://my.centraluniversity.ru/task');
-INSERT INTO files(id,homework_id,category,name,kind,size_bytes,relative_path,content_hash) VALUES('f','h','homework_draft','v01.md','text',12,'{path}','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-INSERT INTO homework_versions(id,homework_id,number,label,file_path,size_bytes,author,file_name,source_file_id,sections_json,files_json) VALUES('v','h',1,'v01','{path}',12,'user','v01.md','f','[]','[{{"id":"attachment-file","name":"приложение.csv","kind":"sheet","sizeBytes":8,"modifiedAt":"2026-10-26T10:00:00Z","relativePath":"{attachment_path}"}}]');
-UPDATE homeworks SET final_version_id='v',final_file_name='Итог.md' WHERE id='h';
-"#))?;Ok(())}).unwrap();
-            Self {
-                _temp: temp,
-                vault,
-                database,
-            }
-        }
-    }
-    #[test]
-    fn package_file_name_follows_saved_pattern() {
-        let f = Fixture::new();
-        f.database
-            .with_connection(|c| {
-                c.execute("UPDATE homeworks SET final_file_name=NULL WHERE id='h'", [])?;
-                Ok(())
-            })
-            .unwrap();
-        let service = SubmissionService::new(&f.database, None);
-        // Шаблон использует фамилию, а она не задана: сборка останавливается.
-        assert_eq!(
-            service.build("h").unwrap_err().code,
-            crate::error::ErrorCode::Blocked
-        );
-        let rules = crate::dto::AutomationRulesDto {
-            student_name: crate::dto::StudentNameDto {
-                last_name: "Гончарова".into(),
-                first_name: "Доминика".into(),
-            },
-            final_name_pattern: "{Фамилия}_{Имя}_Неделя{Неделя} {Предмет} {Версия}".into(),
-            ..Default::default()
-        };
-        crate::mutation_service::MutationService::new(&f.database)
-            .update_automation_rules(rules)
-            .unwrap();
-        let built = service.build("h").unwrap();
-        let main = built.value.items[0].file.as_ref().unwrap();
-        assert_eq!(main.name, "Гончарова_Доминика_Неделя7 Математика v01.md");
-        assert!(f.vault.join(&main.relative_path).is_file());
-    }
-
-    #[test]
-    fn package_and_submitted_snapshot_are_real_and_immutable() {
-        let f = Fixture::new();
-        let service = SubmissionService::new(&f.database, None);
-        let built = service.build("h").unwrap();
-        assert_eq!(built.value.items.len(), 2);
-        assert!(f
-            .vault
-            .join(&built.value.items[0].file.as_ref().unwrap().relative_path)
-            .is_file());
-        let package = service
-            .set_check(&built.value.id, PackageCheckId::ManualReview, true)
-            .unwrap();
-        assert!(package.checklist.iter().all(|x| x.done));
-        let proof_path = f._temp.path().join("proof.png");
-        fs::write(&proof_path, b"not-a-real-image").unwrap();
-        let receipt = service
-            .confirm(
-                "h",
-                &SubmissionConfirmationInput {
-                    submitted_at: "2026-10-26T12:00:00Z".into(),
-                    assignment_url: "https://my.centraluniversity.ru/task".into(),
-                    proof: Some(crate::workflow::dto::SubmissionProofInput {
-                        name: "proof.png".into(),
-                        size_bytes: 16,
-                        path: Some(proof_path.to_string_lossy().into_owned()),
-                    }),
-                    user_confirmed: true,
-                },
-                Some((
-                    crate::file_service::SourceFile::open_external(&proof_path).unwrap(),
-                    "proof.png".into(),
-                )),
-            )
-            .unwrap();
-        assert_eq!(receipt.value.files.len(), 2);
-        assert!(receipt.value.proof.as_ref().is_some_and(|proof| {
-            f.vault.join(&proof.relative_path).is_file()
-                && !proof
-                    .relative_path
-                    .contains(proof_path.to_string_lossy().as_ref())
-        }));
-        assert!(f.vault.join(&receipt.value.snapshot_path).is_dir());
-        assert!(f
-            .database
-            .with_connection(|c| c
-                .execute(
-                    "UPDATE submission_receipts SET snapshot_hash='changed' WHERE id=?1",
-                    [&receipt.value.id]
-                )
-                .map(|_| ())
-                .map_err(Into::into))
-            .is_err());
-        assert_eq!(
-            service.build("h").unwrap_err().code,
-            crate::error::ErrorCode::Immutable
-        );
     }
 }

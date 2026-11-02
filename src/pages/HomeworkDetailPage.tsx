@@ -605,6 +605,7 @@ export function HomeworkDetailPage() {
             onChanged={() => void wf.reloadAll()}
             readyAllowed={wf.workflow.data?.transitions.find((t) => t.to === "ready_to_submit")?.allowed ?? false}
             commandOptions={actions.options}
+            history={wf.workflow.data?.packageHistory ?? []}
           />
         )}
       </motion.div>

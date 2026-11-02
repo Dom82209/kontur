@@ -641,6 +641,7 @@ fn aggregate_lists_transitions_computed_by_backend() {
             "homework",
             "inputs",
             "iterations",
+            "packageHistory",
             "prompts",
             "providerMode",
             "readiness",
@@ -1888,4 +1889,321 @@ fn not_done_requirement_reopens_ready_homework() {
         )
         .unwrap();
     assert_eq!(flow.stage(), Stage::TeacherReview);
+}
+
+// ───────────────────────── Этап 8: неизменяемые ревизии комплекта ─────────────────────────
+
+struct Vault {
+    _temp: tempfile::TempDir,
+    root: std::path::PathBuf,
+}
+
+impl Flow {
+    /// Временный vault с файлами из seed и итоговые фамилия/имя.
+    fn with_vault(&self) -> Vault {
+        use crate::intake::{RootKind, RootsService};
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("vault");
+        let backup = temp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+        for (path, body) in [
+            (
+                "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение_v1.docx",
+                "v1",
+            ),
+            (
+                "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение_v2.docx",
+                "v2",
+            ),
+            (
+                "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Приложение.xlsx",
+                "a,b",
+            ),
+        ] {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, body).unwrap();
+        }
+        let roots = RootsService::new(&self.database, None);
+        roots.set_root(RootKind::Vault, &root).unwrap();
+        roots.set_root(RootKind::Backup, &backup).unwrap();
+        let rules = crate::dto::AutomationRulesDto {
+            student_name: crate::dto::StudentNameDto {
+                last_name: "Гончарова".into(),
+                first_name: "Доминика".into(),
+            },
+            ..Default::default()
+        };
+        crate::mutation_service::MutationService::new(&self.database)
+            .update_automation_rules(rules)
+            .unwrap();
+        Vault { _temp: temp, root }
+    }
+
+    fn submission(&self) -> crate::submission::SubmissionService<'_> {
+        crate::submission::SubmissionService::new(&self.database, None)
+    }
+
+    fn confirm_manual_checks(&self, package_id: &str) {
+        use super::dto::PackageCheckId;
+        for check in [PackageCheckId::Links, PackageCheckId::ManualReview] {
+            let _ = self.submission().set_check(package_id, check, true);
+        }
+    }
+}
+
+fn confirmation() -> super::dto::SubmissionConfirmationInput {
+    super::dto::SubmissionConfirmationInput {
+        submitted_at: "2026-10-26T12:00:00Z".into(),
+        assignment_url: "https://my.centraluniversity.ru/task".into(),
+        proof: None,
+        user_confirmed: true,
+    }
+}
+
+fn ready_with_link() -> (Flow, Vault) {
+    let mut flow = Flow::new();
+    flow.database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE homeworks SET assignment_url = 'https://my.centraluniversity.ru/task' WHERE id = 'hw-1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let vault = flow.with_vault();
+    flow.advance_to_ready();
+    (flow, vault)
+}
+
+#[test]
+fn package_build_is_blocked_until_current_ready() {
+    let mut flow = Flow::new();
+    let _vault = flow.with_vault();
+    flow.advance_to_teacher_review();
+    assert_eq!(
+        flow.submission().build(HW).unwrap_err().code,
+        ErrorCode::Blocked
+    );
+    flow.add_done_requirement();
+    flow.service().mark_ready(&op(), HW, false).unwrap();
+    // Изменились материалы — «Готово к сдаче» не действует, комплект не собрать.
+    flow.database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE files SET content_hash = 'changed' WHERE id = 'lecture-file'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        flow.submission().build(HW).unwrap_err().code,
+        ErrorCode::Blocked
+    );
+}
+
+#[test]
+fn every_rebuild_is_a_new_immutable_revision_with_full_contents() {
+    use super::dto::{PackageCheckId, PackageItemRole, PackageStatus};
+    let (flow, vault) = ready_with_link();
+    let first = flow.submission().build(HW).unwrap().value;
+    assert_eq!(first.revision, 1);
+    assert!(first.folder_path.ends_with("03 На сдачу/Ревизия 01"));
+    let main = first
+        .items
+        .iter()
+        .find(|i| i.role == PackageItemRole::Main)
+        .unwrap();
+    assert!(main.final_name.starts_with("Гончарова_Доминика_Неделя7 ДЗ"));
+    assert_eq!(main.status, PackageStatus::Verified);
+    assert_eq!(main.sha256.as_deref().map(str::len), Some(64));
+    assert!(vault
+        .root
+        .join(&main.file.as_ref().unwrap().relative_path)
+        .is_file());
+    assert!(first.inputs.is_some() && first.inputs_fingerprint.is_some());
+    assert_eq!(
+        first.requirements.len(),
+        1,
+        "актуальные требования в ревизии"
+    );
+    // Ссылка не считается доступной без ручного подтверждения.
+    assert_eq!(first.links[0].status, PackageStatus::ManualRequired);
+    assert!(!first.links[0].verified);
+    let links = first
+        .checklist
+        .iter()
+        .find(|c| c.id == PackageCheckId::Links)
+        .unwrap();
+    assert_eq!(links.status, PackageStatus::ManualRequired);
+    assert!(!links.done);
+    assert!(!first.stale);
+
+    let second = flow.submission().build(HW).unwrap().value;
+    assert_eq!(second.revision, 2);
+    assert_ne!(
+        second.id, first.id,
+        "пересборка не возвращает старый комплект"
+    );
+    assert_ne!(second.folder_path, first.folder_path);
+    let old = flow
+        .database
+        .with_connection(|c| repository::submission_package_by_id(c, &first.id))
+        .unwrap();
+    assert!(old.stale, "прежняя ревизия в истории, но не действует");
+    let history = flow.service().aggregate(HW).unwrap().package_history;
+    assert_eq!(
+        history
+            .iter()
+            .map(|h| (h.revision, h.stale))
+            .collect::<Vec<_>>(),
+        [(2, false), (1, true)]
+    );
+    // Отметить пункт старой ревизии нельзя; содержимое и удаление запрещены триггерами.
+    assert_eq!(
+        flow.submission()
+            .set_check(&first.id, PackageCheckId::ManualReview, true)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    for sql in [
+        "UPDATE submission_packages SET items_json = '[]' WHERE revision = 1",
+        "UPDATE submission_packages SET status = 'ready' WHERE revision = 1",
+        "DELETE FROM submission_packages WHERE revision = 1",
+    ] {
+        assert!(
+            flow.database
+                .with_connection(|c| {
+                    c.execute(sql, [])?;
+                    Ok(())
+                })
+                .is_err(),
+            "{sql}"
+        );
+    }
+    // Автоматический пункт вручную не отмечается.
+    assert_eq!(
+        flow.submission()
+            .set_check(&second.id, PackageCheckId::Attachments, true)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+}
+
+#[test]
+fn confirm_is_blocked_by_manual_missing_mismatch_and_stale() {
+    use super::dto::CommentAuthority;
+    let (flow, vault) = ready_with_link();
+    let package = flow.submission().build(HW).unwrap().value;
+    // Ручные пункты не подтверждены.
+    assert_eq!(
+        flow.submission()
+            .confirm(HW, &confirmation(), None)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    flow.confirm_manual_checks(&package.id);
+    let main = vault
+        .root
+        .join(&package.items[0].file.as_ref().unwrap().relative_path);
+    // Файл изменён после сборки — mismatch.
+    std::fs::write(&main, "подменённое содержимое").unwrap();
+    let verified = flow.submission().verify(HW).unwrap().unwrap();
+    assert_eq!(
+        verified.items[0].status,
+        super::dto::PackageStatus::Mismatch
+    );
+    assert_eq!(
+        flow.submission()
+            .confirm(HW, &confirmation(), None)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    // Файла нет — missing.
+    std::fs::remove_file(&main).unwrap();
+    assert_eq!(
+        flow.submission().verify(HW).unwrap().unwrap().items[0].status,
+        super::dto::PackageStatus::Missing
+    );
+    assert_eq!(
+        flow.submission()
+            .confirm(HW, &confirmation(), None)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    // Новое официальное требование — комплект и готовность устарели.
+    let fresh = flow.submission().build(HW).unwrap().value;
+    flow.confirm_manual_checks(&fresh.id);
+    let official = flow.add_comment(comment(CommentAuthority::TeacherOfficial, true));
+    assert_eq!(flow.stage(), Stage::TeacherReview);
+    let stale = flow
+        .database
+        .with_connection(|c| repository::submission_package(c, HW))
+        .unwrap()
+        .unwrap();
+    assert!(stale.stale);
+    assert_eq!(
+        flow.submission()
+            .confirm(HW, &confirmation(), None)
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    assert_eq!(
+        flow.submission().build(HW).unwrap_err().code,
+        ErrorCode::Blocked
+    );
+    let _ = official;
+}
+
+#[test]
+fn snapshot_is_created_only_from_current_verified_package_and_locks_homework() {
+    use super::dto::PackageCheckId;
+    let (flow, vault) = ready_with_link();
+    let package = flow.submission().build(HW).unwrap().value;
+    flow.confirm_manual_checks(&package.id);
+    let receipt = flow
+        .submission()
+        .confirm(HW, &confirmation(), None)
+        .unwrap()
+        .value;
+    assert_eq!(receipt.package_id, package.id);
+    assert!(vault.root.join(&receipt.snapshot_path).is_dir());
+    assert_eq!(receipt.snapshot_hash.len(), 64);
+    let submitted = flow
+        .database
+        .with_connection(|c| repository::submission_package(c, HW))
+        .unwrap()
+        .unwrap();
+    assert!(submitted.submitted && !submitted.stale);
+    assert_eq!(
+        flow.submission().build(HW).unwrap_err().code,
+        ErrorCode::Immutable
+    );
+    assert_eq!(
+        flow.submission()
+            .set_check(&package.id, PackageCheckId::ManualReview, false)
+            .unwrap_err()
+            .code,
+        ErrorCode::Immutable
+    );
+    assert_eq!(
+        flow.service()
+            .add_teacher_comments(
+                &op(),
+                HW,
+                &[comment(super::dto::CommentAuthority::Student, false)]
+            )
+            .unwrap_err()
+            .error
+            .code,
+        ErrorCode::Immutable
+    );
 }

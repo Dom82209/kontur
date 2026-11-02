@@ -3,7 +3,7 @@ import { CircleCheck, CircleX, Cloud, Copy, FolderOpen, Link2, Lock, Package, Se
 import { useRef, useState } from "react";
 import { useOps } from "../../app/operations";
 import { useToast } from "../../app/toasts";
-import { bridge, type Homework, type PackageItem, type Readiness, type SubmissionPackage, type SubmissionReceipt, type WorkflowCommandOptions } from "../../lib/bridge";
+import { bridge, type Homework, type PackageItem, type PackageRevisionSummary, type PackageStatus, type Readiness, type SubmissionPackage, type SubmissionReceipt, type WorkflowCommandOptions } from "../../lib/bridge";
 import { formatBytes, formatDateTime } from "../../lib/format";
 import { Dialog } from "../ui/Dialog";
 import { EmptyState } from "../ui/States";
@@ -20,6 +20,34 @@ interface Props {
   /** Решение backend state machine: можно ли перейти к «Готово к сдаче». */
   readyAllowed?: boolean;
   commandOptions?: () => WorkflowCommandOptions;
+  /** Этап 8: история ревизий комплекта. */
+  history?: PackageRevisionSummary[];
+}
+
+/** Этап 8: статусы файлов, ссылок и пунктов комплекта. */
+export const PACKAGE_STATUS_LABEL: Record<PackageStatus, string> = {
+  verified: "проверено",
+  missing: "нет файла",
+  stale: "устарело",
+  manual_required: "нужна ручная проверка",
+  inaccessible: "недоступно",
+  mismatch: "не совпадает",
+  not_applicable: "не требуется",
+};
+
+const STATUS_TONE: Record<PackageStatus, string> = {
+  verified: "ok",
+  missing: "danger",
+  stale: "danger",
+  manual_required: "warn",
+  inaccessible: "danger",
+  mismatch: "danger",
+  not_applicable: "",
+};
+
+function StatusBadge({ status, confirmed }: { status: PackageStatus; confirmed?: boolean }) {
+  if (status === "manual_required" && confirmed) return <span className="badge badge--ok">подтверждено вручную</span>;
+  return <span className={`badge ${STATUS_TONE[status] ? `badge--${STATUS_TONE[status]}` : ""}`}>{PACKAGE_STATUS_LABEL[status]}</span>;
 }
 
 const ROLE_TITLE: Record<PackageItem["role"], string> = { main: "Главный итоговый файл", attachment: "Обязательные приложения", extra: "Дополнительные файлы", cloud: "Загрузить на облачный диск" };
@@ -30,7 +58,10 @@ function toLocalInput(d: Date): string {
 }
 
 /** Готовность → комплект → ручное подтверждение отправки → неизменяемый снимок. */
-export function SubmissionPanel({ homework: h, readiness, pkg, receipt, commentsCount, onChanged, manual = false, readyAllowed, commandOptions }: Props) {
+export function SubmissionPanel({ homework: h, readiness, pkg: loadedPkg, receipt, commentsCount, onChanged, manual = false, readyAllowed, commandOptions, history = [] }: Props) {
+  // Результат проверки файлов на диске заменяет сохранённые статусы до следующей загрузки.
+  const [verified, setVerified] = useState<SubmissionPackage | null>(null);
+  const pkg = verified && loadedPkg && verified.id === loadedPkg.id ? verified : loadedPkg;
   const toast = useToast();
   const { reportError, undo } = useOps();
   const actionInFlight = useRef(false);
@@ -103,7 +134,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
   }
 
   const groups = (["main", "attachment", "extra", "cloud"] as const).map((role) => ({ role, items: pkg?.items.filter((i) => i.role === role) ?? [] })).filter((g) => g.items.length > 0);
-  const allChecked = pkg?.checklist.every((c) => c.done) ?? false;
+  const allChecked = (pkg?.checklist.every((c) => c.done) ?? false) && !(pkg?.items.some((i) => ["missing", "stale", "mismatch", "inaccessible"].includes(i.status)) ?? true) && !pkg?.stale;
 
   return (
     <div className="submit">
@@ -141,7 +172,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
               className="btn"
               disabled={manual || !readiness?.ready || busy}
               title={manual ? "Сборка комплекта и копирование в «03 На сдачу» появятся на этапе сдачи" : undefined}
-              onClick={() => void act(() => bridge.buildSubmissionPackage(h.id), "Комплект не собран", (r) => toast.push({ tone: "ok", title: r.operation.title, action: { label: "Отменить", run: () => void undo(r.operation.id) } }))}
+              onClick={() => void act(() => bridge.buildSubmissionPackage(h.id), "Комплект не собран", (r) => toast.push({ tone: "ok", title: r.operation.title, text: "Прежние ревизии сохранены в истории" }))}
             >
               <Package /> {pkg ? "Пересобрать комплект" : "Собрать комплект"}
             </button>
@@ -152,7 +183,11 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
       <section className="panel">
         <div className="panel__head">
           <h2 className="panel__title">Комплект на сдачу</h2>
-          {pkg && <span className="panel__meta faint">собран {formatDateTime(pkg.builtAt)}</span>}
+          {pkg && (
+            <span className="panel__meta faint" data-testid="package-revision">
+              ревизия {pkg.revision} · собрана {formatDateTime(pkg.builtAt)}
+            </span>
+          )}
         </div>
         <div className="panel__body">
           {!pkg ? (
@@ -185,7 +220,8 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
                       <li key={i.id} data-present={i.present}>
                         <span className="mono">{i.finalName}</span>
                         {i.file && i.file.name !== i.finalName && <span className="faint"> ← {i.file.name}</span>}
-                        {!i.present && <span className="badge badge--danger">нет файла</span>}
+                        <StatusBadge status={i.status} />
+                        {i.status !== "verified" && i.detail && <span className="faint"> · {i.detail}</span>}
                       </li>
                     ))}
                   </ul>
@@ -199,7 +235,7 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
                   <ul className="pkg__files">
                     {pkg.links.map((l) => (
                       <li key={l.id}>
-                        {l.label}: <span className="mono selectable">{l.url}</span> {l.verified ? <span className="badge badge--ok">доступна</span> : <span className="badge badge--warn">не проверена</span>}
+                        {l.label}: <span className="mono selectable">{l.url}</span> <StatusBadge status={l.status} confirmed={pkg.checklist.find((c) => c.id === "links")?.manualConfirmed} />
                       </li>
                     ))}
                   </ul>
@@ -224,26 +260,42 @@ export function SubmissionPanel({ homework: h, readiness, pkg, receipt, comments
                         type="checkbox"
                         className="checkbox"
                         checked={c.done}
-                        disabled={c.auto || busy}
+                        disabled={c.auto || c.status !== "manual_required" || pkg.stale || busy}
                         onChange={(e) => void act(() => bridge.setPackageCheck(pkg.id, c.id, e.target.checked), "Пункт не отмечен")}
                       />
                       <span>
-                        {c.label}
-                        {c.auto && <span className="faint"> · проверяется автоматически</span>}
+                        {c.label} <StatusBadge status={c.status} confirmed={c.manualConfirmed} />
+                        {c.detail && <span className="faint"> · {c.detail}</span>}
                       </span>
                     </label>
                   </li>
                 ))}
               </ul>
 
+              {history.length > 1 && (
+                <div className="pkg__group" data-testid="package-history">
+                  <div className="eyebrow">История ревизий</div>
+                  <ul className="pkg__files">
+                    {history.map((p) => (
+                      <li key={p.id}>
+                        Ревизия {p.revision} · {formatDateTime(p.builtAt)} {p.submitted ? <span className="badge badge--ok">отправлена</span> : p.stale ? <StatusBadge status="stale" /> : <span className="badge">действующая</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="submit__bar">
                 <button className="btn" onClick={() => void bridge.revealInFinder(pkg.folderPath).then(() => toast.push({ tone: "info", title: "Папка «03 На сдачу»", text: "Backend откроет её в Finder" }))}>
                   <FolderOpen /> Открыть папку «03 На сдачу»
                 </button>
+                <button className="btn" disabled={busy} onClick={() => void bridge.verifySubmissionPackage(h.id).then((v) => setVerified(v), (e: unknown) => reportError(e, "Файлы не проверены"))}>
+                  <ShieldCheck /> Проверить файлы на диске
+                </button>
                 <button className="btn" onClick={() => void navigator.clipboard?.writeText(pkg.uploadList.join("\n")).then(() => toast.push({ tone: "info", title: "Список файлов скопирован" }))}>
                   <Copy /> Скопировать список файлов
                 </button>
-                <button className="btn submit__sent-action" disabled={!isReadyStage || !allChecked || busy} onClick={() => setSubmitOpen(true)} title={!isReadyStage ? "Сначала отметьте «Готово к сдаче»" : !allChecked ? "Отметьте все пункты чек-листа" : undefined}>
+                <button className="btn submit__sent-action" disabled={!isReadyStage || !allChecked || busy} onClick={() => setSubmitOpen(true)} title={!isReadyStage ? "Сначала отметьте «Готово к сдаче»" : !allChecked ? "Нужны проверенные файлы, актуальная ревизия и все пункты" : undefined}>
                   <Send /> Отметить как отправленное
                 </button>
               </div>
