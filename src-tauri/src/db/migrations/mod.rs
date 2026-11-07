@@ -172,6 +172,28 @@ mod tests {
     use super::{migrate, schema_version, CURRENT_SCHEMA_VERSION};
     use crate::error::ErrorCode;
 
+    /// Этап 13: новая база и повторный запуск миграций согласованы.
+    #[test]
+    fn audit_fresh_database_is_consistent_and_migration_is_idempotent() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(migrate(&mut connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let dangling: i64 = connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(dangling, 0);
+    }
+
     #[test]
     fn migrates_empty_database() {
         let mut connection = Connection::open_in_memory().unwrap();

@@ -30,6 +30,7 @@ import type {
   VersionAuthor,
   VersionComparison,
   ContentComparison,
+  StyleProfileRevision,
   CorrectionPlan,
   CorrectionStatus,
   AutomationRules,
@@ -261,6 +262,7 @@ export function addStyleSource(relativePath: string, kind: StyleSourceKind, lang
 export function removeStyleSource(sourceId: string): Promise<StyleProfileState> { return call("remove_style_source", { sourceId }); }
 export function refreshStyleSources(): Promise<StyleProfileState> { return call("refresh_style_sources"); }
 export function rebuildStyleProfile(language: StyleLanguage): Promise<StyleProfileState> { return call("rebuild_style_profile", { language }); }
+export function getStyleProfileRevision(revisionId: string): Promise<StyleProfileRevision | null> { return call("get_style_profile_revision", { revisionId }); }
 export function runStyleCheck(homeworkId: string): Promise<StyleCheck> { return call("run_style_check", { homeworkId }); }
 export function confirmStyleCheck(checkId: string, note: string): Promise<StyleCheck> { return call("confirm_style_check", { checkId, note }); }
 export function previewTeacherTranscript(input: TeacherTranscriptInput): Promise<TeacherCommentInput[]> { return call("preview_teacher_transcript", { input }); }
@@ -621,6 +623,10 @@ export function getVersionLineage(homeworkId: string, versionId: string): Promis
 
 export function compareVersionContents(homeworkId: string, baseVersionId: string, targetVersionId: string): Promise<ContentComparison> {
   return call("compare_version_contents", { homeworkId, baseVersionId, targetVersionId });
+}
+
+export function getVersionComparison(comparisonId: string): Promise<ContentComparison> {
+  return call("get_version_comparison", { comparisonId });
 }
 
 export function getCorrectionPlan(homeworkId: string): Promise<CorrectionPlan | null> {

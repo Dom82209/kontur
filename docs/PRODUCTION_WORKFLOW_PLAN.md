@@ -26,7 +26,7 @@
 | 10. Versions | готов: схема v18; родитель, происхождение, автор, причина, проверка и отпечаток входных данных записываются при создании версии; решения пользователя (принята/отклонена с причиной/заменена/итоговая) — журнал только для добавления; запрет циклов и родителей из другого ДЗ; структурное сравнение текста, Markdown, DOCX, PDF, Excel и наборов файлов с хранением и устареванием; типизированный план исправлений из текущей проверки и требований | `feat(versions): add lineage and structural comparison` |
 | 11. UX | готов: без новой бизнес-логики; аудит всех экранов и вкладок ДЗ в светлой и тёмной теме, 1440 и 900 px, клавиатура, reduced motion, axe (WCAG 2 A/AA): контраст вторичного текста и статусов, видимое кольцо фокуса у всех кнопок, корректная роль tablist у недель, статус загрузки, отключение анимаций при reduced motion | `feat(ux): accessible contrast, focus and reduced motion` |
 | 12. Providers | готов: изоляция аккаунтов и согласие по версии профиля изоляции сохранены без изменений; карточка провайдера различает «подписка аккаунта», «ручная передача», «не авторизован» (только когда CLI сообщил о входе), «CLI недоступен — ручная передача» и «ошибка проверки CLI»; sentinel-тест: CLI вне разрешённых каталогов (в т. ч. в `PATH`) не находится и не запускается, без подключения задача готовится только для ручной передачи | `feat(providers): honest account states and sentinel checks` |
-| 13. Audit | upgrade/new DB audit | contract traceability | manual TempDir E2E | secrets scan, full build, read-only real-vault preview |
+| 13. Audit | готов: новая база и повторные миграции согласованы (`integrity_check`, `foreign_key_check`), обновление v17→v18 читается рабочим циклом; трассировка IPC: команды `ipc.ts` = `ipc_commands.rs` = handler = capability; E2E в TempDir — существующие сквозные тесты цикла и комплекта; поиск секретов по дереву и истории; полный набор проверок и Tauri build на Mac; preview зеркала настоящего vault только по списку путей | `chore(audit): contract traceability and release checks` |
 
 ## Архитектурное решение workspace
 
@@ -138,6 +138,15 @@
 - Контракт не менялся: статус (`availability`, `state`, `cli`, `isolation`, `handoff`), подключение только по явному действию с согласием на текущую версию профиля изоляции, ручная передача без отправки приложением, вход — только в официальном CLI.
 - Исправлено в UI: прежде любая ошибка или отсутствие CLI показывались как «не авторизован». Теперь `providerAccountMode` (src/lib/format.ts) различает пять честных режимов; тест `provider-mode.test.ts`.
 - Sentinel: `sentinel_cli_outside_allowed_dirs_is_never_found_or_run` — исполняемые `codex`/`claude` вне разрешённых каталогов создают файл-сигнал при запуске; тест проверяет, что они не найдены, не подключаются, задача готовится для ручной передачи, адаптер не вызывается и файл-сигнал не появился. Настоящие AI-запросы в тестах невозможны: адаптеры — подставные, CLI ищется только во временных каталогах.
+
+## Этап 13: аудит
+
+- База: `audit_fresh_database_is_consistent_and_migration_is_idempotent` (новая база, повторный `migrate`, `integrity_check = ok`, нет нарушенных внешних ключей); `schema_v18_upgrade_…` дополнительно проверяет целостность и загрузку снимка рабочего цикла после обновления.
+- Контракт: `contract-trace.test.ts` — множество команд `ipc.ts` совпадает с `COMMANDS`; тесты Rust сверяют `COMMANDS` с `generate_handler!` и capability. Добавлены обёртки для `get_style_profile_revision` и `get_version_comparison`, которых не было во frontend.
+- E2E в TempDir: полный цикл (`full_manual_cycle_visits_every_reachable_stage_through_backend_only`), комплект и квитанция (`snapshot_is_created_only_from_current_verified_package_and_locks_homework`), стиль и версии (этапы 9–10); demo-прогон интерфейса — этап 11.
+- Секреты: в дереве и истории только заведомо фиктивные значения в тестах (`sk-abcdef…`, `sk-ant-should-not-leak…`, пароль тестового PDF); `.env`, базы, логи и `logs/` не отслеживаются. В `IMPLEMENTATION_STATUS.md` есть абсолютные пути разработки — это не секреты.
+- Настоящий vault: только `mirror_of_real_vault_preview` по ранее сохранённому списку путей (`logs/real-vault-paths.tsv`) — зеркало с заглушками в TempDir, preview и dry-run; Obsidian не открывается.
+- До финального GO подключение и импорт настоящего vault запрещены.
 
 ## Известные ограничения
 

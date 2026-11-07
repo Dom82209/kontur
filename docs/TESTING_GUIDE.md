@@ -59,6 +59,12 @@
 - `child_version_records_parent_origin_and_reason`, `lineage_forbids_cycles_foreign_parents_and_mutation`, `accept_reject_and_replace_final_with_invalidation`, `stored_comparison_is_reused_and_becomes_stale_after_file_change`, `correction_plan_comes_from_current_review_and_requirements`, `schema_v18_upgrade_gives_legacy_versions_clear_origin_and_no_parent` (TempDir, без настоящего Obsidian).
 - `src/lib/bridge/mock/versions.test.ts` — те же правила в mock.
 
+## Интерфейс, провайдеры, аудит (этапы 11–13)
+
+- `src/lib/provider-mode.test.ts` — честные режимы аккаунта; `cargo test sentinel_cli_outside_allowed_dirs` — CLI вне разрешённых каталогов не находится и не запускается.
+- `src/lib/bridge/tauri/contract-trace.test.ts` — команды frontend и backend совпадают.
+- `cargo test audit_fresh_database`, `schema_v18_upgrade` — новая и обновлённая база.
+
 ## Полный набор
 
 ```bash

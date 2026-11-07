@@ -412,6 +412,15 @@ fn schema_v18_upgrade_gives_legacy_versions_clear_origin_and_no_parent() {
         versions[1].lineage.origin,
         crate::dto::VersionOrigin::UserImport
     );
+    // Этап 13: обновлённая база цела и читается рабочим циклом.
+    let integrity: String = database
+        .with_connection(|c| Ok(c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let snapshot = database
+        .with_connection(|c| crate::workflow::repository::load_snapshot(c, "h1"))
+        .unwrap();
+    assert_eq!(snapshot.homework.versions.len(), 2);
     // Неизменяемость прежних версий восстановлена после разметки.
     let update = database.with_connection(|c| {
         c.execute("UPDATE homework_versions SET note = 'x'", [])?;
