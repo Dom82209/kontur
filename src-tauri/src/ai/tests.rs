@@ -1440,3 +1440,39 @@ fn prompt_typed_by_the_user_is_not_attributed_to_the_provider() {
     assert_eq!(prompt.provenance, Provenance::Manual);
     assert_eq!(serde_json::to_value(prompt.created_by).unwrap(), "user");
 }
+
+/// Этап 12: sentinel. CLI вне разрешённых каталогов (например, в `PATH`
+/// разработчика) никогда не находится и не запускается; без явного подключения
+/// задача готовится только для ручной передачи, провайдер не вызывается.
+#[test]
+fn sentinel_cli_outside_allowed_dirs_is_never_found_or_run() {
+    let env = env();
+    let outside = env._tmp.path().join("elsewhere/bin");
+    fs::create_dir_all(&outside).unwrap();
+    let sentinel = env._tmp.path().join("SENTINEL_CALLED");
+    for name in ["codex", "claude"] {
+        install(
+            &outside,
+            name,
+            &format!("#!/bin/sh\ntouch '{}'\nexit 0\n", sentinel.display()),
+        );
+    }
+    for provider in [ProviderId::Codex, ProviderId::Claude] {
+        let status = env.ai().status(provider).unwrap();
+        assert!(!status.cli.detected, "{provider:?}: {status:?}");
+        assert_ne!(status.availability, ProviderAvailability::Connected);
+        assert!(env.ai().connect(provider).is_err(), "нечего подключать");
+    }
+    let run = env.start(RunKind::AnalyzeMaterials, None);
+    let job = env
+        .ai()
+        .prepare(&run, AiTask::MaterialAnalysis, TransportPreference::Auto)
+        .unwrap();
+    assert_eq!(job.transport, Transport::ManualHandoff);
+    assert!(env.ai().begin_send(&job.id).is_err());
+    assert_eq!(env.fake.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        !sentinel.exists(),
+        "no CLI outside allowed dirs was executed"
+    );
+}

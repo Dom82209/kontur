@@ -197,6 +197,19 @@ export const AVAILABILITY_LABEL: Record<"connected" | "manual" | "unavailable" |
   error: "ошибка CLI",
 };
 
+/**
+ * Этап 12: честный режим аккаунта провайдера. «Не авторизован» — только когда
+ * CLI сам сообщил, что нужен вход; отсутствие CLI и ошибки проверки — отдельные
+ * состояния, а не «нет авторизации».
+ */
+export function providerAccountMode(status: { availability: "connected" | "manual" | "unavailable" | "error"; state: ProviderState }): { label: string; tone: "ok" | "info" | "warn" | "danger" } {
+  if (status.availability === "connected" && status.state === "connected") return { label: "подписка аккаунта", tone: "ok" };
+  if (status.state === "reauth_required") return { label: "не авторизован", tone: "warn" };
+  if (status.availability === "manual") return { label: "ручная передача", tone: "info" };
+  if (status.availability === "unavailable") return { label: "CLI недоступен — ручная передача", tone: "info" };
+  return { label: "ошибка проверки CLI", tone: "danger" };
+}
+
 export const PARSE_STATUS_LABEL: Record<"valid" | "partial" | "corrupt" | "empty", string> = {
   valid: "ответ распознан полностью",
   partial: "ответ распознан частично",

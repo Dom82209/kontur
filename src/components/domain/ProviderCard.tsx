@@ -3,7 +3,7 @@ import { ExternalLink, Plug, RefreshCw, ShieldCheck, Unplug } from "lucide-react
 import { useState } from "react";
 import { AI_TASK_LABEL, bridge, type ProviderStatus } from "../../lib/bridge";
 import { useOps } from "../../app/operations";
-import { AVAILABILITY_LABEL, formatRelative, providerName } from "../../lib/format";
+import { AVAILABILITY_LABEL, formatRelative, providerAccountMode, providerName } from "../../lib/format";
 import { ProviderStateLabel } from "../ui/StatusBadges";
 
 const ADAPTER: Record<ProviderStatus["adapter"], string> = { cli: "официальный CLI", desktop_app: "приложение", mock: "демо (mock)", manual_handoff: "ручная передача", unavailable: "CLI недоступен — ручная передача" };
@@ -45,11 +45,7 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
   const checkIsolation = () => act(() => bridge.runAiIsolationSelfTest());
   const openApp = () => act(() => bridge.openProviderApp(status.provider));
   const { cli, isolation } = status;
-  const accountMode = status.availability === "connected"
-    ? "подписка аккаунта"
-    : status.availability === "manual"
-      ? "ручная передача"
-      : "не авторизован";
+  const accountMode = providerAccountMode(status);
 
   const action = cli.enabled ? (
     <>
@@ -98,7 +94,7 @@ export function ProviderCard({ status, compact, selected, onSelect }: Props) {
           {status.availability === "manual" ? <span>{AVAILABILITY_LABEL.manual}</span> : <ProviderStateLabel state={status.state} />}
           {!compact && status.accountLabel && <span className="faint"> · {status.accountLabel}</span>}
         </div>
-        <div className="provider__roles"><span className={`badge ${status.availability === "connected" ? "badge--ok" : status.availability === "manual" ? "badge--info" : "badge--warn"}`}>{accountMode}</span></div>
+        <div className="provider__roles"><span className={`badge badge--${accountMode.tone}`}>{accountMode.label}</span></div>
         {!compact && (
           <div className="provider__roles">
             {status.tasks.map((t) => (
