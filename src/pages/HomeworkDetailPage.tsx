@@ -16,6 +16,7 @@ import { StyleCheckCard } from "../components/domain/StyleCheckCard";
 import { SubmissionPanel } from "../components/domain/SubmissionPanel";
 import { TeacherCommentsPanel } from "../components/domain/TeacherCommentsPanel";
 import { VersionComparePanel } from "../components/domain/VersionComparePanel";
+import { ContentComparePanel, CorrectionPlanPanel, VersionLineagePanel } from "../components/domain/VersionHistory";
 import { WorkflowRail } from "../components/domain/WorkflowRail";
 import { Dialog } from "../components/ui/Dialog";
 import { FileIcon } from "../components/ui/FileIcon";
@@ -470,6 +471,28 @@ export function HomeworkDetailPage() {
                 </div>
                 <div className="panel__body">
                   <VersionComparePanel fromId={compare[0]!} toId={compare[1]!} />
+                  <ContentComparePanel homework={h} ids={[compare[0]!, compare[1]!]} />
+                </div>
+              </section>
+            )}
+            {h.versions.length > 0 && (
+              <section className="panel">
+                <div className="panel__head">
+                  <h2 className="panel__title">Родословная версий</h2>
+                  <span className="panel__meta faint">Версии не меняются — решения записываются отдельно</span>
+                </div>
+                <div className="panel__body">
+                  <VersionLineagePanel homework={h} locked={locked} options={actions.options} onChanged={() => void wf.reloadAll()} />
+                </div>
+              </section>
+            )}
+            {h.versions.length > 0 && (
+              <section className="panel">
+                <div className="panel__head">
+                  <h2 className="panel__title">План исправлений</h2>
+                </div>
+                <div className="panel__body">
+                  <CorrectionPlanPanel homework={h} locked={locked} />
                 </div>
               </section>
             )}

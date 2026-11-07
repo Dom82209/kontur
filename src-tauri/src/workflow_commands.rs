@@ -399,6 +399,44 @@ pub async fn select_homework_version<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn accept_homework_version<R: Runtime>(
+    app: AppHandle<R>,
+    operation_id: String,
+    version_id: String,
+    reason: Option<String>,
+    expected_revision: Option<i64>,
+) -> Result<OperationResultDto<HomeworkDto>, AppError> {
+    blocking(move || {
+        let result = with_service(&app, |service| {
+            service.accept_version(
+                &meta(operation_id, expected_revision),
+                &version_id,
+                reason.as_deref().unwrap_or(""),
+            )
+        });
+        finish(&app, result)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reject_homework_version<R: Runtime>(
+    app: AppHandle<R>,
+    operation_id: String,
+    version_id: String,
+    reason: String,
+    expected_revision: Option<i64>,
+) -> Result<OperationResultDto<HomeworkDto>, AppError> {
+    blocking(move || {
+        let result = with_service(&app, |service| {
+            service.reject_version(&meta(operation_id, expected_revision), &version_id, &reason)
+        });
+        finish(&app, result)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn add_teacher_comments<R: Runtime>(
     app: AppHandle<R>,
     operation_id: String,

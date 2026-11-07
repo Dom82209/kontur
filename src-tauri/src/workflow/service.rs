@@ -126,6 +126,16 @@ pub struct VersionInput {
     pub author: Option<VersionAuthor>,
     pub prompt_id: Option<String>,
     pub note: Option<String>,
+    /// Этап 10: родитель (по умолчанию — текущая версия ДЗ), происхождение,
+    /// причина создания и проверка, по которой исправляли.
+    #[serde(default)]
+    pub parent_version_id: Option<String>,
+    #[serde(default)]
+    pub origin: Option<crate::dto::VersionOrigin>,
+    #[serde(default)]
+    pub creation_reason: Option<String>,
+    #[serde(default)]
+    pub review_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +177,37 @@ impl TeacherCommentInput {
             confirmed_official: false,
         }
     }
+}
+
+/// Версия становится итоговой; прежняя итоговая — заменённой этой версией.
+fn record_final(
+    connection: &rusqlite::Connection,
+    homework_id: &str,
+    version_id: &str,
+) -> Result<(), AppError> {
+    for previous in repository::final_decided_versions(connection, homework_id)? {
+        if previous != version_id {
+            repository::insert_version_decision(
+                connection,
+                homework_id,
+                &previous,
+                crate::dto::VersionDecision::Superseded,
+                "Итоговой назначена другая версия",
+                Some(version_id),
+            )?;
+        }
+    }
+    if repository::version_decision(connection, version_id)? != crate::dto::VersionDecision::Final {
+        repository::insert_version_decision(
+            connection,
+            homework_id,
+            version_id,
+            crate::dto::VersionDecision::Final,
+            "",
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 fn unknown_authority() -> CommentAuthority {
@@ -1535,6 +1576,31 @@ impl<'a> WorkflowService<'a> {
                         .map(|prompt| prompt.id.clone()),
                 };
                 let id = Uuid::new_v4().to_string();
+                let author = input.author.unwrap_or(VersionAuthor::User);
+                // Родитель — явно указанный или текущая версия; только своего ДЗ.
+                let parent = match &input.parent_version_id {
+                    Some(parent) => {
+                        if !snapshot.homework.versions.iter().any(|v| &v.id == parent) {
+                            return Err(BackendError::conflict(
+                                "Родительская версия должна принадлежать этому ДЗ",
+                            ));
+                        }
+                        Some(parent.clone())
+                    }
+                    None => snapshot.homework.final_version_id.clone(),
+                };
+                if let Some(run_id) = &input.review_run_id {
+                    if !snapshot.runs.iter().any(|run| &run.id == run_id) {
+                        return Err(BackendError::conflict("Проверка не относится к этому ДЗ"));
+                    }
+                }
+                let reason = input.creation_reason.as_deref().unwrap_or("").trim();
+                text_field(reason, "Причина создания", 2_000, false)?;
+                let origin = input.origin.unwrap_or(match author {
+                    VersionAuthor::Claude => crate::dto::VersionOrigin::ClaudeResult,
+                    VersionAuthor::Codex => crate::dto::VersionOrigin::CodexResult,
+                    VersionAuthor::User => crate::dto::VersionOrigin::UserImport,
+                });
                 repository::insert_version(
                     context.connection,
                     &repository::NewVersion {
@@ -1543,9 +1609,13 @@ impl<'a> WorkflowService<'a> {
                         main: &main,
                         files: &files,
                         note: input.note.as_deref().map(str::trim).filter(|note| !note.is_empty()),
-                        author: input.author.unwrap_or(VersionAuthor::User),
+                        author,
                         prompt_id: prompt_id.as_deref(),
                         source_bundle_id: None,
+                        parent_version_id: parent.as_deref(),
+                        origin,
+                        creation_reason: reason,
+                        review_run_id: input.review_run_id.as_deref(),
                     },
                 )?;
                 repository::set_current_version(context.connection, &context.homework_id, &id)?;
@@ -1588,10 +1658,98 @@ impl<'a> WorkflowService<'a> {
                         state_machine::stage_label(stage)
                     )));
                 }
+                if repository::version_decision(context.connection, version_id)?
+                    == crate::dto::VersionDecision::Rejected
+                {
+                    return Err(BackendError::blocked(
+                        "Версия отклонена — сначала примите её, затем назначайте итоговой",
+                    ));
+                }
                 repository::set_current_version(
                     context.connection,
                     &context.homework_id,
                     version_id,
+                )?;
+                record_final(context.connection, &context.homework_id, version_id)?;
+                Ok(EntityRef::Homework {
+                    id: context.homework_id.clone(),
+                })
+            },
+            read_homework,
+        )
+    }
+
+    /// Этап 10: принять версию (решение пользователя; версия не меняется).
+    pub fn accept_version(
+        &self,
+        meta: &CommandMeta,
+        version_id: &str,
+        reason: &str,
+    ) -> WorkflowResult<HomeworkDto> {
+        self.execute(
+            meta,
+            Spec {
+                command: "accept_homework_version",
+                kind: OperationKind::MarkFinal,
+                title: "Версия принята".to_owned(),
+            },
+            &(version_id, reason),
+            Target::Version(version_id),
+            |context| {
+                text_field(reason, "Комментарий", 2_000, false)?;
+                if repository::version_decision(context.connection, version_id)?
+                    == crate::dto::VersionDecision::Final
+                {
+                    return Err(BackendError::blocked("Версия уже итоговая"));
+                }
+                repository::insert_version_decision(
+                    context.connection,
+                    &context.homework_id,
+                    version_id,
+                    crate::dto::VersionDecision::Accepted,
+                    reason.trim(),
+                    None,
+                )?;
+                Ok(EntityRef::Homework {
+                    id: context.homework_id.clone(),
+                })
+            },
+            read_homework,
+        )
+    }
+
+    /// Этап 10: отклонить версию с причиной; версия остаётся в истории.
+    pub fn reject_version(
+        &self,
+        meta: &CommandMeta,
+        version_id: &str,
+        reason: &str,
+    ) -> WorkflowResult<HomeworkDto> {
+        self.execute(
+            meta,
+            Spec {
+                command: "reject_homework_version",
+                kind: OperationKind::MarkFinal,
+                title: "Версия отклонена".to_owned(),
+            },
+            &(version_id, reason),
+            Target::Version(version_id),
+            |context| {
+                text_field(reason, "Причина отклонения", 2_000, true)?;
+                let current = repository::homework_core(context.connection, &context.homework_id)?
+                    .final_version_id;
+                if current.as_deref() == Some(version_id) {
+                    return Err(BackendError::blocked(
+                        "Это текущая версия ДЗ — сначала назначьте итоговой другую версию",
+                    ));
+                }
+                repository::insert_version_decision(
+                    context.connection,
+                    &context.homework_id,
+                    version_id,
+                    crate::dto::VersionDecision::Rejected,
+                    reason.trim(),
+                    None,
                 )?;
                 Ok(EntityRef::Homework {
                     id: context.homework_id.clone(),
@@ -1907,6 +2065,12 @@ impl<'a> WorkflowService<'a> {
                     "Все обязательные проверки пройдены, подтверждено пользователем",
                     no_teacher_comments,
                 )?;
+                // Отметка готовности — решение пользователя: текущая версия итоговая.
+                let current = repository::homework_core(context.connection, &context.homework_id)?
+                    .final_version_id;
+                if let Some(version) = current.as_deref() {
+                    record_final(context.connection, &context.homework_id, version)?;
+                }
                 let inputs = super::fingerprint::current(context.connection, &context.homework_id)?;
                 repository::set_ready_fingerprint(
                     context.connection,

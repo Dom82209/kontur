@@ -312,6 +312,10 @@ fn version_input(file_id: &str) -> VersionInput {
         author: Some(VersionAuthor::Claude),
         prompt_id: None,
         note: None,
+        parent_version_id: None,
+        origin: None,
+        creation_reason: None,
+        review_run_id: None,
     }
 }
 
@@ -2458,4 +2462,400 @@ fn style_profile_change_invalidates_review_readiness_and_package() {
         .blockers()
         .contains(&ReadinessCheckId::InputsFresh));
     assert!(aggregate.submission_package.unwrap().stale);
+}
+
+// ───────────────────────── Этап 10: родословная и сравнение ─────────────────────────
+
+fn decision(flow: &Flow, version_id: &str) -> crate::dto::VersionLineageDto {
+    flow.snapshot()
+        .homework
+        .versions
+        .into_iter()
+        .find(|v| v.id == version_id)
+        .unwrap()
+        .lineage
+}
+
+impl Flow {
+    /// Нужны исправления → промт исправлений передан автору (этап «Решение»).
+    fn revise(&mut self) {
+        let review = self.review_run.clone().unwrap();
+        let prompt = self
+            .service()
+            .create_revision_prompt(&op(), &review, None)
+            .unwrap()
+            .value;
+        self.service().commit_prompt(&op(), &prompt.id).unwrap();
+        self.service().hand_off_prompt(&op(), &prompt.id).unwrap();
+    }
+
+    fn versions(&self) -> crate::versions::VersionService<'_> {
+        crate::versions::VersionService::new(&self.database, None)
+    }
+
+    /// Файл ДЗ с текстом в vault и версия из него (родитель — текущая версия).
+    fn text_version(&mut self, vault: &Vault, id: &str, path: &str, text: &str) -> String {
+        write_sample(vault, path, text);
+        let name = path.rsplit('/').next().unwrap();
+        self.database
+            .with_connection(|c| {
+                c.execute(
+                    "INSERT OR REPLACE INTO files(id, week_id, homework_id, category, name, kind, size_bytes, modified_at, relative_path)
+                     VALUES (?1, NULL, 'hw-1', 'homework_draft', ?2, 'text', 10, '2026-10-22T10:00:00Z', ?3)",
+                    params![id, name, path],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let version = self
+            .service()
+            .create_version(&op(), HW, &version_input(id))
+            .unwrap()
+            .value;
+        self.version = Some(version.id.clone());
+        version.id
+    }
+}
+
+use rusqlite::params;
+
+#[test]
+fn child_version_records_parent_origin_and_reason() {
+    let mut flow = Flow::new();
+    flow.advance_to_codex_review();
+    let first = flow.version.clone().unwrap();
+    let parent = decision(&flow, &first);
+    assert_eq!(parent.parent_version_id, None);
+    assert_eq!(parent.origin, crate::dto::VersionOrigin::ClaudeResult);
+    assert_eq!(parent.decision, crate::dto::VersionDecision::Pending);
+    assert!(parent.inputs_fingerprint.is_some());
+    let run = flow.review(&failing_review());
+    flow.revise();
+    let child = flow.service().create_version(
+        &op(),
+        HW,
+        &VersionInput {
+            creation_reason: Some("Исправлена формула выручки".into()),
+            review_run_id: Some(run.clone()),
+            origin: Some(crate::dto::VersionOrigin::ManualEdit),
+            author: Some(VersionAuthor::User),
+            ..version_input("draft-2")
+        },
+    );
+    let child = match child {
+        Ok(result) => result.value,
+        Err(error) => panic!("{error:?} на этапе {:?}", flow.stage()),
+    };
+    let lineage = child.lineage.clone();
+    assert_eq!(lineage.parent_version_id.as_deref(), Some(first.as_str()));
+    assert_eq!(lineage.origin, crate::dto::VersionOrigin::ManualEdit);
+    assert_eq!(lineage.creation_reason, "Исправлена формула выручки");
+    assert_eq!(lineage.review_run_id.as_deref(), Some(run.as_str()));
+    assert_eq!(lineage.created_by, "user");
+    let chain = flow.versions().lineage(HW, &child.id).unwrap();
+    assert_eq!(
+        chain.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(),
+        vec![first.as_str(), child.id.as_str()]
+    );
+}
+
+#[test]
+fn lineage_forbids_cycles_foreign_parents_and_mutation() {
+    let mut flow = Flow::new();
+    flow.advance_to_codex_review();
+    let first = flow.version.clone().unwrap();
+    // Версии неизменяемы: родителя нельзя переписать (и замкнуть цикл).
+    let update = flow.database.with_connection(|c| {
+        c.execute(
+            "UPDATE homework_versions SET parent_version_id = id WHERE id = ?1",
+            [&first],
+        )?;
+        Ok(())
+    });
+    assert!(update.is_err());
+    let rename = flow.database.with_connection(|c| {
+        c.execute(
+            "UPDATE homework_versions SET note = 'x' WHERE id = ?1",
+            [&first],
+        )?;
+        Ok(())
+    });
+    assert!(rename.is_err());
+    // Родитель — сама версия: запрещено триггером.
+    let self_parent = flow.database.with_connection(|c| {
+        c.execute(
+            "INSERT INTO homework_versions(id, homework_id, number, label, file_name, file_path, size_bytes,
+                source_file_id, author, files_json, parent_version_id)
+             SELECT 'loop', homework_id, 99, 'v99', file_name, file_path, size_bytes, source_file_id, author,
+                files_json, 'loop' FROM homework_versions WHERE id = ?1",
+            [&first],
+        )?;
+        Ok(())
+    });
+    assert!(self_parent.is_err());
+    // Родитель из другого ДЗ (или другого рабочего пространства — там этой версии нет).
+    flow.database
+        .with_connection(|c| {
+            c.execute_batch(
+                "INSERT INTO homeworks(id, week_id, ordinal, title, deadline, stage, workflow_stage, folder_path)
+                 SELECT 'hw-2', week_id, 99, 'Другое ДЗ', deadline, stage, workflow_stage, folder_path || '-2' FROM homeworks WHERE id = 'hw-1';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let foreign = flow.database.with_connection(|c| {
+        c.execute(
+            "INSERT INTO homework_versions(id, homework_id, number, label, file_name, file_path, size_bytes,
+                source_file_id, author, files_json, parent_version_id)
+             SELECT 'foreign', 'hw-2', 1, 'v01', file_name, file_path, size_bytes, source_file_id, author,
+                files_json, id FROM homework_versions WHERE id = ?1",
+            [&first],
+        )?;
+        Ok(())
+    });
+    assert!(foreign.is_err());
+    let error = flow
+        .service()
+        .create_version(
+            &op(),
+            HW,
+            &VersionInput {
+                parent_version_id: Some("version-from-other-workspace".into()),
+                ..version_input("draft-2")
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.error.code, ErrorCode::Conflict);
+}
+
+#[test]
+fn accept_reject_and_replace_final_with_invalidation() {
+    let (mut flow, vault) = ready_with_link();
+    let first = flow.version.clone().unwrap();
+    assert_eq!(
+        decision(&flow, &first).decision,
+        crate::dto::VersionDecision::Final
+    );
+    let package = flow.submission().build(HW).unwrap().value;
+    assert!(!package.stale);
+    // Ready → проверка преподавателя → снова проверка Codex: можно добавить версию.
+    flow.service()
+        .transition(&op(), HW, Stage::TeacherReview, None)
+        .unwrap();
+    flow.service()
+        .transition(&op(), HW, Stage::CodexReview, None)
+        .unwrap();
+    // Текущую версию нельзя отклонить, а отклонение требует причины.
+    let current = flow
+        .service()
+        .reject_version(&op(), &first, "плохо")
+        .unwrap_err();
+    assert_eq!(current.error.code, ErrorCode::Blocked);
+    let second = flow.text_version(
+        &vault,
+        "draft-md-2",
+        "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение2.md",
+        "# v2",
+    );
+    assert_eq!(
+        decision(&flow, &second).parent_version_id.as_deref(),
+        Some(first.as_str())
+    );
+    let third = flow.text_version(
+        &vault,
+        "draft-md-3",
+        "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение3.md",
+        "# v3",
+    );
+    assert!(flow.service().reject_version(&op(), &second, "  ").is_err());
+    flow.service()
+        .reject_version(&op(), &second, "Потеряны выводы")
+        .unwrap();
+    let rejected = decision(&flow, &second);
+    assert_eq!(rejected.decision, crate::dto::VersionDecision::Rejected);
+    assert_eq!(rejected.decision_reason.as_deref(), Some("Потеряны выводы"));
+    assert!(rejected.decided_at.is_some());
+    // Отклонённую версию нельзя назначить итоговой, пока её не примут.
+    assert_eq!(
+        flow.service()
+            .select_version(&op(), &second)
+            .unwrap_err()
+            .error
+            .code,
+        ErrorCode::Blocked
+    );
+    flow.service().accept_version(&op(), &second, "").unwrap();
+    assert_eq!(
+        decision(&flow, &second).decision,
+        crate::dto::VersionDecision::Accepted
+    );
+    // Замена итоговой: прежняя итоговая — «заменена», новая — «итоговая».
+    flow.service().select_version(&op(), &second).unwrap();
+    assert_eq!(
+        decision(&flow, &second).decision,
+        crate::dto::VersionDecision::Final
+    );
+    let superseded = decision(&flow, &first);
+    assert_eq!(superseded.decision, crate::dto::VersionDecision::Superseded);
+    assert_eq!(
+        superseded.superseded_by_version_id.as_deref(),
+        Some(second.as_str())
+    );
+    assert_eq!(
+        decision(&flow, &third).decision,
+        crate::dto::VersionDecision::Pending
+    );
+    // Существующий механизм этапа 7–8: проверки, готовность и комплект устарели.
+    let aggregate = flow.service().aggregate(HW).unwrap();
+    assert!(aggregate.submission_package.unwrap().stale);
+    assert!(!aggregate.readiness.blockers().is_empty());
+    // Журнал решений только дополняется.
+    let tamper = flow.database.with_connection(|c| {
+        c.execute("DELETE FROM version_decisions", [])?;
+        Ok(())
+    });
+    assert!(tamper.is_err());
+}
+
+#[test]
+fn stored_comparison_is_reused_and_becomes_stale_after_file_change() {
+    let mut flow = Flow::new();
+    let vault = flow.with_vault();
+    flow.advance_to_codex_review();
+    let a_path = "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение_a.md";
+    let b_path = "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение_b.md";
+    let a = flow.text_version(&vault, "md-a", a_path, "# Решение\n\nСреднее 10.\n");
+    let b = flow.text_version(
+        &vault,
+        "md-b",
+        b_path,
+        "# Решение\n\nСреднее 12.\n\n## Выводы\n\nЕсть рост.\n",
+    );
+    let first = flow.versions().compare(HW, &a, &b).unwrap();
+    assert!(!first.stale);
+    assert_eq!(
+        first.status,
+        crate::versions::diff::ComparisonStatus::Complete
+    );
+    assert!(first
+        .changes
+        .iter()
+        .any(|c| c.category == crate::versions::diff::ChangeCategory::Heading));
+    assert_eq!(
+        flow.versions().compare(HW, &a, &b).unwrap().id,
+        first.id,
+        "свежее сравнение переиспользуется"
+    );
+    assert!(flow.versions().compare(HW, &a, &a).is_err());
+    write_sample(&vault, b_path, "# Решение\n\nСреднее 13.\n");
+    assert!(flow.versions().comparison(&first.id).unwrap().stale);
+    let fresh = flow.versions().compare(HW, &a, &b).unwrap();
+    assert_ne!(fresh.id, first.id);
+    assert!(!fresh.stale);
+    // Сохранённые сравнения неизменяемы.
+    let tamper = flow.database.with_connection(|c| {
+        c.execute("UPDATE version_comparisons SET summary = 'x'", [])?;
+        Ok(())
+    });
+    assert!(tamper.is_err());
+}
+
+#[test]
+fn correction_plan_comes_from_current_review_and_requirements() {
+    use crate::versions::CorrectionStatus;
+    let mut flow = Flow::new();
+    let vault = flow.with_vault();
+    flow.advance_to_needs_fixes();
+    let version = flow.version.clone().unwrap();
+    let plan = flow.versions().build_plan(HW).unwrap();
+    assert_eq!(plan.version_id, version);
+    assert!(!plan.stale);
+    assert_eq!(plan.items.len(), 1);
+    let item = &plan.items[0];
+    assert_eq!(item.origin, "review");
+    assert_eq!(item.priority, "high");
+    assert_eq!(
+        item.status,
+        CorrectionStatus::Proposed,
+        "предложение AI ждёт подтверждения"
+    );
+    assert_eq!(item.location.as_deref(), Some("лист «Расчёт», B4"));
+    assert_eq!(item.linked_review_run_id, flow.review_run);
+    // Пока не подтверждено — нельзя отметить исправленным.
+    assert_eq!(
+        flow.versions()
+            .set_item_status(&item.id, CorrectionStatus::Resolved, Some(&version))
+            .unwrap_err()
+            .code,
+        ErrorCode::Blocked
+    );
+    flow.versions()
+        .set_item_status(&item.id, CorrectionStatus::Open, None)
+        .unwrap();
+    // Новое невыполненное требование делает план устаревшим; новый план его учитывает.
+    let comments = flow
+        .service()
+        .add_teacher_comments(
+            &op(),
+            HW,
+            &[comment(super::dto::CommentAuthority::TeacherOfficial, true)],
+        )
+        .unwrap()
+        .value;
+    flow.service()
+        .add_teacher_requirement(
+            &op(),
+            HW,
+            &TeacherRequirementInput {
+                comment_id: comments[0].id.clone(),
+                text: "Вывод отдельным листом".into(),
+                origin: "Да, отдельным листом".into(),
+                status: RequirementStatus::NotDone,
+                note: None,
+            },
+        )
+        .unwrap();
+    assert!(flow.versions().current_plan(HW).unwrap().unwrap().stale);
+    let plan = flow.versions().build_plan(HW).unwrap();
+    assert!(!plan.stale);
+    let requirement = plan
+        .items
+        .iter()
+        .find(|i| i.origin == "requirement")
+        .unwrap();
+    assert_eq!(requirement.status, CorrectionStatus::Open);
+    assert_eq!(requirement.priority, "high");
+    assert_eq!(requirement.source_requirement, "Вывод отдельным листом");
+    // Исправление связывается только с версией-потомком.
+    assert_eq!(
+        flow.versions()
+            .set_item_status(&requirement.id, CorrectionStatus::Resolved, Some(&version))
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    flow.revise();
+    let fixed = flow.text_version(
+        &vault,
+        "md-fix",
+        "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Исправлено.md",
+        "# Вывод",
+    );
+    let plan = flow
+        .versions()
+        .set_item_status(&requirement.id, CorrectionStatus::Resolved, Some(&fixed))
+        .unwrap();
+    let resolved = plan.items.iter().find(|i| i.id == requirement.id).unwrap();
+    assert_eq!(
+        resolved.resolved_in_version_id.as_deref(),
+        Some(fixed.as_str())
+    );
+    // Итоговая версия сменилась — план прежней версии устарел.
+    assert!(plan.stale);
+    // Содержимое пунктов неизменяемо.
+    let tamper = flow.database.with_connection(|c| {
+        c.execute("UPDATE correction_items SET issue = 'x'", [])?;
+        Ok(())
+    });
+    assert!(tamper.is_err());
 }

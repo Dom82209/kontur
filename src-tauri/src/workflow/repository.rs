@@ -293,6 +293,11 @@ pub struct NewVersion<'a> {
     pub author: VersionAuthor,
     pub prompt_id: Option<&'a str>,
     pub source_bundle_id: Option<&'a str>,
+    /// Этап 10: родословная.
+    pub parent_version_id: Option<&'a str>,
+    pub origin: crate::dto::VersionOrigin,
+    pub creation_reason: &'a str,
+    pub review_run_id: Option<&'a str>,
 }
 
 /// Append-only вставка: номер назначает backend внутри транзакции (`MAX + 1`),
@@ -309,14 +314,16 @@ pub fn insert_version(connection: &Connection, version: &NewVersion<'_>) -> Resu
     )?;
     let label = format!("v{number:02}");
     let files_json = json_text(&version.files, "homework_versions.files_json")?;
+    let inputs = super::fingerprint::current(connection, version.homework_id)?;
     connection
         .execute(
             "INSERT INTO homework_versions(
                 id, homework_id, number, label, file_path, size_bytes, author, metadata_json,
                 frozen, created_at, file_name, source_file_id, note, sections_json, prompt_id,
-                source_bundle_id, files_json
+                source_bundle_id, files_json, parent_version_id, origin, created_by,
+                creation_reason, review_run_id, inputs_fingerprint
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                       ?8, ?9, ?10, '[]', ?11, ?12, ?13)",
+                       ?8, ?9, ?10, '[]', ?11, ?12, ?13, ?14, ?15, ?7, ?16, ?17, ?18)",
             params![
                 version.id,
                 version.homework_id,
@@ -335,12 +342,78 @@ pub fn insert_version(connection: &Connection, version: &NewVersion<'_>) -> Resu
                 version.prompt_id,
                 version.source_bundle_id,
                 files_json,
+                version.parent_version_id,
+                version.origin.as_db(),
+                version.creation_reason,
+                version.review_run_id,
+                inputs.combined,
             ],
         )
         .map_err(|error| {
             map_write_error(error, "Версия с этим файлом или номером уже существует")
         })?;
     Ok(number)
+}
+
+/// Этап 10: запись решения пользователя о версии (журнал, только добавление).
+pub fn insert_version_decision(
+    connection: &Connection,
+    homework_id: &str,
+    version_id: &str,
+    decision: crate::dto::VersionDecision,
+    reason: &str,
+    superseded_by: Option<&str>,
+) -> Result<(), AppError> {
+    connection
+        .execute(
+            "INSERT INTO version_decisions(id, version_id, homework_id, decision, reason, superseded_by_version_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                version_id,
+                homework_id,
+                decision.as_db(),
+                reason,
+                superseded_by
+            ],
+        )
+        .map_err(|error| map_write_error(error, "Решение по версии не сохранено"))?;
+    Ok(())
+}
+
+/// Последнее решение по версии (или «ожидает»).
+pub fn version_decision(
+    connection: &Connection,
+    version_id: &str,
+) -> Result<crate::dto::VersionDecision, AppError> {
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT decision FROM version_decisions WHERE version_id = ?1
+              ORDER BY decided_at DESC, rowid DESC LIMIT 1",
+            [version_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value.as_deref().map_or(
+        crate::dto::VersionDecision::Pending,
+        crate::dto::VersionDecision::from_db,
+    ))
+}
+
+/// Версии, чьё последнее решение — «итоговая».
+pub fn final_decided_versions(
+    connection: &Connection,
+    homework_id: &str,
+) -> Result<Vec<String>, AppError> {
+    let mut statement = connection.prepare(
+        "SELECT v.id FROM homework_versions v WHERE v.homework_id = ?1 AND
+           (SELECT d.decision FROM version_decisions d WHERE d.version_id = v.id
+             ORDER BY d.decided_at DESC, d.rowid DESC LIMIT 1) = 'final'",
+    )?;
+    let rows = statement
+        .query_map([homework_id], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
 }
 
 /// Файлы ДЗ, которые можно оформить новой версией (черновики и итоговые файлы,

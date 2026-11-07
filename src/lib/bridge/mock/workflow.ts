@@ -62,6 +62,10 @@ import {
   type TransitionOption,
   type WorkflowCommandOptions,
   type VersionComparison,
+  type ContentComparison,
+  type CorrectionItem,
+  type CorrectionPlan,
+  type CorrectionStatus,
   type Week,
   type WorkflowRole,
 } from "../types";
@@ -70,6 +74,7 @@ import { kindFromName, pad2, providerName, SOURCE_KIND_LABEL, STYLE_REASON_LABEL
 import { at, buildSections, makeFile, previousWorks, STYLE_PROFILE_FILE, subjectName } from "./data";
 import { AI_TASK_LABEL, TASK_FOR_RUN, type AiConfirmation, type AiConfirmInput, type AiDraft, type AiJob, type AiTask, type TransportPreference } from "../ai-types";
 import { parseAiResponse } from "./ai-parse";
+import { lineageFor, mockContentComparison, recordFinal } from "./versions";
 
 /** Происхождение подтверждённого результата (этап 9). */
 interface ResultOrigin {
@@ -687,6 +692,166 @@ export class MockWorkflow {
     );
   }
 
+  // ── Этап 10: решения по версиям, сравнение содержимого, план исправлений ──
+
+  private plans: (Omit<CorrectionPlan, "stale"> & { reqKey: string })[] = [];
+
+  private versionOf(versionId: string): { h: Homework; v: HomeworkVersion } {
+    const h = this.ctx.homework().find((x) => x.versions.some((v) => v.id === versionId));
+    if (!h) throw new BridgeError("not_found", "Версия не найдена");
+    return { h, v: h.versions.find((v) => v.id === versionId)! };
+  }
+
+  async acceptVersion(versionId: string, reason = "", options?: WorkflowCommandOptions): Promise<OperationResult<Homework>> {
+    const { h, v } = this.versionOf(versionId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (v.lineage.decision === "final") throw new BridgeError("blocked", "Версия уже итоговая");
+    const op = await this.ctx.runOp("mark_final", `${v.label} принята`, reason.trim() || null, [], 1, () => {
+      v.lineage = { ...v.lineage, decision: "accepted", decisionReason: reason.trim() || null, decidedAt: new Date().toISOString(), supersededByVersionId: null };
+    }, null, h.id);
+    return { operation: op, value: clone(h) };
+  }
+
+  async rejectVersion(versionId: string, reason: string, options?: WorkflowCommandOptions): Promise<OperationResult<Homework>> {
+    const { h, v } = this.versionOf(versionId);
+    this.assertMutable(h);
+    this.checkRevision(h, options);
+    if (!reason.trim()) throw new BridgeError("conflict", "Укажите причину отклонения");
+    if (h.finalVersionId === versionId) throw new BridgeError("blocked", "Это текущая версия ДЗ — сначала назначьте итоговой другую версию");
+    const op = await this.ctx.runOp("mark_final", `${v.label} отклонена`, reason.trim(), [], 1, () => {
+      v.lineage = { ...v.lineage, decision: "rejected", decisionReason: reason.trim(), decidedAt: new Date().toISOString(), supersededByVersionId: null };
+    }, null, h.id);
+    return { operation: op, value: clone(h) };
+  }
+
+  async getVersionLineage(homeworkId: string, versionId: string): Promise<HomeworkVersion[]> {
+    const h = this.hw(homeworkId);
+    const chain: HomeworkVersion[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = versionId;
+    while (cursor) {
+      if (seen.has(cursor)) throw new BridgeError("conflict", "В родословной версий обнаружен цикл");
+      seen.add(cursor);
+      const v = h.versions.find((x) => x.id === cursor);
+      if (!v) throw new BridgeError("not_found", "Версия не найдена в этом ДЗ");
+      chain.unshift(v);
+      cursor = v.lineage.parentVersionId;
+    }
+    return clone(chain);
+  }
+
+  async compareVersionContents(homeworkId: string, baseVersionId: string, targetVersionId: string): Promise<ContentComparison> {
+    await this.ctx.wait(120);
+    const h = this.hw(homeworkId);
+    if (baseVersionId === targetVersionId) throw new BridgeError("conflict", "Выберите две разные версии");
+    const base = h.versions.find((v) => v.id === baseVersionId);
+    const target = h.versions.find((v) => v.id === targetVersionId);
+    if (!base || !target) throw new BridgeError("conflict", "Версия не относится к этому ДЗ");
+    return mockContentComparison(base, target);
+  }
+
+  private activeRequirements(h: Homework): TeacherRequirement[] {
+    return this.requirements.filter((r) => !r.withdrawnAt && (r.status === "not_done" || r.status === "manual") && this.comments.some((c) => c.id === r.commentId && c.homeworkId === h.id));
+  }
+
+  private currentReview(h: Homework): ReviewRun | null {
+    return (
+      this.runs
+        .filter((r) => r.homeworkId === h.id && (r.kind === "review_version" || r.kind === "review_teacher") && r.status === "completed" && r.versionId === h.finalVersionId && r.result)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null
+    );
+  }
+
+  private decoratePlan(h: Homework, plan: (typeof this.plans)[number]): CorrectionPlan {
+    const reqKey = this.activeRequirements(h).map((r) => `${r.id}|${r.status}`).sort().join(",");
+    const { reqKey: stored, ...rest } = plan;
+    return clone({ ...rest, stale: stored !== reqKey || h.finalVersionId !== plan.versionId || (this.currentReview(h)?.id ?? null) !== plan.reviewRunId });
+  }
+
+  async getCorrectionPlan(homeworkId: string): Promise<CorrectionPlan | null> {
+    const h = this.hw(homeworkId);
+    const plan = this.plans.filter((p) => p.homeworkId === h.id).at(-1);
+    return plan ? this.decoratePlan(h, plan) : null;
+  }
+
+  async buildCorrectionPlan(homeworkId: string): Promise<CorrectionPlan> {
+    await this.ctx.wait(150);
+    const h = this.hw(homeworkId);
+    this.assertMutable(h);
+    const versionId = h.finalVersionId;
+    if (!versionId) throw new BridgeError("blocked", "Сначала выберите итоговую версию");
+    const file = h.versions.find((v) => v.id === versionId)?.fileName ?? null;
+    const review = this.currentReview(h);
+    const now = new Date().toISOString();
+    const items: CorrectionItem[] = [];
+    const base = { file, evidence: "", linkedCommentId: null, linkedRequirementId: null, resolvedInVersionId: null, updatedAt: now };
+    if (review?.result) {
+      const findings = [...review.result.critical.map((f) => [f, "high", "Критическое замечание"] as const), ...review.result.remarks.map((f) => [f, "medium", "Замечание"] as const)];
+      for (const [f, priority, category] of findings)
+        items.push({
+          ...base,
+          id: uid("ci"),
+          position: items.length + 1,
+          category,
+          issue: f.text,
+          sourceRequirement: review.result.criteria.find((c) => c.id === f.criterion)?.label ?? f.criterion,
+          evidence: f.evidence.map((e) => `${e.fileName} — ${e.locator}`).join("; "),
+          location: f.location,
+          expectedChange: `Исправить: ${f.text}`,
+          acceptanceCriterion: "Повторная проверка новой версии не повторяет это замечание",
+          priority,
+          origin: "review",
+          status: "proposed",
+          linkedReviewRunId: review.id,
+        });
+    }
+    for (const r of this.activeRequirements(h))
+      items.push({
+        ...base,
+        id: uid("ci"),
+        position: items.length + 1,
+        category: "Требование преподавателя",
+        issue: r.status === "not_done" ? `Не выполнено: ${r.text}` : `Требует ручной проверки: ${r.text}`,
+        sourceRequirement: r.text,
+        evidence: r.origin,
+        location: null,
+        expectedChange: `Выполнить требование: ${r.text}`,
+        acceptanceCriterion: "Требование отмечено выполненным для новой версии",
+        priority: r.status === "not_done" ? "high" : "medium",
+        origin: "requirement",
+        status: "open",
+        linkedReviewRunId: null,
+        linkedCommentId: r.commentId,
+        linkedRequirementId: r.id,
+      });
+    if (items.length === 0) throw new BridgeError("blocked", "Нет замечаний текущей проверки и невыполненных требований — план не нужен");
+    const plan = { id: uid("plan"), homeworkId: h.id, versionId, reviewRunId: review?.id ?? null, createdAt: now, items, reqKey: this.activeRequirements(h).map((r) => `${r.id}|${r.status}`).sort().join(",") };
+    this.plans.push(plan);
+    return this.decoratePlan(h, plan);
+  }
+
+  async setCorrectionItemStatus(itemId: string, status: Exclude<CorrectionStatus, "proposed">, resolvedInVersionId?: string | null): Promise<CorrectionPlan> {
+    const plan = this.plans.find((p) => p.items.some((i) => i.id === itemId));
+    if (!plan) throw new BridgeError("not_found", "Пункт плана не найден");
+    const h = this.hw(plan.homeworkId);
+    this.assertMutable(h);
+    const item = plan.items.find((i) => i.id === itemId)!;
+    let resolved: string | null = null;
+    if (status === "resolved") {
+      if (item.status === "proposed") throw new BridgeError("blocked", "Сначала подтвердите предложенный пункт");
+      if (!resolvedInVersionId) throw new BridgeError("conflict", "Укажите версию, в которой исправлено");
+      const chain = await this.getVersionLineage(h.id, resolvedInVersionId);
+      if (resolvedInVersionId === plan.versionId || !chain.some((v) => v.id === plan.versionId))
+        throw new BridgeError("conflict", "Исправление связывается только с версией-потомком той, для которой строился план");
+      resolved = resolvedInVersionId;
+    }
+    item.status = status;
+    item.resolvedInVersionId = resolved;
+    item.updatedAt = new Date().toISOString();
+    return this.decoratePlan(h, plan);
+  }
+
   async compareVersions(fromVersionId: string, toVersionId: string): Promise<VersionComparison> {
     await this.ctx.wait(200);
     const h = this.ctx.homework().find((x) => x.versions.some((v) => v.id === fromVersionId));
@@ -925,6 +1090,8 @@ export class MockWorkflow {
       1,
       () => {
         this.setStage(h, "ready_to_submit", "Все обязательные проверки пройдены, подтверждено пользователем");
+        const current = h.versions.find((v) => v.id === h.finalVersionId);
+        if (current) recordFinal(h.versions, current);
         this.readyFingerprints.set(h.id, this.fingerprint(h.id));
       },
       () => this.setStage(h, prev, "Отметка «Готово к сдаче» отменена"),
@@ -1891,6 +2058,7 @@ export class MockWorkflow {
         sourceBundleId: null,
         files: [makeFile(fileName, workDir, created, 96_000 + n * 18_000), makeFile(`Пояснения_${label}.pdf`, workDir, created, 61_000 + n * 4_000)],
         frozen: true,
+        lineage: lineageFor("claude", n === 1 ? null : `${h.id}-v${n - 1}`, n === 1 ? "Первое решение по промту анализа" : "Исправления по проверке v01"),
       };
     };
 

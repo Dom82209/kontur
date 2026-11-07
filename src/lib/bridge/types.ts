@@ -921,6 +921,96 @@ export interface HomeworkVersion {
   files: FileRef[];
   /** Версии неизменяемы после создания. */
   frozen: true;
+  /** Этап 10: родословная и решение пользователя. */
+  lineage: VersionLineage;
+}
+
+/** Этап 10: происхождение версии. */
+export type VersionOrigin = "user_import" | "claude_result" | "codex_result" | "manual_edit" | "restored" | "other";
+/** Этап 10: решение пользователя (журнал только дополняется; без решения — pending). */
+export type VersionDecision = "pending" | "accepted" | "rejected" | "superseded" | "final";
+
+export interface VersionLineage {
+  /** null — первая версия или версия до этапа 10 (родитель неизвестен). */
+  parentVersionId: string | null;
+  origin: VersionOrigin;
+  createdBy: string;
+  creationReason: string;
+  /** Проверка, по которой исправляли. */
+  reviewRunId: string | null;
+  inputsFingerprint: string | null;
+  decision: VersionDecision;
+  decisionReason: string | null;
+  decidedAt: ISODate | null;
+  supersededByVersionId: string | null;
+}
+
+export type ContentChangeKind = "added" | "removed" | "modified" | "renamed";
+export type ContentChangeCategory = "file" | "text" | "heading" | "list" | "structure" | "page" | "sheet" | "cell" | "formula" | "binary";
+export type ContentComparisonStatus = "identical" | "complete" | "partial" | "manual_required";
+
+export interface ContentChange {
+  kind: ContentChangeKind;
+  category: ContentChangeCategory;
+  file: string;
+  /** Раздел, страница или «Лист!A1». */
+  location: string | null;
+  before: string | null;
+  after: string | null;
+  detail: string | null;
+}
+
+/** Этап 10: структурное сравнение содержимого (только фрагменты, без полных текстов). */
+export interface ContentComparison {
+  id: string;
+  homeworkId: string;
+  baseVersionId: string;
+  targetVersionId: string;
+  baseFingerprint: string;
+  targetFingerprint: string;
+  extractorVersion: number;
+  status: ContentComparisonStatus;
+  summary: string;
+  changes: ContentChange[];
+  warnings: string[];
+  manualChecks: string[];
+  createdAt: ISODate;
+  /** Файлы версий или алгоритм изменились после сравнения. */
+  stale: boolean;
+}
+
+export type CorrectionStatus = "proposed" | "open" | "resolved" | "dismissed";
+
+export interface CorrectionItem {
+  id: string;
+  position: number;
+  category: string;
+  issue: string;
+  sourceRequirement: string;
+  evidence: string;
+  file: string | null;
+  location: string | null;
+  expectedChange: string;
+  acceptanceCriterion: string;
+  priority: "high" | "medium" | "low";
+  origin: "review" | "requirement";
+  status: CorrectionStatus;
+  linkedReviewRunId: string | null;
+  linkedCommentId: string | null;
+  linkedRequirementId: string | null;
+  resolvedInVersionId: string | null;
+  updatedAt: ISODate;
+}
+
+/** Этап 10: план исправлений из текущей проверки и действующих требований. */
+export interface CorrectionPlan {
+  id: string;
+  homeworkId: string;
+  versionId: string;
+  reviewRunId: string | null;
+  createdAt: ISODate;
+  items: CorrectionItem[];
+  stale: boolean;
 }
 
 export interface Homework {
@@ -1323,6 +1413,14 @@ export interface DesktopBridge {
   saveRunAsIteration(runId: string, options?: WorkflowCommandOptions): Promise<ReviewRun>;
   getIterations(homeworkId: string): Promise<HomeworkIteration[]>;
   compareVersions(fromVersionId: string, toVersionId: string): Promise<VersionComparison>;
+  /** Этап 10: решение пользователя по версии; версия при этом не меняется. */
+  acceptVersion(versionId: string, reason?: string, options?: WorkflowCommandOptions): Promise<OperationResult<Homework>>;
+  rejectVersion(versionId: string, reason: string, options?: WorkflowCommandOptions): Promise<OperationResult<Homework>>;
+  getVersionLineage(homeworkId: string, versionId: string): Promise<HomeworkVersion[]>;
+  compareVersionContents(homeworkId: string, baseVersionId: string, targetVersionId: string): Promise<ContentComparison>;
+  getCorrectionPlan(homeworkId: string): Promise<CorrectionPlan | null>;
+  buildCorrectionPlan(homeworkId: string): Promise<CorrectionPlan>;
+  setCorrectionItemStatus(itemId: string, status: Exclude<CorrectionStatus, "proposed">, resolvedInVersionId?: string | null): Promise<CorrectionPlan>;
   /** Явное подтверждение пользователем расхождения со стилем выше применённого порога. */
   confirmStyleDivergence(reviewRunId: string, options?: WorkflowCommandOptions): Promise<OperationResult<StyleConfirmation>>;
   /** Допустимый переход этапа (возвраты и решения пользователя) — проверяет backend state machine. */

@@ -111,6 +111,13 @@ export interface TauriIpcClient {
   handOffPrompt: typeof ipc.handOffPrompt;
   createHomeworkVersion: typeof ipc.createHomeworkVersion;
   selectHomeworkVersion: typeof ipc.selectHomeworkVersion;
+  acceptHomeworkVersion: typeof ipc.acceptHomeworkVersion;
+  rejectHomeworkVersion: typeof ipc.rejectHomeworkVersion;
+  getVersionLineage: typeof ipc.getVersionLineage;
+  compareVersionContents: typeof ipc.compareVersionContents;
+  getCorrectionPlan: typeof ipc.getCorrectionPlan;
+  buildCorrectionPlan: typeof ipc.buildCorrectionPlan;
+  setCorrectionItemStatus: typeof ipc.setCorrectionItemStatus;
   addTeacherComments: typeof ipc.addTeacherComments;
   addTeacherRequirement: typeof ipc.addTeacherRequirement;
   resolveTeacherRequirement: typeof ipc.resolveTeacherRequirement;
@@ -300,6 +307,19 @@ export class TauriDesktopBridge implements DesktopBridge {
     const { operationId, revision } = command(options);
     return this.ipcClient.selectHomeworkVersion(operationId, versionId, revision);
   };
+  acceptVersion: DesktopBridge["acceptVersion"] = (versionId, reason, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.acceptHomeworkVersion(operationId, versionId, reason ?? null, revision);
+  };
+  rejectVersion: DesktopBridge["rejectVersion"] = (versionId, reason, options) => {
+    const { operationId, revision } = command(options);
+    return this.ipcClient.rejectHomeworkVersion(operationId, versionId, reason, revision);
+  };
+  getVersionLineage: DesktopBridge["getVersionLineage"] = (homeworkId, versionId) => this.ipcClient.getVersionLineage(homeworkId, versionId);
+  compareVersionContents: DesktopBridge["compareVersionContents"] = (homeworkId, base, target) => this.ipcClient.compareVersionContents(homeworkId, base, target);
+  getCorrectionPlan: DesktopBridge["getCorrectionPlan"] = (homeworkId) => this.ipcClient.getCorrectionPlan(homeworkId);
+  buildCorrectionPlan: DesktopBridge["buildCorrectionPlan"] = (homeworkId) => this.ipcClient.buildCorrectionPlan(homeworkId);
+  setCorrectionItemStatus: DesktopBridge["setCorrectionItemStatus"] = (itemId, status, version) => this.ipcClient.setCorrectionItemStatus(itemId, status, version ?? null);
   getStyleProfile: DesktopBridge["getStyleProfile"] = () => this.ipcClient.getStyleProfile();
   getStyleProfileState: DesktopBridge["getStyleProfileState"] = () => this.ipcClient.getStyleProfileState();
   addStyleSource: DesktopBridge["addStyleSource"] = (path, kind, language) => this.ipcClient.addStyleSource(path, kind, language);

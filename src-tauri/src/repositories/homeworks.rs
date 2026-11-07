@@ -4,7 +4,10 @@ use rusqlite::{params, Connection};
 
 use crate::{
     domain::{HomeworkStage, HomeworkWorkflowStage, VersionAuthor},
-    dto::{FileKind, FileRefDto, HomeworkDto, HomeworkVersionDto, VersionSectionDto},
+    dto::{
+        FileKind, FileRefDto, HomeworkDto, HomeworkVersionDto, VersionDecision, VersionLineageDto,
+        VersionOrigin, VersionSectionDto,
+    },
     error::BackendError,
 };
 
@@ -47,6 +50,7 @@ struct VersionRow {
     source_bundle_id: Option<String>,
     files_json: String,
     frozen: bool,
+    lineage: VersionLineageDto,
 }
 
 impl ReadRepository<'_> {
@@ -181,7 +185,17 @@ fn version_rows(
 ) -> Result<Vec<VersionRow>, BackendError> {
     let base = "SELECT id, homework_id, number, label, file_name, file_path, size_bytes,
                        created_at, source_file_id, note, sections_json, author, prompt_id,
-                       source_bundle_id, files_json, frozen
+                       source_bundle_id, files_json, frozen,
+                       parent_version_id, origin, created_by, creation_reason, review_run_id,
+                       inputs_fingerprint,
+                       (SELECT decision FROM version_decisions d WHERE d.version_id = homework_versions.id
+                         ORDER BY d.decided_at DESC, d.rowid DESC LIMIT 1),
+                       (SELECT reason FROM version_decisions d WHERE d.version_id = homework_versions.id
+                         ORDER BY d.decided_at DESC, d.rowid DESC LIMIT 1),
+                       (SELECT decided_at FROM version_decisions d WHERE d.version_id = homework_versions.id
+                         ORDER BY d.decided_at DESC, d.rowid DESC LIMIT 1),
+                       (SELECT superseded_by_version_id FROM version_decisions d WHERE d.version_id = homework_versions.id
+                         ORDER BY d.decided_at DESC, d.rowid DESC LIMIT 1)
                 FROM homework_versions";
     let sql = if homework_id.is_some() {
         format!("{base} WHERE homework_id = ?1 ORDER BY number, id")
@@ -213,6 +227,21 @@ fn version_rows(
             source_bundle_id: row.get(13)?,
             files_json: row.get(14)?,
             frozen: row.get::<_, i64>(15)? == 1,
+            lineage: VersionLineageDto {
+                parent_version_id: row.get(16)?,
+                origin: VersionOrigin::from_db(&row.get::<_, String>(17)?),
+                created_by: row.get(18)?,
+                creation_reason: row.get(19)?,
+                review_run_id: row.get(20)?,
+                inputs_fingerprint: row.get(21)?,
+                decision: row
+                    .get::<_, Option<String>>(22)?
+                    .as_deref()
+                    .map_or(VersionDecision::Pending, VersionDecision::from_db),
+                decision_reason: row.get(23)?,
+                decided_at: row.get(24)?,
+                superseded_by_version_id: row.get(25)?,
+            },
         });
     }
     Ok(output)
@@ -271,6 +300,7 @@ fn hydrate_version(row: VersionRow) -> Result<HomeworkVersionDto, BackendError> 
         source_bundle_id: row.source_bundle_id,
         files,
         frozen: row.frozen,
+        lineage: row.lineage,
     })
 }
 

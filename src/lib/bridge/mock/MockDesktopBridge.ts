@@ -75,6 +75,7 @@ import { validateNamePattern } from "../../naming";
 import { lmsUrlProblem } from "../../lmsLinks";
 import { newOperationId } from "../intake";
 import { MockWorkflow, type MockContext } from "./workflow";
+import { lineageFor, recordFinal } from "./versions";
 import { MockLms } from "./lms";
 import { MockExtraction } from "./extraction";
 
@@ -964,6 +965,7 @@ export class MockDesktopBridge implements DesktopBridge {
         makeFile(`Пояснения_${label}.pdf`, workDir, now, 64_000 + number * 4_000),
       ],
       frozen: true,
+      lineage: lineageFor(meta.author ?? "user", h.finalVersionId ?? prev?.id ?? null, meta.note ?? (meta.promptId ? "Решение по промту" : "Добавлена пользователем")),
     };
     // Версии неизменяемы и не удаляются — операция не отменяется.
     const op = await this.runOp(
@@ -992,6 +994,7 @@ export class MockDesktopBridge implements DesktopBridge {
     if (h.stage === "submitted") throw new BridgeError("immutable", "ДЗ отправлено — итоговую версию менять нельзя");
     if (h.finalVersionId === versionId) throw new BridgeError("conflict", "Эта версия уже итоговая");
     const v = h.versions.find((x) => x.id === versionId)!;
+    if (v.lineage.decision === "rejected") throw new BridgeError("blocked", "Версия отклонена — сначала примите её, затем назначайте итоговой");
     const ext = v.fileName.split(".").pop() ?? "pdf";
     const name = finalName(this.rules.finalNamePattern, h.weekNumber, h.subjectId, ext, v.label);
     const snapshot = { finalVersionId: h.finalVersionId, finalFileName: h.finalFileName, stage: h.stage };
@@ -1005,6 +1008,7 @@ export class MockDesktopBridge implements DesktopBridge {
         h.finalVersionId = versionId;
         h.finalFileName = name;
         h.stage = "ready";
+        recordFinal(h.versions, v);
       },
       () => Object.assign(h, snapshot),
       null,
@@ -1170,6 +1174,13 @@ export class MockDesktopBridge implements DesktopBridge {
   saveRunAsIteration: DesktopBridge["saveRunAsIteration"] = (...a) => this.workflow.saveRunAsIteration(...a);
   getIterations: DesktopBridge["getIterations"] = (...a) => this.workflow.getIterations(...a);
   compareVersions: DesktopBridge["compareVersions"] = (...a) => this.workflow.compareVersions(...a);
+  acceptVersion: DesktopBridge["acceptVersion"] = (...a) => this.workflow.acceptVersion(...a);
+  rejectVersion: DesktopBridge["rejectVersion"] = (...a) => this.workflow.rejectVersion(...a);
+  getVersionLineage: DesktopBridge["getVersionLineage"] = (...a) => this.workflow.getVersionLineage(...a);
+  compareVersionContents: DesktopBridge["compareVersionContents"] = (...a) => this.workflow.compareVersionContents(...a);
+  getCorrectionPlan: DesktopBridge["getCorrectionPlan"] = (...a) => this.workflow.getCorrectionPlan(...a);
+  buildCorrectionPlan: DesktopBridge["buildCorrectionPlan"] = (...a) => this.workflow.buildCorrectionPlan(...a);
+  setCorrectionItemStatus: DesktopBridge["setCorrectionItemStatus"] = (...a) => this.workflow.setCorrectionItemStatus(...a);
   getTeacherComments: DesktopBridge["getTeacherComments"] = (...a) => this.workflow.getTeacherComments(...a);
   saveTeacherComments: DesktopBridge["saveTeacherComments"] = (...a) => this.workflow.saveTeacherComments(...a);
   importTeacherTranscript: DesktopBridge["importTeacherTranscript"] = (...a) => this.workflow.importTeacherTranscript(...a);

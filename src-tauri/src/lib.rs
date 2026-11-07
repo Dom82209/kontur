@@ -33,6 +33,8 @@ mod subject_commands;
 pub mod subjects;
 pub mod submission;
 mod submission_commands;
+pub mod version_commands;
+pub mod versions;
 pub mod workflow;
 mod workflow_commands;
 pub mod workspace;
@@ -160,6 +162,14 @@ pub fn run() {
             workflow_commands::get_dashboard,
             workflow_commands::get_iterations,
             workflow_commands::compare_versions,
+            workflow_commands::accept_homework_version,
+            workflow_commands::reject_homework_version,
+            version_commands::get_version_lineage,
+            version_commands::compare_version_contents,
+            version_commands::get_version_comparison,
+            version_commands::get_correction_plan,
+            version_commands::build_correction_plan,
+            version_commands::set_correction_item_status,
             workflow_commands::get_homework_candidates,
             workflow_commands::create_source_bundle,
             workflow_commands::start_workflow_run,

@@ -53,6 +53,12 @@
 - `cargo test style::`, `style_sources_are_explicit`, `style_check_reports_score_fragments`, `style_profile_change_invalidates` — источники, ревизии, статусы, фрагменты, устаревание (TempDir, без настоящего Obsidian).
 - `src/lib/bridge/mock/style.test.ts` — те же правила в mock.
 
+## Версии: родословная и сравнение (этап 10)
+
+- `cargo test versions::` — сравнение текста, Markdown, PDF с текстом и без, Excel (листы, значения, формулы, типы), наборов файлов, неподдерживаемых форматов, устаревание.
+- `child_version_records_parent_origin_and_reason`, `lineage_forbids_cycles_foreign_parents_and_mutation`, `accept_reject_and_replace_final_with_invalidation`, `stored_comparison_is_reused_and_becomes_stale_after_file_change`, `correction_plan_comes_from_current_review_and_requirements`, `schema_v18_upgrade_gives_legacy_versions_clear_origin_and_no_parent` (TempDir, без настоящего Obsidian).
+- `src/lib/bridge/mock/versions.test.ts` — те же правила в mock.
+
 ## Полный набор
 
 ```bash

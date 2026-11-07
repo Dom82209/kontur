@@ -159,6 +159,10 @@ pub(crate) fn add_version(database: &Database, id: &str, file_id: &str) -> i64 {
                     author: VersionAuthor::User,
                     prompt_id: None,
                     source_bundle_id: None,
+                    parent_version_id: None,
+                    origin: crate::dto::VersionOrigin::UserImport,
+                    creation_reason: "",
+                    review_run_id: None,
                 },
             )
         })
@@ -665,6 +669,10 @@ fn versions_are_append_only_with_backend_numbering() {
                 author: VersionAuthor::User,
                 prompt_id: None,
                 source_bundle_id: None,
+                parent_version_id: None,
+                origin: crate::dto::VersionOrigin::UserImport,
+                creation_reason: "",
+                review_run_id: None,
             },
         )
     });

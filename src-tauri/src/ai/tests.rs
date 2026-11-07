@@ -318,6 +318,10 @@ impl Env {
                     author: None,
                     prompt_id: None,
                     note: None,
+                    parent_version_id: None,
+                    origin: None,
+                    creation_reason: None,
+                    review_run_id: None,
                 },
             )
             .unwrap()

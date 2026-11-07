@@ -29,6 +29,9 @@ import type {
   TeacherRequirementInput,
   VersionAuthor,
   VersionComparison,
+  ContentComparison,
+  CorrectionPlan,
+  CorrectionStatus,
   AutomationRules,
   ClassificationPatch,
   CorpusPreview,
@@ -602,6 +605,34 @@ export function createHomeworkVersion(
   expectedRevision: Revision,
 ): Promise<OperationResult<HomeworkVersion>> {
   return call("create_homework_version", { operationId, homeworkId, input, expectedRevision });
+}
+
+export function acceptHomeworkVersion(operationId: string, versionId: string, reason: string | null, expectedRevision: Revision): Promise<OperationResult<Homework>> {
+  return call("accept_homework_version", { operationId, versionId, reason, expectedRevision });
+}
+
+export function rejectHomeworkVersion(operationId: string, versionId: string, reason: string, expectedRevision: Revision): Promise<OperationResult<Homework>> {
+  return call("reject_homework_version", { operationId, versionId, reason, expectedRevision });
+}
+
+export function getVersionLineage(homeworkId: string, versionId: string): Promise<HomeworkVersion[]> {
+  return call("get_version_lineage", { homeworkId, versionId });
+}
+
+export function compareVersionContents(homeworkId: string, baseVersionId: string, targetVersionId: string): Promise<ContentComparison> {
+  return call("compare_version_contents", { homeworkId, baseVersionId, targetVersionId });
+}
+
+export function getCorrectionPlan(homeworkId: string): Promise<CorrectionPlan | null> {
+  return call("get_correction_plan", { homeworkId });
+}
+
+export function buildCorrectionPlan(homeworkId: string): Promise<CorrectionPlan> {
+  return call("build_correction_plan", { homeworkId });
+}
+
+export function setCorrectionItemStatus(itemId: string, status: CorrectionStatus, resolvedInVersionId: string | null): Promise<CorrectionPlan> {
+  return call("set_correction_item_status", { itemId, status, resolvedInVersionId });
 }
 
 export function selectHomeworkVersion(operationId: string, versionId: string, expectedRevision: Revision): Promise<OperationResult<Homework>> {

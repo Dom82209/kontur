@@ -324,6 +324,89 @@ pub struct HomeworkVersionDto {
     pub source_bundle_id: Option<String>,
     pub files: Vec<FileRefDto>,
     pub frozen: bool,
+    /// Этап 10: происхождение версии и решение пользователя.
+    pub lineage: VersionLineageDto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionOrigin {
+    UserImport,
+    ClaudeResult,
+    CodexResult,
+    ManualEdit,
+    Restored,
+    Other,
+}
+
+impl VersionOrigin {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::UserImport => "user_import",
+            Self::ClaudeResult => "claude_result",
+            Self::CodexResult => "codex_result",
+            Self::ManualEdit => "manual_edit",
+            Self::Restored => "restored",
+            Self::Other => "other",
+        }
+    }
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "user_import" => Self::UserImport,
+            "claude_result" => Self::ClaudeResult,
+            "codex_result" => Self::CodexResult,
+            "manual_edit" => Self::ManualEdit,
+            "restored" => Self::Restored,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionDecision {
+    Pending,
+    Accepted,
+    Rejected,
+    Superseded,
+    Final,
+}
+
+impl VersionDecision {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Superseded => "superseded",
+            Self::Final => "final",
+        }
+    }
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "accepted" => Self::Accepted,
+            "rejected" => Self::Rejected,
+            "superseded" => Self::Superseded,
+            "final" => Self::Final,
+            _ => Self::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionLineageDto {
+    pub parent_version_id: Option<String>,
+    pub origin: VersionOrigin,
+    pub created_by: String,
+    pub creation_reason: String,
+    pub review_run_id: Option<String>,
+    pub inputs_fingerprint: Option<String>,
+    /// Последнее решение пользователя (по журналу `version_decisions`).
+    pub decision: VersionDecision,
+    pub decision_reason: Option<String>,
+    pub decided_at: Option<String>,
+    pub superseded_by_version_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

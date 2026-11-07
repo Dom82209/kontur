@@ -332,3 +332,90 @@ fn schema_v16_upgrade_keeps_legacy_package_as_revision_one() {
         .unwrap();
     assert_eq!(receipt, "pkg");
 }
+
+#[test]
+fn schema_v18_upgrade_gives_legacy_versions_clear_origin_and_no_parent() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v17-versions.sqlite3");
+    {
+        let mut connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        let migrations = [
+            include_str!("db/migrations/v1.sql"),
+            include_str!("db/migrations/v2.sql"),
+            include_str!("db/migrations/v3.sql"),
+            include_str!("db/migrations/v4.sql"),
+            include_str!("db/migrations/v5.sql"),
+            include_str!("db/migrations/v6.sql"),
+            include_str!("db/migrations/v7.sql"),
+            include_str!("db/migrations/v8.sql"),
+            include_str!("db/migrations/v9.sql"),
+            include_str!("db/migrations/v10.sql"),
+            include_str!("db/migrations/v11.sql"),
+            include_str!("db/migrations/v12.sql"),
+            include_str!("db/migrations/v13.sql"),
+            include_str!("db/migrations/v14.sql"),
+            include_str!("db/migrations/v15.sql"),
+            include_str!("db/migrations/v16.sql"),
+            include_str!("db/migrations/v17.sql"),
+        ];
+        for (index, sql) in migrations.iter().enumerate() {
+            let transaction = connection.transaction().unwrap();
+            transaction.execute_batch(sql).unwrap();
+            transaction
+                .pragma_update(None, "user_version", index as i64 + 1)
+                .unwrap();
+            transaction.commit().unwrap();
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO subjects(id,name,short_name,folder_path) VALUES ('s','Стат','С','Предметы/Стат');
+                 INSERT INTO weeks(id,subject_id,number,starts_at,ends_at,folder_path) VALUES ('w1','s',1,'','','Предметы/Стат/Неделя 01');
+                 INSERT INTO homeworks(id,week_id,title,deadline,stage,workflow_stage,folder_path) VALUES
+                   ('h1','w1','ДЗ 1',NULL,'in_progress','review','Предметы/Стат/Неделя 01/03 ДЗ');
+                 INSERT INTO files(id,week_id,homework_id,category,name,kind,size_bytes,relative_path) VALUES
+                   ('f1','w1','h1','homework_draft','a.md','text',1,'Предметы/Стат/Неделя 01/03 ДЗ/02 Работа/a.md');
+                 INSERT INTO homework_versions(id,homework_id,number,label,file_path,size_bytes,author,file_name,source_file_id,sections_json,files_json)
+                   VALUES ('v1','h1',1,'v01','Предметы/Стат/Неделя 01/03 ДЗ/02 Работа/a.md',1,'claude','a.md','f1','[]','[]'),
+                          ('v2','h1',2,'v02','Предметы/Стат/Неделя 01/03 ДЗ/02 Работа/b.md',1,'user','b.md','f1','[]','[]');",
+            )
+            .unwrap();
+    }
+    let database = Database::open_file(&path).unwrap();
+    database.migrate().unwrap();
+    let versions = database
+        .with_connection(|c| crate::workflow::repository::homework_dto(c, "h1"))
+        .unwrap()
+        .versions;
+    assert_eq!(versions.len(), 2);
+    for version in &versions {
+        assert_eq!(
+            version.lineage.parent_version_id, None,
+            "родитель прежних версий неизвестен"
+        );
+        assert!(version
+            .lineage
+            .creation_reason
+            .contains("родитель неизвестен"));
+        assert_eq!(
+            version.lineage.decision,
+            crate::dto::VersionDecision::Pending
+        );
+    }
+    assert_eq!(
+        versions[0].lineage.origin,
+        crate::dto::VersionOrigin::ClaudeResult
+    );
+    assert_eq!(
+        versions[1].lineage.origin,
+        crate::dto::VersionOrigin::UserImport
+    );
+    // Неизменяемость прежних версий восстановлена после разметки.
+    let update = database.with_connection(|c| {
+        c.execute("UPDATE homework_versions SET note = 'x'", [])?;
+        Ok(())
+    });
+    assert!(update.is_err());
+}

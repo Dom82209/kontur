@@ -1,5 +1,6 @@
 import { applyNamePattern } from "../../naming";
 import { kindFromName, pad2 } from "../../format";
+import { legacyLineage } from "./versions";
 import { CATEGORY_FOLDER, INBOX_FOLDER, homeworkFolderForWeek, weekFolderForSubject } from "../../paths";
 
 export { CATEGORY_FOLDER, kindFromName, pad2 };
@@ -170,6 +171,7 @@ function versions(hwId: string, subjectId: string, week: number, base: string, e
       sourceBundleId: null,
       files: [makeFile(fileName, `${weekFolder(subjectId, week)}/03 ДЗ/02 Работа`, at(-startDaysAgo + i - 1, 20 + i, 10), 90_000 + i * 21_000)],
       frozen: true,
+      lineage: legacyLineage("user"),
     });
   }
   return out;
