@@ -82,7 +82,7 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={value}>
-      <MotionConfig reducedMotion={reduceMotion ? "always" : "never"} transition={{ type: "spring", stiffness: 420, damping: 38, mass: 0.9 }}>
+      <MotionConfig reducedMotion={reduceMotion ? "always" : "never"} transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 420, damping: 38, mass: 0.9 }}>
         {children}
       </MotionConfig>
     </Ctx.Provider>

@@ -32,7 +32,7 @@ export function Skeleton({ h = 14, w = "100%", style }: { h?: number; w?: number
 
 export function SkeletonRows({ count = 4 }: { count?: number }) {
   return (
-    <div style={{ display: "grid", gap: 10, padding: "6px 10px" }} aria-busy="true" aria-label="Загрузка">
+    <div style={{ display: "grid", gap: 10, padding: "6px 10px" }} role="status" aria-busy="true" aria-label="Загрузка">
       {Array.from({ length: count }, (_, i) => (
         <div key={i} style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <Skeleton h={30} w={30} />

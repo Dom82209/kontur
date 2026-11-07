@@ -72,6 +72,10 @@
   width: var(--btn-h);
   padding: 0;
 }
+/* Кольцо фокуса не должно пропадать из-за box-shadow вариантов кнопки. */
+.btn:focus-visible {
+  box-shadow: var(--focus);
+}
 .btn .kbd {
   margin-left: 2px;
 }

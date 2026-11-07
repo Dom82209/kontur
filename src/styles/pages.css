@@ -1309,10 +1309,10 @@
 .wfrail__stage[data-status="blocked"] .wfrail__node::after { content: ""; width: 6px; height: 1px; background: var(--danger); transform: rotate(-45deg); }
 .wfrail__marker { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .wfrail__check { width: 9px; height: 9px; color: var(--accent-ink); stroke-width: 3; }
-.wfrail__label { display: block; width: calc(100% - 8px); max-width: 104px; margin: 8px auto 0; font-size: 10.5px; line-height: 1.18; overflow-wrap: break-word; }
+.wfrail__label { display: block; width: calc(100% - 8px); max-width: 104px; margin: 8px auto 0; font-size: 11px; line-height: 1.18; overflow-wrap: break-word; }
 .wfrail__stage[data-status="current"] .wfrail__label { color: var(--text); font-weight: 600; }
 .wfrail__stage[data-status="done"] .wfrail__label { color: var(--text-2); }
-:root[data-theme="dark"] .wfrail__stage[data-status="future"] .wfrail__label { color: var(--text-2); opacity: .72; }
+:root[data-theme="dark"] .wfrail__stage[data-status="future"] .wfrail__label { color: var(--text-2); opacity: .85; }
 .wfrail__n { display: block; margin-bottom: 2px; color: var(--text-3); font-size: 9px; }
 .wfrail__line { position: absolute; z-index: 1; top: 29px; left: calc(100% / 18); right: calc(100% / 18); height: 1px; background: var(--line-strong); }
 .wfrail__fill { width: 100%; height: 2px; transform-origin: left center; background: var(--accent); }
@@ -2226,3 +2226,7 @@
 .cplan__head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .cplan__meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
 .cplan__meta dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Этап 11: список вкладок недель внутри панели навигации (кнопки-стрелки — вне tablist). */
+.weektabs__list { display: contents; }
+:root[data-theme="light"] .path__leaf { color: #9a4614; }

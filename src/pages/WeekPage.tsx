@@ -119,16 +119,18 @@ export function WeekPage() {
             </p>
           )}
         </div>
-        <div className="weektabs" role="tablist" aria-label="Недели">
+        <div className="weektabs">
           <button className="btn btn--sm btn--ghost btn--icon" aria-label="Предыдущая неделя" disabled={weekNumber <= 1} onClick={() => navigate(weekPath(subjectId, weekNumber - 1))}>
             <ChevronLeft />
           </button>
-          {Array.from({ length: maxWeek }, (_, i) => i + 1).map((num) => (
-            <button key={num} role="tab" aria-selected={num === weekNumber} className="weektab num" onClick={() => navigate(weekPath(subjectId, num))}>
-              {num === weekNumber && <motion.span layoutId="weektab" className="weektab__bg" />}
-              <span>{pad2(num)}</span>
-            </button>
-          ))}
+          <div className="weektabs__list" role="tablist" aria-label="Недели">
+            {Array.from({ length: maxWeek }, (_, i) => i + 1).map((num) => (
+              <button key={num} role="tab" aria-selected={num === weekNumber} className="weektab num" onClick={() => navigate(weekPath(subjectId, num))}>
+                {num === weekNumber && <motion.span layoutId="weektab" className="weektab__bg" />}
+                <span>{pad2(num)}</span>
+              </button>
+            ))}
+          </div>
           <button className="btn btn--sm btn--ghost btn--icon" aria-label="Создать следующую неделю" title={`Создать неделю ${maxWeek + 1}`} onClick={() => void create(maxWeek + 1)}>
             <Plus />
           </button>
