@@ -93,16 +93,26 @@ pub fn current(
         homework_id,
     )?;
     // Профиль стиля: явно выбранный источник и его черты.
-    // Профиль общий для пространства.
+    // Профиль стиля общий для пространства (этап 9): последняя ревизия и
+    // текущее состояние подтверждённых источников.
     let style = {
         let mut statement = connection.prepare(
-            "SELECT id || '|' || relative_path || '|' || traits_json
-               FROM style_profile_sources WHERE explicitly_selected = 1
-              ORDER BY created_at DESC, id LIMIT 1",
+            "SELECT 'rev|' || id || '|' || source_fingerprint || '|' || language
+               FROM style_profile_revisions ORDER BY revision DESC LIMIT 1",
         )?;
-        let rows = statement
+        let mut rows = statement
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
+        let mut sources = connection.prepare(
+            "SELECT 'src|' || id || '|' || coalesce(sha256, '') || '|' || read_status || '|' ||
+                    confirmation || '|' || language
+               FROM style_sources WHERE removed_at IS NULL ORDER BY id",
+        )?;
+        rows.extend(
+            sources
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         rows
     };
     // Официальные комментарии и действующие требования.

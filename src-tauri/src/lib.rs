@@ -27,6 +27,8 @@ pub mod routing;
 mod routing_commands;
 pub mod semester;
 mod semester_commands;
+pub mod style;
+pub mod style_commands;
 mod subject_commands;
 pub mod subjects;
 pub mod submission;
@@ -92,6 +94,14 @@ pub fn run() {
             routing_commands::route_files,
             routing_commands::undo_operation,
             submission_commands::get_style_profile,
+            style_commands::get_style_profile_state,
+            style_commands::get_style_profile_revision,
+            style_commands::add_style_source,
+            style_commands::remove_style_source,
+            style_commands::refresh_style_sources,
+            style_commands::rebuild_style_profile,
+            style_commands::run_style_check,
+            style_commands::confirm_style_check,
             submission_commands::import_teacher_transcript,
             submission_commands::preview_teacher_transcript,
             submission_commands::remove_teacher_comment,

@@ -195,6 +195,9 @@ describe("рабочий цикл ДЗ (mock)", () => {
     await run("review_teacher", v3.id);
     expect((await b.getTeacherRequirements(HW)).every((r) => r.status === "done")).toBe(true);
     await b.markVersionFinal(v3.id);
+    // Этап 9: стиль — локальной проверкой; без профиля — ручное подтверждение.
+    const styleCheck = await b.runStyleCheck(HW);
+    if (!styleCheck.passes) await b.confirmStyleCheck(styleCheck.id, "проверено вручную");
     const ready = await b.getReadiness(HW);
     expect(ready.checks.filter((c) => !c.ok)).toEqual([]);
     expect(ready.ready).toBe(true);

@@ -207,37 +207,36 @@ pub fn readiness(snapshot: &WorkflowSnapshot) -> ReadinessDto {
         },
     ));
 
-    let style = review.map(|run| {
-        let score = run.assessment.as_ref().and_then(|value| value.style_score);
-        let confirmed = snapshot
-            .style_confirmations
-            .iter()
-            .any(|item| item.review_run_id == run.id);
-        (score, run.style_threshold, confirmed)
-    });
-    let style_ok = match style {
-        Some((Some(score), threshold, confirmed)) => score <= threshold || confirmed,
-        Some((None, _, _)) => true,
-        None => false,
-    };
+    // Этап 9: стиль — по локальной проверке соответствия личному стилю.
+    // Отсутствие оценки не считается успехом.
+    let style = snapshot.style_check.as_ref();
     checks.push(check(
         ReadinessCheckId::Style,
-        "Расхождение с личным стилем в пределах порога",
-        style_ok,
+        "Соответствие личному стилю проверено",
+        style.is_some_and(|item| item.passes),
         match style {
-            Some((Some(score), threshold, _)) if score <= threshold => {
-                format!("Расхождение {score}/10 при пороге {threshold}")
+            None => "Стиль не проверялся — запустите проверку соответствия личному стилю".to_owned(),
+            Some(item) => {
+                use crate::style::StyleCheckStatus as S;
+                match (item.status, item.score, item.confirmed_at.is_some()) {
+                    (S::Stale, _, _) => "Проверка стиля устарела: изменились профиль, версия или требования".to_owned(),
+                    (S::NotChecked, _, _) => item.body.explanation.clone(),
+                    (S::Checked, Some(score), _) if score <= item.threshold => format!(
+                        "Эвристическое расхождение {score}/10 при пороге {}",
+                        item.threshold
+                    ),
+                    (S::Checked, Some(score), true) => format!(
+                        "Расхождение {score}/10 выше порога {}, проверено вручную",
+                        item.threshold
+                    ),
+                    (S::Checked, Some(score), false) => format!(
+                        "Расхождение {score}/10 выше порога {} — просмотрите нехарактерные фрагменты и подтвердите",
+                        item.threshold
+                    ),
+                    (_, _, true) => "Требовалась ручная проверка — подтверждено пользователем".to_owned(),
+                    (_, _, false) => format!("Требуется ручная проверка: {}", item.body.explanation),
+                }
             }
-            Some((Some(score), threshold, true)) => {
-                format!(
-                    "Расхождение {score}/10 выше порога {threshold}, подтверждено пользователем"
-                )
-            }
-            Some((Some(score), threshold, false)) => format!(
-                "Расхождение {score}/10 выше порога {threshold} — нужно явное подтверждение"
-            ),
-            Some((None, _, _)) => "Расхождение со стилем не оценивалось".to_owned(),
-            None => "Нет данных проверки".to_owned(),
         },
     ));
 

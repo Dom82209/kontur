@@ -7,6 +7,7 @@ import { ExtractionSettingsPanel } from "../components/domain/ExtractionSettings
 import { ManagedRootsPanel } from "../components/domain/ManagedRootsPanel";
 import { ProviderCard } from "../components/domain/ProviderCard";
 import { SemesterPanel } from "../components/domain/SemesterPanel";
+import { StyleProfilePanel } from "../components/domain/StyleProfilePanel";
 import { SubjectsPanel } from "../components/domain/SubjectsPanel";
 import { SaveBar } from "../components/ui/SaveBar";
 import { Segmented } from "../components/ui/Segmented";
@@ -55,6 +56,11 @@ export function SettingsPage() {
         <section className="settings__group settings__group--wide">
           <h2 className="settings__h">Предметы</h2>
           <SubjectsPanel />
+        </section>
+
+        <section className="settings__group settings__group--wide">
+          <h2 className="settings__h">Профиль личного стиля</h2>
+          <StyleProfilePanel />
         </section>
 
         <section className="settings__group">

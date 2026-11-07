@@ -2483,6 +2483,7 @@ fn aggregate_dto(snapshot: WorkflowSnapshot, rules: &AutomationRulesDto) -> Home
         ready_stale,
         inputs: snapshot.inputs,
         package_history: snapshot.package_history,
+        style_check: snapshot.style_check,
     }
 }
 

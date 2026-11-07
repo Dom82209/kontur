@@ -41,6 +41,13 @@ export interface TauriIpcClient {
   routeFiles: typeof ipc.routeFiles;
   undoOperation: typeof ipc.undoOperation;
   getStyleProfile: typeof ipc.getStyleProfile;
+  getStyleProfileState: typeof ipc.getStyleProfileState;
+  addStyleSource: typeof ipc.addStyleSource;
+  removeStyleSource: typeof ipc.removeStyleSource;
+  refreshStyleSources: typeof ipc.refreshStyleSources;
+  rebuildStyleProfile: typeof ipc.rebuildStyleProfile;
+  runStyleCheck: typeof ipc.runStyleCheck;
+  confirmStyleCheck: typeof ipc.confirmStyleCheck;
   importTeacherTranscript: typeof ipc.importTeacherTranscript;
   previewTeacherTranscript: typeof ipc.previewTeacherTranscript;
   removeTeacherComment: typeof ipc.removeTeacherComment;
@@ -294,6 +301,13 @@ export class TauriDesktopBridge implements DesktopBridge {
     return this.ipcClient.selectHomeworkVersion(operationId, versionId, revision);
   };
   getStyleProfile: DesktopBridge["getStyleProfile"] = () => this.ipcClient.getStyleProfile();
+  getStyleProfileState: DesktopBridge["getStyleProfileState"] = () => this.ipcClient.getStyleProfileState();
+  addStyleSource: DesktopBridge["addStyleSource"] = (path, kind, language) => this.ipcClient.addStyleSource(path, kind, language);
+  removeStyleSource: DesktopBridge["removeStyleSource"] = (id) => this.ipcClient.removeStyleSource(id);
+  refreshStyleSources: DesktopBridge["refreshStyleSources"] = () => this.ipcClient.refreshStyleSources();
+  rebuildStyleProfile: DesktopBridge["rebuildStyleProfile"] = (language) => this.ipcClient.rebuildStyleProfile(language);
+  runStyleCheck: DesktopBridge["runStyleCheck"] = (homeworkId) => this.ipcClient.runStyleCheck(homeworkId);
+  confirmStyleCheck: DesktopBridge["confirmStyleCheck"] = (id, note) => this.ipcClient.confirmStyleCheck(id, note);
   prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = async (homeworkId, purpose, versionId = null, options) => {
     const { operationId, revision } = command(options);
     return (await this.ipcClient.createSourceBundle(operationId, homeworkId, purpose, versionId, revision)).value;

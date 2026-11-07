@@ -23,6 +23,10 @@ import type {
   RunKind,
   SourceBundle,
   StyleProfile,
+  StyleProfileState,
+  StyleSourceKind,
+  StyleLanguage,
+  StyleCheck,
   SubmissionConfirmation,
   SubmissionPackage,
   SubmissionReceipt,
@@ -1283,6 +1287,14 @@ export interface DesktopBridge {
   /** Весь рабочий цикл ДЗ одним запросом: этапы, наборы, запуски, промты, готовность, переходы. null — ДЗ нет. */
   getWorkflow(homeworkId: string): Promise<HomeworkWorkflow | null>;
   getStyleProfile(): Promise<StyleProfile | null>;
+  /** Этап 9: профиль личного стиля — источники выбирает только пользователь. */
+  getStyleProfileState(): Promise<StyleProfileState>;
+  addStyleSource(relativePath: string, kind: StyleSourceKind, language: StyleLanguage): Promise<StyleProfileState>;
+  removeStyleSource(sourceId: string): Promise<StyleProfileState>;
+  refreshStyleSources(): Promise<StyleProfileState>;
+  rebuildStyleProfile(language: StyleLanguage): Promise<StyleProfileState>;
+  runStyleCheck(homeworkId: string): Promise<StyleCheck>;
+  confirmStyleCheck(checkId: string, note: string): Promise<StyleCheck>;
   /** Неизменяемый снимок подтверждённой подборки материалов для запуска. Пустые обязательные категории → missing. */
   prepareSourceBundle(homeworkId: string, purpose: RunKind, versionId?: string | null, options?: WorkflowCommandOptions): Promise<SourceBundle>;
   setSourceIncluded(bundleId: string, itemId: string, included: boolean): Promise<SourceBundle>;

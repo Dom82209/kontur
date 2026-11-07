@@ -183,6 +183,7 @@ impl Flow {
         assert_eq!(version.prompt_id.as_deref(), Some(prompt.as_str()));
         assert_eq!(self.stage(), Stage::CodexReview);
         self.version = Some(version.id);
+        self.style_ok();
         self
     }
 
@@ -220,6 +221,7 @@ impl Flow {
         self.advance_to_codex_review();
         self.review(&pass_review());
         assert_eq!(self.stage(), Stage::TeacherReview);
+        self.style_ok();
         self
     }
 
@@ -275,12 +277,29 @@ impl Flow {
             .unwrap();
         self.review(&pass_review());
         assert_eq!(self.stage(), Stage::TeacherReview);
+        self.style_ok();
+    }
+
+    /// Этап 9: стиль проверен (без профиля — ручное подтверждение).
+    fn style_ok(&self) {
+        let style = crate::style::StyleService::new(&self.database, None);
+        let check = style.check(HW).unwrap();
+        if !check.passes {
+            style.confirm(&check.id, "проверено вручную").unwrap();
+        }
+    }
+
+    fn mark_ready_ok(&self, no_teacher_comments: bool) {
+        self.style_ok();
+        self.service()
+            .mark_ready(&op(), HW, no_teacher_comments)
+            .unwrap();
     }
 
     fn advance_to_ready(&mut self) -> &mut Self {
         self.advance_to_teacher_review();
         self.add_done_requirement();
-        self.service().mark_ready(&op(), HW, false).unwrap();
+        self.mark_ready_ok(false);
         assert_eq!(self.stage(), Stage::ReadyToSubmit);
         self
     }
@@ -329,7 +348,7 @@ fn full_manual_cycle_visits_every_reachable_stage_through_backend_only() {
     flow.review(&pass_review());
     assert_eq!(flow.stage(), Stage::TeacherReview);
     flow.add_done_requirement();
-    flow.service().mark_ready(&op(), HW, false).unwrap();
+    flow.mark_ready_ok(false);
     assert_eq!(flow.stage(), Stage::ReadyToSubmit);
 
     // Журнал: каждый переход — отдельная операция, revision растёт монотонно.
@@ -649,6 +668,7 @@ fn aggregate_lists_transitions_computed_by_backend() {
             "revision",
             "runs",
             "stage",
+            "styleCheck",
             "styleConfirmations",
             "submissionPackage",
             "submissionReceipt",
@@ -1312,19 +1332,25 @@ fn readiness_is_blocked_by_each_required_condition_separately() {
         ]
     );
 
-    // Расхождение со стилем выше порога без подтверждения → блок; с подтверждением — нет.
+    // Этап 9: стиль — по локальной проверке. Без профиля проверка требует
+    // ручного подтверждения; до него — блок; оценка AI-проверки не заменяет её.
     let mut flow = Flow::new();
     flow.advance_to_codex_review();
-    let run = flow.review(&ManualReviewInput {
-        style_score: Some(7),
+    flow.review(&ManualReviewInput {
+        style_score: Some(2),
         ..pass_review()
     });
+    let style = crate::style::StyleService::new(&flow.database, None);
+    let check = style.check(HW).unwrap();
+    assert_eq!(
+        check.status,
+        crate::style::StyleCheckStatus::InsufficientSources
+    );
+    assert!(check.score.is_none() && !check.passes);
     assert_eq!(blockers(&flow), [ReadinessCheckId::Style]);
-    let confirmation = flow.service().confirm_style(&op(), &run).unwrap().value;
-    assert_eq!(confirmation.review_run_id, run);
-    assert_eq!(confirmation.version_id, flow.version.clone().unwrap());
-    assert_eq!((confirmation.score, confirmation.threshold), (7, 4));
-    assert_eq!(confirmation.confirmed_by, "user");
+    style
+        .confirm(&check.id, "сверила с прошлыми работами")
+        .unwrap();
     assert_eq!(blockers(&flow), Vec::<ReadinessCheckId>::new());
 
     // Требование преподавателя не выполнено.
@@ -1440,7 +1466,7 @@ fn mark_ready_requires_confirmation_when_teacher_comments_are_absent() {
         .unwrap_err()
         .error;
     assert_eq!(error.code, ErrorCode::ConfirmationRequired);
-    flow.service().mark_ready(&op(), HW, true).unwrap();
+    flow.mark_ready_ok(true);
     assert_eq!(flow.stage(), Stage::ReadyToSubmit);
     let homework = flow.snapshot().homework;
     assert_eq!(homework.stage, crate::domain::HomeworkStage::Ready);
@@ -1695,7 +1721,10 @@ fn new_official_requirement_makes_review_readiness_and_ready_stale() {
     let official = flow.add_comment(comment(TeacherOfficial, true));
     assert_eq!(flow.stage(), Stage::TeacherReview);
     assert!(flow.review_is_stale(), "прежняя проверка устарела");
-    assert_eq!(blockers(&flow), vec![ReadinessCheckId::InputsFresh]);
+    assert_eq!(
+        blockers(&flow),
+        vec![ReadinessCheckId::InputsFresh, ReadinessCheckId::Style]
+    );
     let error = flow
         .service()
         .mark_ready(&op(), HW, false)
@@ -1713,7 +1742,7 @@ fn new_official_requirement_makes_review_readiness_and_ready_stale() {
         .iter()
         .any(|run| run.id == old_review && run.stale));
     assert!(blockers(&flow).is_empty());
-    flow.service().mark_ready(&op(), HW, false).unwrap();
+    flow.mark_ready_ok(false);
     assert_eq!(flow.stage(), Stage::ReadyToSubmit);
 }
 
@@ -1781,7 +1810,7 @@ fn revoking_or_withdrawing_official_requirements_invalidates_and_keeps_history()
         .unwrap();
     let requirement = flow.requirement_from(&official.id).unwrap();
     flow.rereview();
-    flow.service().mark_ready(&op(), HW, false).unwrap();
+    flow.mark_ready_ok(false);
     flow.service()
         .withdraw_requirement(&op(), &requirement.id)
         .unwrap();
@@ -1812,8 +1841,8 @@ fn materials_task_and_style_changes_invalidate_results() {
         "UPDATE files SET content_hash = 'changed' WHERE category IN ('lecture','seminar','material','homework_data')",
         "UPDATE files SET content_hash = 'changed' WHERE category = 'homework_task'",
         "UPDATE homeworks SET assignment_url = 'https://my.centraluniversity.ru/new' WHERE id = 'hw-1'",
-        "INSERT INTO style_profile_sources(id, relative_path, source_kind, traits_json, explicitly_selected)
-         VALUES ('style-new', 'ПРОФИЛЬ_СТИЛЯ_ДЗ.md', 'style_markdown', '[]', 1)",
+        "INSERT INTO style_sources(id, relative_path, source_kind, language, document_type, sha256, read_status)
+         VALUES ('style-new', 'ПРОФИЛЬ_СТИЛЯ_ДЗ.md', 'style_markdown', 'ru', 'markdown', NULL, 'ok')",
     ] {
         let mut flow = Flow::new();
         flow.advance_to_ready();
@@ -1987,7 +2016,7 @@ fn package_build_is_blocked_until_current_ready() {
         ErrorCode::Blocked
     );
     flow.add_done_requirement();
-    flow.service().mark_ready(&op(), HW, false).unwrap();
+    flow.mark_ready_ok(false);
     // Изменились материалы — «Готово к сдаче» не действует, комплект не собрать.
     flow.database
         .with_connection(|c| {
@@ -2206,4 +2235,227 @@ fn snapshot_is_created_only_from_current_verified_package_and_locks_homework() {
             .code,
         ErrorCode::Immutable
     );
+}
+
+// ───────────────────────── Этап 9: профиль личного стиля ─────────────────────────
+
+const MD_DRAFT: &str = "Предметы/ОБА/Неделя 07/03 ДЗ/02 Работа/Решение.md";
+
+impl Flow {
+    fn style(&self) -> crate::style::StyleService<'_> {
+        crate::style::StyleService::new(&self.database, None)
+    }
+
+    /// Версия-Markdown с заданным текстом становится итоговой.
+    fn md_version(&mut self, vault: &Vault, text: &str) {
+        std::fs::write(vault.root.join(MD_DRAFT), text).unwrap();
+        self.database
+            .with_connection(|c| {
+                c.execute(
+                    "INSERT OR IGNORE INTO files(id, week_id, homework_id, category, name, kind, size_bytes, modified_at, relative_path)
+                     VALUES ('draft-md', NULL, 'hw-1', 'homework_draft', 'Решение.md', 'text', 10, '2026-10-22T10:00:00Z', ?1)",
+                    [MD_DRAFT],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let version = self
+            .service()
+            .create_version(&op(), HW, &version_input("draft-md"))
+            .unwrap()
+            .value;
+        self.version = Some(version.id);
+    }
+}
+
+fn write_sample(vault: &Vault, path: &str, text: &str) {
+    let full = vault.root.join(path);
+    std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+    std::fs::write(full, text).unwrap();
+}
+
+#[test]
+fn style_sources_are_explicit_and_profile_needs_enough_confirmed_text() {
+    use crate::style::{ProfileStatus, StyleSourceKind};
+    let flow = Flow::new();
+    let vault = flow.with_vault();
+    let style = flow.style();
+    // Без источников — ничего не сканируется, профиль непригоден.
+    let empty = style.rebuild("ru").unwrap();
+    assert!(empty.sources.is_empty());
+    let first = empty.current.unwrap();
+    assert_eq!(first.status, ProfileStatus::InsufficientSources);
+    assert!(first.content.is_none() && !first.unusable_reasons.is_empty());
+
+    // Только файлы внутри хранилища и только существующие.
+    for bad in ["/etc/passwd", "../outside.md", "нет/такого.md"] {
+        assert!(style
+            .add_source(bad, StyleSourceKind::PreviousHomework, "ru")
+            .is_err());
+    }
+    write_sample(
+        &vault,
+        "Стиль/ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
+        "# Стиль\n- Без канцелярита\n- Короткие выводы",
+    );
+    write_sample(&vault, "Стиль/ДЗ1.md", &crate::style::tests::sample_text(2));
+    assert!(style
+        .add_source("Стиль/ДЗ1.md", StyleSourceKind::StyleMarkdown, "xx")
+        .is_err());
+    style
+        .add_source(
+            "Стиль/ПРОФИЛЬ_СТИЛЯ_ДЗ.md",
+            StyleSourceKind::StyleMarkdown,
+            "ru",
+        )
+        .unwrap();
+    let state = style
+        .add_source("Стиль/ДЗ1.md", StyleSourceKind::PreviousHomework, "ru")
+        .unwrap();
+    assert!(state.stale, "новый источник делает профиль устаревшим");
+    let source = &state.sources[1];
+    assert_eq!(source.sha256.as_deref().map(str::len), Some(64));
+    assert_eq!(source.document_type, "markdown");
+    assert_eq!(source.confirmation, "confirmed");
+    assert!(source.last_read_at.is_some());
+    assert!(
+        style
+            .add_source("Стиль/ДЗ1.md", StyleSourceKind::PreviousHomework, "ru")
+            .is_err(),
+        "повторный выбор того же файла"
+    );
+
+    // 2 повтора образца < 300 слов → insufficient_sources.
+    let second = style.rebuild("ru").unwrap();
+    let revision = second.current.unwrap();
+    assert_eq!(revision.revision, 2);
+    assert_eq!(revision.status, ProfileStatus::InsufficientSources);
+    assert_eq!(revision.sources.len(), 2);
+
+    write_sample(&vault, "Стиль/ДЗ2.md", &crate::style::tests::sample_text(6));
+    style
+        .add_source("Стиль/ДЗ2.md", StyleSourceKind::ConfirmedSample, "ru")
+        .unwrap();
+    let third = style.rebuild("ru").unwrap();
+    let ready = third.current.clone().unwrap();
+    assert_eq!((ready.revision, ready.status), (3, ProfileStatus::Ready));
+    let content = ready.content.unwrap();
+    assert_eq!(
+        content.declared_rules,
+        vec!["Без канцелярита", "Короткие выводы"]
+    );
+    assert!(content.features.words >= 300);
+    assert!(!third.stale);
+    // Без изменений новая ревизия не создаётся; история сохраняется.
+    assert_eq!(style.rebuild("ru").unwrap().current.unwrap().revision, 3);
+    assert_eq!(
+        third.history.iter().map(|h| h.revision).collect::<Vec<_>>(),
+        [3, 2, 1]
+    );
+
+    // Изменение содержимого → stale; исключение источника → следующая ревизия без него.
+    write_sample(&vault, "Стиль/ДЗ1.md", &crate::style::tests::sample_text(3));
+    assert!(style.refresh_sources().unwrap().stale);
+    let removed = style.remove_source(&third.sources[1].id).unwrap();
+    assert!(removed.sources[1].removed_at.is_some());
+    let fourth = style.rebuild("ru").unwrap().current.unwrap();
+    assert_eq!(fourth.revision, 4);
+    assert!(fourth
+        .sources
+        .iter()
+        .all(|s| s.relative_path != "Стиль/ДЗ1.md"));
+    // Ревизии неизменяемы.
+    assert!(flow
+        .database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE style_profile_revisions SET status = 'ready' WHERE revision = 1",
+                [],
+            )?;
+            Ok(())
+        })
+        .is_err());
+}
+
+#[test]
+fn style_check_reports_score_fragments_and_honest_statuses() {
+    use crate::style::{StyleCheckStatus, StyleSourceKind};
+    let mut flow = Flow::new();
+    let vault = flow.with_vault();
+    flow.advance_to_codex_review();
+    // Итоговая версия .docx без текста → после профиля: ручная проверка.
+    write_sample(&vault, "Стиль/ДЗ.md", &crate::style::tests::sample_text(8));
+    let style = flow.style();
+    style
+        .add_source("Стиль/ДЗ.md", StyleSourceKind::PreviousHomework, "ru")
+        .unwrap();
+    style.rebuild("ru").unwrap();
+    let manual = style.check(HW).unwrap();
+    assert_eq!(manual.status, StyleCheckStatus::ManualRequired);
+    assert!(manual.score.is_none() && !manual.passes);
+
+    // Текст в собственном стиле → оценка в пределах порога.
+    flow.md_version(&vault, &crate::style::tests::sample_text(3));
+    let style = flow.style();
+    let close = style.check(HW).unwrap();
+    assert_eq!(close.status, StyleCheckStatus::Checked);
+    assert!(close.score.unwrap() <= close.threshold && close.passes);
+    assert!(close.body.explanation.contains("не доказывает"));
+    assert!(!close.body.sample_refs.is_empty());
+    assert_eq!(close.profile_revision, Some(1));
+    // Подтверждать нечего.
+    assert!(style.confirm(&close.id, "").is_err());
+
+    // Нехарактерный текст → фрагменты с объяснениями; без подтверждения не проходит.
+    let odd = "Важно отметить, что в современном мире аналитика играет ключевую роль. ".repeat(4)
+        + &"Очевидно, что данный подход безусловно является наилучшим, поскольку он обеспечивает широкий спектр возможностей, позволяет учитывать множество факторов одновременно и гарантирует высокую точность прогнозов на всех этапах работы организации. ".repeat(4);
+    std::fs::write(vault.root.join(MD_DRAFT), &odd).unwrap();
+    let far = style.check(HW).unwrap();
+    assert_eq!(far.status, StyleCheckStatus::Checked);
+    assert!(far.score.unwrap() > far.threshold, "{:?}", far.score);
+    assert!(!far.passes && !far.body.fragments.is_empty());
+    assert!(far.body.fragments.iter().all(|f| !f.explanation.is_empty()));
+    let confirmed = style.confirm(&far.id, "перечитала, это мой текст").unwrap();
+    assert!(confirmed.passes);
+
+    // Изменение профиля делает проверку стиля устаревшей (общий отпечаток этапа 7).
+    write_sample(&vault, "Стиль/ДЗ.md", &crate::style::tests::sample_text(9));
+    let refreshed = style.refresh_sources().unwrap();
+    assert!(refreshed.stale);
+    let stale = crate::style::StyleService::new(&flow.database, None);
+    let reread = flow
+        .database
+        .with_connection(|c| crate::style::check_by_id(c, &confirmed.id))
+        .unwrap();
+    assert_eq!(reread.status, StyleCheckStatus::Stale);
+    assert!(!reread.passes);
+    // Проверка по устаревшему профилю не выполняется.
+    assert_eq!(
+        stale.check(HW).unwrap().status,
+        StyleCheckStatus::NotChecked
+    );
+}
+
+#[test]
+fn style_profile_change_invalidates_review_readiness_and_package() {
+    use crate::style::StyleSourceKind;
+    let (flow, vault) = ready_with_link();
+    let package = flow.submission().build(HW).unwrap().value;
+    assert!(!package.stale);
+    write_sample(&vault, "Стиль/ДЗ.md", &crate::style::tests::sample_text(8));
+    flow.style()
+        .add_source("Стиль/ДЗ.md", StyleSourceKind::PreviousHomework, "ru")
+        .unwrap();
+    flow.style().rebuild("ru").unwrap();
+    let aggregate = flow.service().aggregate(HW).unwrap();
+    assert!(aggregate.ready_stale);
+    assert!(aggregate
+        .readiness
+        .blockers()
+        .contains(&ReadinessCheckId::Style));
+    assert!(aggregate
+        .readiness
+        .blockers()
+        .contains(&ReadinessCheckId::InputsFresh));
+    assert!(aggregate.submission_package.unwrap().stale);
 }

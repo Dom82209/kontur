@@ -85,8 +85,10 @@ impl<'a> SubmissionService<'a> {
 
     pub fn style_profile(&self) -> Result<Option<StyleProfileDto>, AppError> {
         self.database.with_connection(|c|{
-  let row:Option<(String,String,String,String)>=c.query_row("SELECT id,relative_path,traits_json,created_at FROM style_profile_sources WHERE explicitly_selected=1 ORDER BY created_at DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-  row.map(|(id,path,traits,updated)|{let file_name=std::path::Path::new(&path).file_name().and_then(|x|x.to_str()).unwrap_or("Профиль стиля").to_owned();let traits=serde_json::from_str(&traits).map_err(|e|BackendError::database(e.to_string()))?;Ok(StyleProfileDto{id,file_name,relative_path:path,updated_at:updated,traits})}).transpose()
+  // Этап 9: описание стиля — явно выбранный Markdown-источник; черты — правила из последней ревизии.
+  let row:Option<(String,String,String)>=c.query_row("SELECT id,relative_path,coalesce(last_read_at,added_at) FROM style_sources WHERE removed_at IS NULL AND source_kind='style_markdown' ORDER BY added_at DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+  let traits=crate::style::latest_revision(c)?.and_then(|r|r.content).map(|content|content.declared_rules).unwrap_or_default();
+  Ok(row.map(|(id,path,updated)|{let file_name=std::path::Path::new(&path).file_name().and_then(|x|x.to_str()).unwrap_or("Профиль стиля").to_owned();StyleProfileDto{id,file_name,relative_path:path,updated_at:updated,traits}}))
  })
     }
 

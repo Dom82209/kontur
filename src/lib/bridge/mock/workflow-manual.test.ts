@@ -57,6 +57,7 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
         "revision",
         "runs",
         "stage",
+        "styleCheck",
         "styleConfirmations",
         "submissionPackage",
         "submissionReceipt",
@@ -145,12 +146,16 @@ describe("контракт рабочего цикла (mock, этап 8)", () =
     await b.saveManualReviewResult(review.id, { verdict: "pass", summary: "Верно", correctness: "pass", taskFit: "pass", courseGrounding: "pass", teacher: "na", styleScore: 8 });
     await b.saveRunAsIteration(review.id); // готовность считается по закреплённой проверке
 
+    // Этап 9: оценка AI-проверки не заменяет локальную проверку стиля.
     const blocked = (await b.getReadiness(HW)).checks.find((c) => c.id === "style");
     expect(blocked?.ok).toBe(false);
-    const confirmation = await b.confirmStyleDivergence(review.id, { expectedRevision: await revision() });
-    expect(confirmation.value).toMatchObject({ score: 8, threshold: 4, confirmedBy: "user" });
+    const check = await b.runStyleCheck(HW);
+    expect(check).toMatchObject({ status: "insufficient_sources", score: null, passes: false });
+    expect((await b.getReadiness(HW)).checks.find((c) => c.id === "style")?.ok).toBe(false);
+    const confirmed = await b.confirmStyleCheck(check.id, "сверила вручную");
+    expect(confirmed.passes).toBe(true);
     expect((await b.getReadiness(HW)).checks.find((c) => c.id === "style")?.ok).toBe(true);
-    await expect(b.confirmStyleDivergence(review.id)).rejects.toMatchObject({ code: "conflict" });
+    await expect(b.confirmStyleCheck(check.id, "")).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("устаревшая ревизия даёт conflict; после перечитывания действие проходит", async () => {

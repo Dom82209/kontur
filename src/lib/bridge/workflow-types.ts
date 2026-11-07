@@ -120,6 +120,129 @@ export interface StyleProfile {
   traits: string[];
 }
 
+// ───────────── Этап 9: профиль личного стиля ─────────────
+// Эвристическая оценка соответствия личному стилю по объяснимым признакам.
+// Это не «детектор ИИ»: низкое соответствие не доказывает использование нейросети.
+
+export type StyleSourceKind = "style_markdown" | "previous_homework" | "confirmed_sample";
+export type StyleLanguage = "ru" | "en";
+
+export interface StyleSource {
+  id: string;
+  relativePath: string;
+  fileId: string | null;
+  kind: StyleSourceKind;
+  language: StyleLanguage;
+  documentType: "markdown" | "text" | "docx" | "pdf" | "other";
+  sha256: string | null;
+  sizeBytes: number | null;
+  confirmation: "confirmed" | "unconfirmed";
+  readStatus: "unread" | "ok" | "missing" | "unsupported" | "empty";
+  addedAt: ISODate;
+  lastReadAt: ISODate | null;
+  /** Исключён из следующих ревизий; прежние ревизии не меняются. */
+  removedAt: ISODate | null;
+}
+
+export interface RevisionSource {
+  id: string;
+  relativePath: string;
+  kind: StyleSourceKind;
+  sha256: string | null;
+  sizeBytes: number | null;
+  words: number;
+  status: string;
+}
+
+export interface StyleFeatures {
+  words: number;
+  sentences: number;
+  paragraphs: number;
+  sentenceLengthMean: number;
+  sentenceLengthMedian: number;
+  sentenceLengthP90: number;
+  paragraphLengthMean: number;
+  formality: number;
+  introductoryPer100: number;
+  categoricalPer100: number;
+  hedgingPer100: number;
+  commasPerSentence: number;
+  dashesPer100Words: number;
+  colonsPer100Words: number;
+  semicolonsPer100Words: number;
+  guillemetShare: number;
+  listLineShare: number;
+  headingsPer100Lines: number;
+  connectives: string[];
+  frequentWords: string[];
+  sentenceOpeners: string[];
+  paragraphEndings: string[];
+  clichesUsed: string[];
+  examples: string[];
+}
+
+export type StyleProfileStatus = "ready" | "insufficient_sources" | "unsupported";
+
+export interface StyleProfileRevision {
+  id: string;
+  profileId: string;
+  revision: number;
+  createdAt: ISODate;
+  language: StyleLanguage;
+  sourceFingerprint: string;
+  sources: RevisionSource[];
+  content: { features: StyleFeatures; declaredRules: string[] } | null;
+  limitations: string[];
+  status: StyleProfileStatus;
+  unusableReasons: string[];
+}
+
+export interface StyleProfileState {
+  profileId: string;
+  sources: StyleSource[];
+  current: StyleProfileRevision | null;
+  history: { id: string; revision: number; createdAt: ISODate; status: StyleProfileStatus }[];
+  /** Источники или их содержимое изменились после последней ревизии. */
+  stale: boolean;
+  currentSourceFingerprint: string;
+}
+
+export type StyleCheckStatus = "checked" | "not_checked" | "stale" | "insufficient_sources" | "unsupported" | "manual_required";
+
+export interface StyleFragment {
+  text: string;
+  features: string[];
+  explanation: string;
+}
+
+export interface StyleFeatureDelta {
+  feature: string;
+  label: string;
+  profile: number;
+  checked: number;
+  weight: number;
+}
+
+export interface StyleCheck {
+  id: string;
+  homeworkId: string;
+  versionId: string;
+  profileRevisionId: string | null;
+  profileRevision: number | null;
+  status: StyleCheckStatus;
+  recordedStatus: StyleCheckStatus;
+  /** Эвристическое расхождение 0..10 — только при `checked`. */
+  score: number | null;
+  threshold: number;
+  body: { explanation: string; fragments: StyleFragment[]; deltas: StyleFeatureDelta[]; sampleRefs: string[]; sampleExamples: string[] };
+  versionFingerprint: string;
+  inputsFingerprint: string;
+  createdAt: ISODate;
+  confirmedAt: ISODate | null;
+  /** Закрывает требование стиля для готовности. */
+  passes: boolean;
+}
+
 // ───────────── Проверка ─────────────
 
 export type CriterionId = "correctness" | "task_fit" | "course_grounding" | "style" | "teacher" | "completeness";
@@ -622,6 +745,8 @@ export interface HomeworkWorkflow {
   inputs: InputsFingerprint;
   /** Этап 8: все ревизии комплекта, новые сверху. */
   packageHistory: PackageRevisionSummary[];
+  /** Этап 9: последняя проверка соответствия личному стилю. */
+  styleCheck: StyleCheck | null;
   /** «Готово к сдаче» отмечено по другим входным данным — отметка не действует. */
   readyStale: boolean;
   /** Задания передачи провайдерам (этап 9) — без текстов промта и ответа. */

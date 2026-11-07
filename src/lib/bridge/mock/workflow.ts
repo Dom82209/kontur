@@ -37,6 +37,15 @@ import {
   type SourceKind,
   type StyleDivergence,
   type StyleProfile,
+  type StyleCheck,
+  type StyleCheckStatus,
+  type StyleFeatures,
+  type StyleLanguage,
+  type StyleProfileRevision,
+  type StyleProfileState,
+  type StyleProfileStatus,
+  type StyleSource,
+  type StyleSourceKind,
   type SubmissionConfirmation,
   type SubmissionPackage,
   type SubmissionReceipt,
@@ -284,6 +293,199 @@ export class MockWorkflow {
         "письменная часть — формулы в LaTeX",
       ],
     };
+  }
+
+  // ───────────── Этап 9: профиль личного стиля (упрощённый mock) ─────────────
+  // Признаки в демо условные: файлы не читаются. Правила — как в backend:
+  // только явный выбор источников, ревизии неизменяемы, без профиля — ручная проверка.
+
+  private styleSources: StyleSource[] = [];
+  private styleRevisions: StyleProfileRevision[] = [];
+  private styleChecks: (Omit<StyleCheck, "status" | "passes" | "recordedStatus"> & { recorded: StyleCheckStatus })[] = [];
+
+  private styleSourceFingerprint(): string {
+    return mockHash(
+      this.styleSources
+        .filter((x) => !x.removedAt)
+        .map((x) => `${x.id}|${x.relativePath}|${x.kind}|${x.language}|${x.sha256 ?? ""}`)
+        .join("\n"),
+    );
+  }
+
+  private styleState(): StyleProfileState {
+    const current = this.styleRevisions[this.styleRevisions.length - 1] ?? null;
+    const fp = this.styleSourceFingerprint();
+    return clone({
+      profileId: "personal",
+      sources: this.styleSources,
+      current,
+      history: [...this.styleRevisions].reverse().map((x) => ({ id: x.id, revision: x.revision, createdAt: x.createdAt, status: x.status })),
+      stale: !!current && current.sourceFingerprint !== fp,
+      currentSourceFingerprint: fp,
+    });
+  }
+
+  async getStyleProfileState(): Promise<StyleProfileState> {
+    await this.ctx.wait(60);
+    return this.styleState();
+  }
+
+  async addStyleSource(relativePath: string, kind: StyleSourceKind, language: StyleLanguage): Promise<StyleProfileState> {
+    await this.ctx.wait(80);
+    const path = relativePath.trim();
+    if (!path || path.startsWith("/") || path.includes("..") || path.includes(":")) throw new BridgeError("conflict", "Укажите путь внутри хранилища (без «..» и абсолютных путей)");
+    if (this.styleSources.some((x) => !x.removedAt && x.relativePath === path)) throw new BridgeError("conflict", "Этот файл уже выбран источником");
+    const ext = path.toLowerCase().split(".").pop() ?? "";
+    const documentType = ext === "md" ? "markdown" : ext === "txt" ? "text" : ext === "docx" ? "docx" : ext === "pdf" ? "pdf" : "other";
+    if (kind === "style_markdown" && documentType !== "markdown" && documentType !== "text") throw new BridgeError("conflict", "Описание стиля — Markdown или текстовый файл");
+    const now = new Date().toISOString();
+    this.styleSources.push({
+      id: uid("ss"),
+      relativePath: path,
+      fileId: null,
+      kind,
+      language,
+      documentType,
+      sha256: mockHash(path).padEnd(64, "0"),
+      sizeBytes: 4_000,
+      confirmation: "confirmed",
+      readStatus: documentType === "other" ? "unsupported" : "ok",
+      addedAt: now,
+      lastReadAt: now,
+      removedAt: null,
+    });
+    return this.styleState();
+  }
+
+  async removeStyleSource(sourceId: string): Promise<StyleProfileState> {
+    await this.ctx.wait(60);
+    const source = this.styleSources.find((x) => x.id === sourceId && !x.removedAt);
+    if (!source) throw new BridgeError("not_found", "Источник не найден или уже исключён");
+    source.removedAt = new Date().toISOString();
+    return this.styleState();
+  }
+
+  async refreshStyleSources(): Promise<StyleProfileState> {
+    await this.ctx.wait(60);
+    return this.styleState();
+  }
+
+  async rebuildStyleProfile(language: StyleLanguage): Promise<StyleProfileState> {
+    await this.ctx.wait(200);
+    const fp = this.styleSourceFingerprint();
+    const last = this.styleRevisions[this.styleRevisions.length - 1];
+    if (last && last.sourceFingerprint === fp && last.language === language) return this.styleState();
+    const active = this.styleSources.filter((x) => !x.removedAt && x.confirmation === "confirmed");
+    const samples = active.filter((x) => x.kind !== "style_markdown" && x.language === language && x.readStatus === "ok");
+    const words = samples.length * 220;
+    const status: StyleProfileStatus = active.length > 0 && active.every((x) => x.readStatus !== "ok") ? "unsupported" : words >= 300 ? "ready" : "insufficient_sources";
+    const features: StyleFeatures = {
+      words, sentences: Math.round(words / 11), paragraphs: Math.round(words / 60), sentenceLengthMean: 11.2, sentenceLengthMedian: 10, sentenceLengthP90: 19,
+      paragraphLengthMean: 3.1, formality: 0.42, introductoryPer100: 14, categoricalPer100: 1.5, hedgingPer100: 4, commasPerSentence: 1.4,
+      dashesPer100Words: 0.8, colonsPer100Words: 0.3, semicolonsPer100Words: 0, guillemetShare: 1, listLineShare: 0.12, headingsPer100Lines: 4,
+      connectives: ["поэтому", "потому что", "но"], frequentWords: ["таблица", "среднее", "выручка"], sentenceOpeners: ["сначала", "потом"],
+      paragraphEndings: ["отдельно"], clichesUsed: [], examples: ["Сначала я посчитала среднее по каждому месяцу.", "Март я учитывала отдельно, потому что была акция."],
+    };
+    this.styleRevisions.push({
+      id: uid("spr"),
+      profileId: "personal",
+      revision: this.styleRevisions.length + 1,
+      createdAt: new Date().toISOString(),
+      language,
+      sourceFingerprint: fp,
+      sources: active.map((x) => ({ id: x.id, relativePath: x.relativePath, kind: x.kind, sha256: x.sha256, sizeBytes: x.sizeBytes, words: x.kind !== "style_markdown" && x.readStatus === "ok" ? 220 : 0, status: x.readStatus })),
+      content: status === "ready" ? { features, declaredRules: active.some((x) => x.kind === "style_markdown") ? this.profile.traits : [] } : null,
+      limitations: ["Эвристическая оценка по объяснимым признакам текста; не доказывает использование ИИ и не определяет авторство", "В демо-режиме признаки условные: файлы не читаются"],
+      status,
+      unusableReasons: status === "ready" ? [] : status === "unsupported" ? ["Ни один выбранный источник не удалось прочитать"] : [`В подтверждённых работах ${words} слов — нужно не меньше 300`],
+    });
+    return this.styleState();
+  }
+
+  private decorateStyleCheck(raw: (typeof this.styleChecks)[number]): StyleCheck {
+    const h = this.ctx.homework().find((x) => x.id === raw.homeworkId);
+    // В mock итоговая версия выбирается отдельно: проверяется итоговая или последняя.
+    const target = h ? (h.finalVersionId ?? h.versions[h.versions.length - 1]?.id ?? null) : null;
+    const stale = target !== raw.versionId || raw.inputsFingerprint !== this.fingerprint(raw.homeworkId);
+    const status: StyleCheckStatus = stale ? "stale" : raw.recorded;
+    const passes =
+      status === "checked" ? (raw.score ?? 99) <= raw.threshold || !!raw.confirmedAt : ["manual_required", "insufficient_sources", "unsupported"].includes(status) ? !!raw.confirmedAt : false;
+    const { recorded, ...rest } = raw;
+    return clone({ ...rest, status, recordedStatus: recorded, passes });
+  }
+
+  private latestStyleCheck(homeworkId: string): StyleCheck | null {
+    const raw = [...this.styleChecks].reverse().find((x) => x.homeworkId === homeworkId);
+    return raw ? this.decorateStyleCheck(raw) : null;
+  }
+
+  async runStyleCheck(homeworkId: string): Promise<StyleCheck> {
+    await this.ctx.wait(180);
+    const h = this.hw(homeworkId);
+    this.assertMutable(h);
+    const v = h.versions.find((x) => x.id === h.finalVersionId) ?? h.versions[h.versions.length - 1];
+    if (!v) throw new BridgeError("blocked", "Сначала создайте версию работы");
+    const profile = this.styleRevisions[this.styleRevisions.length - 1] ?? null;
+    const threshold = this.ctx.rules().workflow.styleThreshold;
+    let recorded: StyleCheckStatus;
+    let score: number | null = null;
+    const body: StyleCheck["body"] = { explanation: "", fragments: [], deltas: [], sampleRefs: [], sampleExamples: [] };
+    if (!profile) {
+      recorded = "insufficient_sources";
+      body.explanation = "Профиль стиля не построен: выберите подтверждённые работы и постройте профиль. Требуется ручная проверка.";
+    } else if (profile.sourceFingerprint !== this.styleSourceFingerprint()) {
+      recorded = "not_checked";
+      body.explanation = "Источники профиля изменились после последней ревизии — обновите профиль и проверьте снова";
+    } else if (profile.status !== "ready") {
+      recorded = profile.status === "unsupported" ? "unsupported" : "insufficient_sources";
+      body.explanation = `Профиль ревизии ${profile.revision} непригоден: ${profile.unusableReasons.join("; ")}. Требуется ручная проверка.`;
+    } else if (!/\.(md|txt|docx|pdf)$/i.test(v.fileName)) {
+      recorded = "manual_required";
+      body.explanation = "Формат не поддерживается для анализа стиля (нужны .md, .txt, .docx или .pdf). Требуется ручная проверка.";
+    } else {
+      recorded = "checked";
+      score = Number.parseInt(mockHash(v.id).slice(0, 2), 16) % 8;
+      body.sampleRefs = profile.sources.filter((x) => x.words > 0).map((x) => x.relativePath);
+      body.sampleExamples = profile.content?.features.examples ?? [];
+      if (score > 2) {
+        body.fragments = [
+          { text: "Важно отметить, что в современном мире аналитика играет ключевую роль.", features: ["cliche"], explanation: "Оборот «важно отметить» не встречается в подтверждённых работах. Это повод перечитать фрагмент, а не доказательство." },
+          { text: "Очевидно, что данный подход безусловно является наилучшим для всех случаев.", features: ["categorical"], explanation: "Категоричная формулировка, а в ваших работах они редки. Это повод перечитать фрагмент, а не доказательство." },
+        ];
+        body.deltas = [{ feature: "formality", label: "Формальность (доля формальных маркеров)", profile: 0.42, checked: 0.81, weight: 0.93 }];
+      }
+      body.explanation = `Эвристическая оценка расхождения с личным стилем: ${score}/10 при пороге ${threshold}. Низкое соответствие не доказывает использование ИИ.`;
+    }
+    const raw: (typeof this.styleChecks)[number] = {
+      id: uid("stc"),
+      homeworkId: h.id,
+      versionId: v.id,
+      profileRevisionId: profile?.id ?? null,
+      profileRevision: profile?.revision ?? null,
+      recorded,
+      score,
+      threshold,
+      body,
+      versionFingerprint: mockHash(v.id),
+      inputsFingerprint: this.fingerprint(h.id),
+      createdAt: new Date().toISOString(),
+      confirmedAt: null,
+    };
+    this.styleChecks.push(raw);
+    return this.decorateStyleCheck(raw);
+  }
+
+  async confirmStyleCheck(checkId: string, note: string): Promise<StyleCheck> {
+    await this.ctx.wait(60);
+    void note;
+    const raw = this.styleChecks.find((x) => x.id === checkId);
+    if (!raw) throw new BridgeError("not_found", "Проверка стиля не найдена");
+    const current = this.decorateStyleCheck(raw);
+    if (raw.confirmedAt) throw new BridgeError("conflict", "Проверка уже подтверждена");
+    const allowed = current.status === "checked" ? (current.score ?? 0) > current.threshold : ["manual_required", "insufficient_sources", "unsupported"].includes(current.status);
+    if (!allowed) throw new BridgeError("blocked", "Подтверждать нечего: проверка устарела, не выполнена или расхождение в пределах порога");
+    raw.confirmedAt = new Date().toISOString();
+    return this.decorateStyleCheck(raw);
   }
 
   // ───────────── Источники ─────────────
@@ -650,7 +852,8 @@ export class MockWorkflow {
     const official = this.comments.filter((c) => c.homeworkId === homeworkId && c.official).map((c) => `c|${c.id}|${c.authority}|${c.question}|${c.answer}`);
     // В mock требования выводятся из официальных ответов (их состав задают ответы); учитываются отзывы.
     const reqs = this.requirements.filter((r) => r.withdrawnAt && this.comments.some((c) => c.id === r.commentId && c.homeworkId === homeworkId)).map((r) => `w|${r.id}`);
-    return mockHash([...official.sort(), ...reqs.sort(), `u|${h?.assignmentUrl ?? ""}`].join("\n"));
+    const style = `s|${this.styleRevisions[this.styleRevisions.length - 1]?.id ?? "-"}|${this.styleSourceFingerprint()}`;
+    return mockHash([...official.sort(), ...reqs.sort(), `u|${h?.assignmentUrl ?? ""}`, style].join("\n"));
   }
 
   private isStale(item: { inputsFingerprint: string | null; homeworkId: string }): boolean {
@@ -1242,6 +1445,7 @@ export class MockWorkflow {
       readiness,
       iterations,
       submissionPackage: ((pkg) => (pkg ? this.decorate(pkg) : null))(this.packages.get(h.id)),
+      styleCheck: this.latestStyleCheck(h.id),
       packageHistory: [...(this.packageHistory.get(h.id) ?? [])].reverse().map((p) => ({ id: p.id, revision: p.revision, versionId: p.versionId, builtAt: p.builtAt, stale: this.packageStale(p), submitted: p.submitted })),
       submissionReceipt: this.receipts.get(h.id) ?? null,
       inputs: ((fp) => ({ materials: fp, task: fp, version: fp, style: fp, requirements: fp, combined: fp }))(this.fingerprint(h.id)),
@@ -2128,7 +2332,6 @@ export class MockWorkflow {
   }
 
   private readiness(h: Homework): Readiness {
-    const rules = this.ctx.rules();
     const target = h.versions.find((v) => v.id === h.finalVersionId) ?? h.versions[h.versions.length - 1] ?? null;
     const materials = this.buildBundle(h, "analyze_materials", null);
     const saved = target ? [...this.runs].reverse().find((r) => r.homeworkId === h.id && r.versionId === target.id && r.kind === "review_version" && r.status === "completed" && r.savedAsIteration) ?? null : null;
@@ -2139,12 +2342,24 @@ export class MockWorkflow {
     const reqs = target ? this.requirements.filter((r) => r.checkedVersionId === target.id) : [];
     const pendingReqs = reqs.filter((r) => r.status === "not_done" || r.status === "manual");
     const teacherOk = comments.length === 0 ? true : !!teacherRun && teacherRun.startedAt >= lastComment && pendingReqs.length === 0;
-    const score = res?.style?.score ?? null;
     const checks: ReadinessCheck[] = [
       { id: "materials", label: "Обязательные материалы собраны", ok: materials.complete, detail: materials.complete ? "Условие, материалы курса и файл стиля на месте" : `Нет: ${materials.missing.filter((m) => m.required).map((m) => m.label).join(", ")}` },
       { id: "review_passed", label: "Проверка версии пройдена и сохранена", ok: !!res && res.verdict !== "needs_fixes" && res.verdict !== "blocked", detail: !target ? "Версий нет" : !saved ? `Проверка ${target.label} не сохранена в истории итераций` : res && res.verdict !== "needs_fixes" ? `${target.label} прошла проверку` : `${target.label} требует исправлений` },
       { id: "no_critical", label: "Нет критических ошибок", ok: !!res && res.critical.length === 0, detail: res ? `Критических: ${res.critical.length}, замечаний: ${res.remarks.length}` : "Нет результата проверки" },
-      { id: "style", label: `Расхождение со стилем не выше ${rules.workflow.styleThreshold}/10`, ok: score !== null && (score <= rules.workflow.styleThreshold || this.confirmations.some((c) => c.reviewRunId === saved?.id)), detail: score === null ? "Нет оценки" : `Сейчас ${score}/10` },
+      ((check) => ({
+        id: "style" as const,
+        label: "Соответствие личному стилю проверено",
+        ok: !!check?.passes,
+        detail: !check
+          ? "Стиль не проверялся — запустите проверку соответствия личному стилю"
+          : check.status === "stale"
+            ? "Проверка стиля устарела: изменились профиль, версия или требования"
+            : check.status === "checked" && check.score !== null
+              ? `Эвристическое расхождение ${check.score}/10 при пороге ${check.threshold}${check.score > check.threshold ? (check.confirmedAt ? ", проверено вручную" : " — подтвердите вручную") : ""}`
+              : check.confirmedAt
+                ? "Требовалась ручная проверка — подтверждено пользователем"
+                : `Требуется ручная проверка: ${check.body.explanation}`,
+      }))(this.latestStyleCheck(h.id)),
       {
         id: "teacher",
         label: "Комментарии преподавателя учтены",

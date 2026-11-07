@@ -1149,6 +1149,13 @@ export class MockDesktopBridge implements DesktopBridge {
   confirmStyleDivergence: DesktopBridge["confirmStyleDivergence"] = (...a) => this.workflow.confirmStyleDivergence(...a);
   transitionWorkflow: DesktopBridge["transitionWorkflow"] = (...a) => this.workflow.transitionWorkflow(...a);
   getStyleProfile: DesktopBridge["getStyleProfile"] = (...a) => this.workflow.getStyleProfile(...a);
+  getStyleProfileState: DesktopBridge["getStyleProfileState"] = (...a) => this.workflow.getStyleProfileState(...a);
+  addStyleSource: DesktopBridge["addStyleSource"] = (...a) => this.workflow.addStyleSource(...a);
+  removeStyleSource: DesktopBridge["removeStyleSource"] = (...a) => this.workflow.removeStyleSource(...a);
+  refreshStyleSources: DesktopBridge["refreshStyleSources"] = (...a) => this.workflow.refreshStyleSources(...a);
+  rebuildStyleProfile: DesktopBridge["rebuildStyleProfile"] = (...a) => this.workflow.rebuildStyleProfile(...a);
+  runStyleCheck: DesktopBridge["runStyleCheck"] = (...a) => this.workflow.runStyleCheck(...a);
+  confirmStyleCheck: DesktopBridge["confirmStyleCheck"] = (...a) => this.workflow.confirmStyleCheck(...a);
   prepareSourceBundle: DesktopBridge["prepareSourceBundle"] = (...a) => this.workflow.prepareSourceBundle(...a);
   setSourceIncluded: DesktopBridge["setSourceIncluded"] = (...a) => this.workflow.setSourceIncluded(...a);
   runMaterialAnalysis: DesktopBridge["runMaterialAnalysis"] = (...a) => this.workflow.runMaterialAnalysis(...a);

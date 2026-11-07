@@ -28,7 +28,7 @@ pub mod text;
 pub mod xlsx;
 
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
 #[cfg(test)]
 mod tests;
 

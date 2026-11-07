@@ -58,6 +58,10 @@ import type {
   Subject,
   Week,
   StyleProfile,
+  StyleProfileState,
+  StyleSourceKind,
+  StyleLanguage,
+  StyleCheck,
   TeacherTranscriptInput,
   SubmissionPackage,
   SubmissionReceipt,
@@ -247,6 +251,15 @@ export function undoOperation(operationId: string): Promise<OperationResult<null
 }
 
 export function getStyleProfile(): Promise<StyleProfile | null> { return call("get_style_profile"); }
+export function getStyleProfileState(): Promise<StyleProfileState> { return call("get_style_profile_state"); }
+export function addStyleSource(relativePath: string, kind: StyleSourceKind, language: StyleLanguage): Promise<StyleProfileState> {
+  return call("add_style_source", { relativePath, kind, language });
+}
+export function removeStyleSource(sourceId: string): Promise<StyleProfileState> { return call("remove_style_source", { sourceId }); }
+export function refreshStyleSources(): Promise<StyleProfileState> { return call("refresh_style_sources"); }
+export function rebuildStyleProfile(language: StyleLanguage): Promise<StyleProfileState> { return call("rebuild_style_profile", { language }); }
+export function runStyleCheck(homeworkId: string): Promise<StyleCheck> { return call("run_style_check", { homeworkId }); }
+export function confirmStyleCheck(checkId: string, note: string): Promise<StyleCheck> { return call("confirm_style_check", { checkId, note }); }
 export function previewTeacherTranscript(input: TeacherTranscriptInput): Promise<TeacherCommentInput[]> { return call("preview_teacher_transcript", { input }); }
 export function importTeacherTranscript(homeworkId: string, input: TeacherTranscriptInput): Promise<OperationResult<TeacherComment[]>> {
   return call("import_teacher_transcript", { homeworkId, input });

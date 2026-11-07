@@ -2009,6 +2009,8 @@ pub struct WorkflowSnapshot {
     pub submission_receipt: Option<SubmissionReceiptDto>,
     /// Задания передачи провайдерам (этап 9), без текстов.
     pub ai_jobs: Vec<crate::ai::model::AiJobDto>,
+    /// Этап 9: последняя проверка личного стиля (с учётом устаревания).
+    pub style_check: Option<crate::style::StyleCheckDto>,
     /// Этап 8: ревизии комплекта, новые сверху.
     pub package_history: Vec<PackageRevisionSummaryDto>,
     /// Этап 7: текущий отпечаток входных данных и отпечаток отметки «Готово к сдаче».
@@ -2045,6 +2047,7 @@ pub fn load_snapshot(
         style_confirmations: style_confirmations(connection, homework_id)?,
         submission_package: submission_package(connection, homework_id)?,
         package_history: package_history(connection, homework_id)?,
+        style_check: crate::style::latest_check(connection, homework_id)?,
         submission_receipt: submission_receipt(connection, homework_id)?,
         ai_jobs: crate::ai::store::jobs_for_homework(connection, homework_id)?,
         homework,

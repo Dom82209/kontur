@@ -961,6 +961,8 @@ pub struct HomeworkWorkflowDto {
     pub inputs: super::fingerprint::InputsFingerprintDto,
     /// Этап 8: все ревизии комплекта (новые сверху).
     pub package_history: Vec<PackageRevisionSummaryDto>,
+    /// Этап 9: последняя проверка соответствия личному стилю.
+    pub style_check: Option<crate::style::StyleCheckDto>,
     /// «Готово к сдаче» отмечено по другим входным данным — отметка не действует.
     pub ready_stale: bool,
     /// Задания передачи провайдерам (этап 9) — без текстов промта и ответа.

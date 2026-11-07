@@ -12,6 +12,7 @@ import { PromptBox } from "../components/domain/PromptBox";
 import { ReviewResultView } from "../components/domain/ReviewResultView";
 import { isOpenRun, RunMonitor } from "../components/domain/RunMonitor";
 import { SourceList } from "../components/domain/SourceList";
+import { StyleCheckCard } from "../components/domain/StyleCheckCard";
 import { SubmissionPanel } from "../components/domain/SubmissionPanel";
 import { TeacherCommentsPanel } from "../components/domain/TeacherCommentsPanel";
 import { VersionComparePanel } from "../components/domain/VersionComparePanel";
@@ -595,6 +596,9 @@ export function HomeworkDetailPage() {
           </>
         )}
 
+        {tabNow === "package" && (
+          <StyleCheckCard homeworkId={h.id} check={wf.workflow.data?.styleCheck ?? null} locked={h.stage === "submitted"} onChanged={() => void wf.reloadAll()} />
+        )}
         {tabNow === "package" && (
           <SubmissionPanel
             homework={h}

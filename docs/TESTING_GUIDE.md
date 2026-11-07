@@ -48,6 +48,11 @@
 - `cargo test package_build_is_blocked_until_current_ready`, `every_rebuild_is_a_new_immutable_revision`, `confirm_is_blocked_by_manual_missing_mismatch_and_stale`, `snapshot_is_created_only_from_current_verified_package`, `schema_v16_upgrade_keeps_legacy_package` — ревизии, статусы, негативные сценарии подтверждения, обновление схемы.
 - `src/lib/bridge/mock/package.test.ts` — те же правила в mock.
 
+## Профиль личного стиля (этап 9)
+
+- `cargo test style::`, `style_sources_are_explicit`, `style_check_reports_score_fragments`, `style_profile_change_invalidates` — источники, ревизии, статусы, фрагменты, устаревание (TempDir, без настоящего Obsidian).
+- `src/lib/bridge/mock/style.test.ts` — те же правила в mock.
+
 ## Полный набор
 
 ```bash
